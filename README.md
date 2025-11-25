@@ -27,7 +27,7 @@ install.bat
 run.bat
 ```
 
-Both platforms require `uv` package manager to be installed. Install it from https://github.com/astral-sh/uv if you don't have it already.
+Both platforms require `uv` package manager to be installed. Install it from https://github.com/astral-sh/uv if you don't have it already. 
 
 ## Configuration
 - Place a LiteLLM config at `litellm_config.yaml` or point `YALLM_CONFIG` to another path.
@@ -70,6 +70,41 @@ Fields:
 - Logs live under `logs/requests/` with filenames like `YYYYMMDD_HHMMSS-<id>_<model>.log`.
 - Each log captures request metadata, body, backend attempts, responses, stream chunks, errors, and final outcome.
 - Extremely useful for debugging your agent applications, debugging LLM calls (reasoning/tool parsing), and looking into what applications like cursor/kilo code are actually sending
+
+## Request replay
+Useful when you're debugging your LLM provider or inference. For example it's easy to reproduce streaming bugs that way by overriding the steam flag in the script. 
+
+The `replay_request.py` script replays logged requests against the same endpoint, extracting method, path, headers, body and streaming flag from log files.
+
+### Basic usage
+
+```bash
+# Replay a logged request (derives URL from Host header in log)
+python replay_request.py logs/requests/20231125_143052-abc123_gpt-4o.log
+
+# Replay with explicit base URL
+python replay_request.py logs/requests/20231125_143052-abc123_gpt-4o.log --base-url http://localhost:17771
+```
+
+### Advanced options
+
+```bash
+# Override the model name in the request body
+python replay_request.py logs/requests/20231125_143052-abc123_gpt-4o.log --model gpt-3.5-turbo
+
+# Force streaming mode on/off (useful for reproducing streaming bugs)
+python replay_request.py logs/requests/20231125_143052-abc123_gpt-4o.log --stream-mode on
+python replay_request.py logs/requests/20231125_143052-abc123_gpt-4o.log --stream-mode off
+
+# Print equivalent curl command without sending request
+python replay_request.py logs/requests/20231125_143052-abc123_gpt-4o.log --print-curl
+
+# Dry run - show what would be sent without actually sending
+python replay_request.py logs/requests/20231125_143052-abc123_gpt-4o.log --dry-run
+
+# Custom timeout
+python replay_request.py logs/requests/20231125_143052-abc123_gpt-4o.log --timeout 120
+```
 
 ## On fly patching
 
