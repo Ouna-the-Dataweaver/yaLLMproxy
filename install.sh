@@ -40,5 +40,5 @@ cat <<'MSG'
 Activate the environment with:
   source "$VENV_PATH/bin/activate"
 Then run the proxy, e.g.:
-  uvicorn cLLMp.proxy:app --host 0.0.0.0 --port 17771
+  uvicorn proxy:app --host 0.0.0.0 --port 17771
 MSG
