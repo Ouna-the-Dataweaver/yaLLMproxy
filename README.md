@@ -1,6 +1,6 @@
 
 
-# y(et) a(nother) LLMp proxy
+# y(et) a(nother) LLM proxy (yallmp)
 
 - FastAPI app that fronts multiple OpenAI-compatible backends with retries and per-model fallback order.
 - Reads LiteLLM-style configuration from `YALLMP_CONFIG` (defaults to `litellm_config.yaml`).
