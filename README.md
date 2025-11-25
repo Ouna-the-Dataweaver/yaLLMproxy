@@ -1,18 +1,17 @@
 
 
-# cLLMp proxy
+# y(et) a(nother) LLMp proxy
 
 - FastAPI app that fronts multiple OpenAI-compatible backends with retries and per-model fallback order.
-- Reads LiteLLM-style configuration from `CLLMP_CONFIG` (defaults to `cLLMp/litellm_config.yaml`).
+- Reads LiteLLM-style configuration from `YALLMP_CONFIG` (defaults to `litellm_config.yaml`).
 - Streams responses transparently and rewrites payloads when necessary (`target_model`, reasoning block).
-- Logs every request/response to `cLLMp/logs/requests/*.log` for later inspection.
+- Logs every request/response to `logs/requests/*.log` for later inspection. (TODO: make this optional)
 
 ## Configuration
-- Place a LiteLLM config at `cLLMp/litellm_config.yaml` or point `CLLMP_CONFIG` to another path.
+- Place a LiteLLM config at `litellm_config.yaml` or point `YALLM_CONFIG` to another path.
 - `.env` in the same directory is loaded automatically; `${VAR}` and `$VAR` inside the YAML are substituted from the environment.
 - `model_list` entries define backends (`model_name`, `litellm_params.api_base`, `api_key`, `request_timeout`, `supports_reasoning`, optional `target_model`).
 - `router_settings.num_retries` controls per-backend attempts; `router_settings.fallbacks` lists per-model failover order.
-- `general_settings.enable_responses_endpoint` toggles the `/v1/responses` route; host/port fields are only logged (set uvicorn host/port via CLI).
 
 ## Endpoints
 - `POST /v1/chat/completions` — OpenAI-compatible chat completions with optional streaming.
@@ -41,10 +40,16 @@ Fields:
 - `model_name` (required) registers the backend and becomes the OpenAI `model`.
 - `api_base` and `api_key` point to the upstream.
 - `target_model` rewrites outbound payloads when the upstream expects a different name.
-- `supports_reasoning: true` injects `{"thinking":{"type":"enabled"}}` when absent.
+- `supports_reasoning: true` injects `{"thinking":{"type":"enabled"}}` when absent. (TODO do a research on how this is actually handled in different providers, since some have reasoning_effort fiels, etc)
 - `fallbacks` accepts a string or list and updates the router’s failover map.
 - `request_timeout` overrides the default 30s timeout for the backend.
 
 ## Request logging
-- Logs live under `cLLMp/logs/requests/` with filenames like `YYYYMMDD_HHMMSS-<id>_<model>.log`.
+- Logs live under `logs/requests/` with filenames like `YYYYMMDD_HHMMSS-<id>_<model>.log`.
 - Each log captures request metadata, body, backend attempts, responses, stream chunks, errors, and final outcome.
+- Extremely useful for debugging your agent applications, debugging LLM calls (reasoning/tool parsing), and looking into what applications like cursor/kilo code are actually sending
+
+## On fly patching
+
+TODO: patching requests on the fly: fix reasoning field names, tool calls
+TODO: stateful proxy: enable interleaved thinking for any model (especially useful for MiniMax M2 / Kimi K2 thinking since they expect interleaved thinking mode but almost all agentic applications erase reasoning traces on followup requests)
