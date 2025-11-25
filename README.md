@@ -7,6 +7,28 @@
 - Streams responses transparently and rewrites payloads when necessary (`target_model`, reasoning block).
 - Logs every request/response to `logs/requests/*.log` for later inspection. (TODO: make this optional)
 
+## Installation
+
+### Linux/macOS
+```bash
+# Install dependencies and create virtual environment
+./install.sh
+
+# Run the proxy
+./run.sh
+```
+
+### Windows
+```cmd
+# Install dependencies and create virtual environment
+install.bat
+
+# Run the proxy
+run.bat
+```
+
+Both platforms require `uv` package manager to be installed. Install it from https://github.com/astral-sh/uv if you don't have it already.
+
 ## Configuration
 - Place a LiteLLM config at `litellm_config.yaml` or point `YALLM_CONFIG` to another path.
 - `.env` in the same directory is loaded automatically; `${VAR}` and `$VAR` inside the YAML are substituted from the environment.
@@ -41,7 +63,7 @@ Fields:
 - `api_base` and `api_key` point to the upstream.
 - `target_model` rewrites outbound payloads when the upstream expects a different name.
 - `supports_reasoning: true` injects `{"thinking":{"type":"enabled"}}` when absent. (TODO do a research on how this is actually handled in different providers, since some have reasoning_effort fiels, etc)
-- `fallbacks` accepts a string or list and updates the router’s failover map.
+- `fallbacks` accepts a string or list and updates the router's failover map.
 - `request_timeout` overrides the default 30s timeout for the backend.
 
 ## Request logging
