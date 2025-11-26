@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Simple test script for the cLLMp proxy.
+Simple test script for the yaLLMp proxy.
 Runs health checks plus sync/streaming OpenAI-style requests for each endpoint.
 """
 
@@ -718,11 +718,11 @@ def discover_models() -> list[str]:
 
 def main():
     """Run all tests."""
-    print(f"Testing cLLMp proxy at {PROXY_URL}")
+    print(f"Testing yaLLMp proxy at {PROXY_URL}")
     print(f"Logging responses to: {LOG_FILE}")
     
     # Initialize log file
-    log_to_file(f"=== cLLMp Proxy Test Log - {datetime.now().isoformat()} ===")
+    log_to_file(f"=== yaLLMp Proxy Test Log - {datetime.now().isoformat()} ===")
     log_to_file(f"Proxy URL: {PROXY_URL}")
     
     models = discover_models()

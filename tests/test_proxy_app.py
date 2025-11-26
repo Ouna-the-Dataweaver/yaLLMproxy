@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 
 def _load_proxy_with_config(config_path: Path):
-    os.environ["CLLMP_CONFIG"] = str(config_path)
+    os.environ["YALLMP_CONFIG"] = str(config_path)
     module_name = f"proxy_test_{uuid.uuid4().hex}"
     proxy_path = Path(__file__).resolve().parents[1] / "proxy.py"
     spec = importlib.util.spec_from_file_location(module_name, proxy_path)
