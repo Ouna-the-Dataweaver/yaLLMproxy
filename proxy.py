@@ -207,7 +207,7 @@ class RequestLogRecorder:
 # Enhanced logging configuration
 def setup_logging():
     """Set up logging with proper handlers and formatters."""
-    logger = logging.getLogger("cllmp-proxy")
+    logger = logging.getLogger("yallmp-proxy")
     logger.setLevel(logging.INFO)
     
     # Clear any existing handlers
@@ -255,7 +255,7 @@ def _default_config_path() -> str:
     return str(Path(__file__).with_name("litellm_config.yaml"))
 
 
-CONFIG_PATH = os.getenv("CLLMP_CONFIG", _default_config_path())
+CONFIG_PATH = os.getenv("YALLMP_CONFIG", _default_config_path())
 
 
 @dataclass
@@ -265,6 +265,7 @@ class Backend:
     api_key: str
     timeout: Optional[float]
     target_model: Optional[str]
+    api_type: str = "openai"
     supports_reasoning: bool = False
 
     def build_url(self, path: str, query: str) -> str:
@@ -272,7 +273,8 @@ class Backend:
         normalized_path = path or ""
         if not normalized_path.startswith("/"):
             normalized_path = f"/{normalized_path}"
-        if base.endswith("/v1") and normalized_path.startswith("/v1"):
+
+        if normalized_path.startswith("/v1"):
             normalized_path = normalized_path[len("/v1"):]
             if not normalized_path:
                 normalized_path = "/"
@@ -526,7 +528,8 @@ class ProxyRouter:
             except (TypeError, ValueError):
                 timeout_val = None
 
-            target_model = _extract_target_model(params)
+            api_type = _extract_api_type(params)
+            target_model = _extract_target_model(params, api_type)
 
             supports_reasoning = bool(params.get("supports_reasoning"))
 
@@ -536,6 +539,7 @@ class ProxyRouter:
                 api_key=api_key,
                 timeout=timeout_val,
                 target_model=target_model,
+                api_type=api_type,
                 supports_reasoning=supports_reasoning,
             )
         return backends
@@ -576,6 +580,14 @@ def _normalize_fallbacks(value: Any) -> Optional[List[str]]:
     raise ValueError("fallbacks must be a string or list of strings")
 
 
+def _extract_api_type(params: Mapping[str, Any]) -> str:
+    raw_api_type = params.get("api_type")
+    if raw_api_type is None:
+        return "openai"
+    normalized = str(raw_api_type).strip().lower()
+    return normalized or "openai"
+
+
 def _backend_from_runtime_payload(payload: Mapping[str, Any]) -> tuple[Backend, Optional[List[str]]]:
     if not isinstance(payload, Mapping):
         raise ValueError("body must be a JSON object")
@@ -598,7 +610,8 @@ def _backend_from_runtime_payload(payload: Mapping[str, Any]) -> tuple[Backend, 
     if timeout_raw is None:
         timeout_raw = params.get("timeout")
     timeout = _normalize_timeout(timeout_raw)
-    target_model = _extract_target_model(params)
+    api_type = _extract_api_type(params)
+    target_model = _extract_target_model(params, api_type)
     supports_reasoning = bool(params.get("supports_reasoning") or payload.get("supports_reasoning"))
     fallbacks = _normalize_fallbacks(payload.get("fallbacks"))
 
@@ -608,6 +621,7 @@ def _backend_from_runtime_payload(payload: Mapping[str, Any]) -> tuple[Backend, 
         api_key=api_key,
         timeout=timeout,
         target_model=target_model,
+        api_type=api_type,
         supports_reasoning=supports_reasoning,
     )
     return backend, fallbacks
@@ -640,7 +654,10 @@ def _build_outbound_headers(
     normalized_keys: set[str] = set()
     for key, value in incoming.items():
         key_lower = key.lower()
-        if key_lower in HOP_BY_HOP_HEADERS or key_lower in {"authorization", "host", "content-length"}:
+        # Strip accept-encoding so backends return uncompressed data - we filter
+        # content-encoding on the response, so passing compressed data through
+        # would break clients that can't decode it without the header.
+        if key_lower in HOP_BY_HOP_HEADERS or key_lower in {"authorization", "host", "content-length", "accept-encoding"}:
             continue
         if key_lower in normalized_keys:
             continue
@@ -653,10 +670,30 @@ def _build_outbound_headers(
     if backend_api_key:
         headers["Authorization"] = f"Bearer {backend_api_key}"
         normalized_keys.add("authorization")
+    # Explicitly request uncompressed responses - httpx adds Accept-Encoding by
+    # default, and we strip content-encoding from responses, so compressed data
+    # would be passed through without the client knowing how to decode it.
+    headers["Accept-Encoding"] = "identity"
     return headers
 
 
-def _extract_target_model(params: Mapping[str, Any]) -> Optional[str]:
+def _normalize_request_model(model_name: str) -> str:
+    """Normalize client-supplied model name for routing (accepts legacy openai/ prefix)."""
+    if not isinstance(model_name, str):
+        return ""
+    stripped = model_name.strip()
+    if not stripped:
+        return ""
+
+    lower = stripped.lower()
+    if "/" in stripped:
+        prefix, remainder = stripped.split("/", 1)
+        if remainder and prefix.lower() in {"openai"}:
+            return remainder
+    return stripped
+
+
+def _extract_target_model(params: Mapping[str, Any], api_type: Optional[str] = None) -> Optional[str]:
     override = params.get("target_model") or params.get("forward_model")
     if override:
         override_str = str(override).strip()
@@ -667,7 +704,16 @@ def _extract_target_model(params: Mapping[str, Any]) -> Optional[str]:
     if not raw_model:
         return None
 
-    if raw_model.lower().startswith("openai/"):
+    normalized_api_type = str(api_type or params.get("api_type") or "openai").strip().lower() or "openai"
+    expected_prefix = f"{normalized_api_type}/"
+    lower_model = raw_model.lower()
+
+    if lower_model.startswith(expected_prefix):
+        remainder = raw_model[len(expected_prefix):]
+        if remainder:
+            return remainder
+
+    if lower_model.startswith("openai/"):
         _, remainder = raw_model.split("/", 1)
         if remainder:
             return remainder
@@ -860,11 +906,11 @@ def _substitute_env_vars(obj: Any) -> Any:
         return obj
 
 
-logger.info("Initializing cLLMp Proxy")
+logger.info("Initializing yaLLMp Proxy")
 config = _load_config(CONFIG_PATH)
 router = ProxyRouter(config)
 logger.info(f"Proxy router initialized with {len(router.backends)} backends")
-app = FastAPI(title="cLLMp Proxy")
+app = FastAPI(title="yaLLMp Proxy")
 logger.info("FastAPI application created")
 
 # Check if responses endpoint should be enabled
@@ -881,7 +927,7 @@ logger.info(f"Responses endpoint enabled: {enable_responses_endpoint}")
 
 @app.on_event("startup")
 async def startup_event():
-    logger.info("cLLMp Proxy server starting up...")
+    logger.info("yaLLMp Proxy server starting up...")
     logger.info("Configured bind address %s:%s", SERVER_HOST, SERVER_PORT)
     if SERVER_HOST == "0.0.0.0":
         hostname = socket.gethostname()
@@ -895,7 +941,7 @@ async def startup_event():
     logger.info(f"Available backends: {list(router.backends.keys())}")
     for name, backend in router.backends.items():
         logger.info(f"  - {name}: {backend.base_url}")
-    logger.info("cLLMp Proxy server ready to handle requests")
+    logger.info("yaLLMp Proxy server ready to handle requests")
 
 
 @app.on_event("shutdown")
@@ -949,8 +995,8 @@ async def _handle_openai_request(request: Request) -> Response:
             },
         )
 
-    model_name = payload.get("model")
-    if not isinstance(model_name, str) or not model_name:
+    raw_model_name = payload.get("model")
+    if not isinstance(raw_model_name, str) or not raw_model_name:
         logger.error("Request missing model name")
         request_log = request_log or RequestLogRecorder("unknown", False, request.url.path)
         request_log.record_request(request.method, request.url.query, request.headers, body)
@@ -966,6 +1012,8 @@ async def _handle_openai_request(request: Request) -> Response:
                 }
             }
         )
+
+    model_name = _normalize_request_model(raw_model_name)
 
     # Basic validation for chat completions
     if "/chat/completions" in request.url.path:
@@ -1046,7 +1094,7 @@ async def list_models():
             "id": model_name,
             "object": "model",
             "created": int(Path(__file__).stat().st_ctime),
-            "owned_by": "cllmp-proxy"
+            "owned_by": "yallmp-proxy"
         })
     
     return {
