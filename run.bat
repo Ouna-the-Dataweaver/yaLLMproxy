@@ -17,5 +17,5 @@ REM Activate the virtual environment
 call "%VENV_PATH%\Scripts\activate.bat"
 
 REM Start the proxy server
-echo [INFO] Starting proxy server on http://0.0.0.0:17771
-uvicorn proxy:app --host 0.0.0.0 --port 17771
+echo [INFO] Starting proxy server on http://0.0.0.0:6969
+uvicorn proxy:app --host 0.0.0.0 --port 6969
