@@ -28,6 +28,7 @@ except ImportError:
 
 
 REQUEST_LOG_DIR = Path(__file__).with_name("logs").joinpath("requests")
+ERROR_LOG_DIR = Path(__file__).with_name("logs").joinpath("errors")
 _PENDING_LOG_TASKS: set[asyncio.Task] = set()
 
 
@@ -38,6 +39,67 @@ def _register_background_task(task: asyncio.Task) -> None:
         _PENDING_LOG_TASKS.discard(_task)
 
     task.add_done_callback(_cleanup)
+
+
+def _log_error_event(
+    model_name: str,
+    error_type: str,
+    error_message: str,
+    backend_name: Optional[str] = None,
+    http_status: Optional[int] = None,
+    request_path: Optional[str] = None,
+    request_log_path: Optional[Path] = None,
+    extra_context: Optional[Dict[str, Any]] = None,
+) -> None:
+    """
+    Log an error event to the errors subdirectory for easy error tracking.
+    
+    This creates a separate, smaller log file per error for quick scanning.
+    """
+    ERROR_LOG_DIR.mkdir(parents=True, exist_ok=True)
+    
+    timestamp = datetime.utcnow()
+    timestamp_str = timestamp.strftime("%Y%m%d_%H%M%S")
+    short_id = uuid.uuid4().hex[:4]
+    safe_model = "".join(c if c.isalnum() or c in "-_" else "-" for c in (model_name or "unknown"))[:48]
+    filename = f"{timestamp_str}-{short_id}_{safe_model}.err"
+    error_path = ERROR_LOG_DIR / filename
+    
+    lines = [
+        f"timestamp={timestamp.isoformat()}Z",
+        f"model={model_name or 'unknown'}",
+        f"error_type={error_type}",
+        f"error_message={error_message}",
+    ]
+    
+    if backend_name:
+        lines.append(f"backend={backend_name}")
+    if http_status is not None:
+        lines.append(f"http_status={http_status}")
+    if request_path:
+        lines.append(f"request_path={request_path}")
+    if request_log_path:
+        lines.append(f"full_log={request_log_path.name}")
+    if extra_context:
+        for key, value in extra_context.items():
+            lines.append(f"{key}={value}")
+    
+    content = "\n".join(lines) + "\n"
+    
+    # Write async if possible, sync otherwise
+    try:
+        loop = asyncio.get_running_loop()
+        
+        async def _write_error_log():
+            def _write():
+                error_path.write_text(content, encoding="utf-8")
+            await asyncio.to_thread(_write)
+        
+        task = loop.create_task(_write_error_log())
+        _register_background_task(task)
+    except RuntimeError:
+        # No event loop, write synchronously
+        error_path.write_text(content, encoding="utf-8")
 
 
 class RequestLogRecorder:
@@ -56,6 +118,9 @@ class RequestLogRecorder:
         self._finalized = False
         self._stream_chunks = 0
         self._started = datetime.utcnow().isoformat() + "Z"
+        self._current_backend: Optional[str] = None
+        self._last_http_status: Optional[int] = None
+        self._error_logged = False
         REQUEST_LOG_DIR.mkdir(parents=True, exist_ok=True)
         self._append_text(
             f"request_time={self._started}\nmodel={self.model_name}\nis_stream={self.is_stream}\npath={self.request_path}\n"
@@ -85,6 +150,7 @@ class RequestLogRecorder:
     def record_backend_attempt(self, backend_name: str, attempt: int, url: str) -> None:
         if self._finalized:
             return
+        self._current_backend = backend_name
         self._append_text(
             f"=== BACKEND ATTEMPT {attempt} ===\nbackend={backend_name}\nurl={url}\n"
         )
@@ -92,6 +158,7 @@ class RequestLogRecorder:
     def record_backend_response(self, status: int, headers: Mapping[str, str], body: bytes) -> None:
         if self._finalized:
             return
+        self._last_http_status = status
         header_dump = self._safe_json_dict(headers)
         self._append_text(f"status={status}\nresponse_headers={header_dump}\n")
         self._append_text(f"body_len={len(body)}\n-- RESPONSE BODY START --\n")
@@ -102,6 +169,7 @@ class RequestLogRecorder:
     def record_stream_headers(self, status: int, headers: Mapping[str, str]) -> None:
         if self._finalized:
             return
+        self._last_http_status = status
         header_dump = self._safe_json_dict(headers)
         self._append_text(
             f"=== STREAM RESPONSE ===\nstatus={status}\nresponse_headers={header_dump}\n"
@@ -117,10 +185,36 @@ class RequestLogRecorder:
         self._append_text(self._format_payload(chunk))
         self._append_text("-- END STREAM CHUNK --\n")
 
-    def record_error(self, message: str) -> None:
+    def record_error(self, message: str, error_type: Optional[str] = None) -> None:
         if self._finalized:
             return
         self._append_text(f"ERROR: {message}\n")
+        
+        # Also log to the errors directory (only once per request)
+        if not self._error_logged:
+            self._error_logged = True
+            # Infer error type if not provided
+            if error_type is None:
+                if "SSE" in message or "stream error" in message.lower():
+                    error_type = "sse_stream_error"
+                elif "status" in message.lower():
+                    error_type = "http_error"
+                elif "timeout" in message.lower():
+                    error_type = "timeout"
+                elif "cancelled" in message.lower() or "disconnect" in message.lower():
+                    error_type = "client_disconnect"
+                else:
+                    error_type = "unknown"
+            
+            _log_error_event(
+                model_name=self.model_name,
+                error_type=error_type,
+                error_message=message,
+                backend_name=self._current_backend,
+                http_status=self._last_http_status,
+                request_path=self.request_path,
+                request_log_path=self.log_path,
+            )
 
     def finalize(self, outcome: str) -> None:
         if self._finalized:
@@ -238,6 +332,61 @@ DEFAULT_TIMEOUT = 30
 DEFAULT_RETRY_DELAY = 0.25
 MAX_RETRY_DELAY = 2.0
 RETRYABLE_STATUSES = {408, 409, 429, 500, 502, 503, 504}
+# Max bytes to buffer when checking for streaming errors before committing to client
+STREAM_ERROR_CHECK_BUFFER_SIZE = 4096
+
+
+def _detect_sse_stream_error(data: bytes) -> Optional[str]:
+    """
+    Check if buffered SSE data contains an error event.
+    
+    Returns an error message if an error is detected, None otherwise.
+    
+    Detects patterns like:
+    - MiniMax: data: {"type":"error","error":{...}}
+    - Generic: data: {"error":{...}}
+    """
+    try:
+        text = data.decode("utf-8", errors="replace")
+    except Exception:
+        return None
+    
+    # Look for SSE data lines
+    for line in text.split("\n"):
+        line = line.strip()
+        if not line.startswith("data:"):
+            continue
+        
+        # Extract the JSON part after "data:"
+        json_part = line[5:].strip()
+        if not json_part or json_part == "[DONE]":
+            continue
+        
+        try:
+            parsed = json.loads(json_part)
+        except json.JSONDecodeError:
+            continue
+        
+        if not isinstance(parsed, dict):
+            continue
+        
+        # Pattern 1: MiniMax-style {"type":"error", "error":{...}}
+        if parsed.get("type") == "error":
+            error_obj = parsed.get("error", {})
+            error_msg = error_obj.get("message") or str(error_obj) if error_obj else "unknown error"
+            http_code = error_obj.get("http_code", "unknown")
+            return f"SSE stream error: {error_msg} (http_code={http_code})"
+        
+        # Pattern 2: Generic OpenAI-style {"error":{...}} in stream
+        error_obj = parsed.get("error")
+        if isinstance(error_obj, dict):
+            error_msg = error_obj.get("message") or str(error_obj)
+            error_type = error_obj.get("type", "unknown")
+            return f"SSE stream error: {error_msg} (type={error_type})"
+    
+    return None
+
+
 HOP_BY_HOP_HEADERS = {
     "connection",
     "keep-alive",
@@ -449,6 +598,10 @@ class ProxyRouter:
                     attempts,
                     error_detail,
                 )
+                # Log connection/timeout errors
+                if request_log:
+                    error_type = "timeout" if isinstance(exc, httpx.TimeoutException) else "connection_error"
+                    request_log.record_error(error_detail, error_type=error_type)
 
             if attempt + 1 < attempts:
                 logger.info(f"Retrying backend {backend.name} in {delay:.2f}s...")
@@ -505,6 +658,11 @@ class ProxyRouter:
             request_log.record_backend_response(resp.status_code, resp.headers, resp.content)
 
         if resp.status_code in RETRYABLE_STATUSES:
+            if request_log:
+                request_log.record_error(
+                    f"{backend.name} returned retryable status {resp.status_code}",
+                    error_type="http_retryable"
+                )
             response = _build_response_from_httpx(resp)
             raise BackendRetryableError(
                 f"{backend.name} returned status {resp.status_code}", response=response
@@ -806,6 +964,10 @@ async def _streaming_request(
         await close_stream()
         if request_log:
             request_log.record_backend_response(resp.status_code, resp.headers, data)
+            request_log.record_error(
+                f"stream request returned retryable status {resp.status_code}",
+                error_type="http_retryable"
+            )
         response = _build_response_from_httpx(resp, data)
         raise BackendRetryableError(
             f"stream request returned status {resp.status_code}", response=response
@@ -822,28 +984,86 @@ async def _streaming_request(
                 request_log.finalize("error")
         return _build_response_from_httpx(resp, data)
 
+    # Buffer initial chunks to detect SSE errors before committing to stream
+    # This catches APIs that return HTTP 200 but send error payloads in the stream
+    initial_buffer = bytearray()
+    buffered_chunks: List[bytes] = []
+    stream = resp.aiter_raw()
+    stream_exhausted = False
+    
+    while len(initial_buffer) < STREAM_ERROR_CHECK_BUFFER_SIZE:
+        try:
+            chunk = await stream.__anext__()
+        except StopAsyncIteration:
+            stream_exhausted = True
+            break
+        if chunk:
+            initial_buffer.extend(chunk)
+            buffered_chunks.append(chunk)
+            if request_log:
+                request_log.record_stream_chunk(chunk)
+    
+    # Check for SSE error patterns in the buffered data
+    sse_error = _detect_sse_stream_error(bytes(initial_buffer))
+    if sse_error:
+        logger.warning(f"Detected SSE error in stream from {url}: {sse_error}")
+        
+        # Log the SSE error event
+        if request_log:
+            request_log.record_error(sse_error, error_type="sse_stream_error")
+        
+        # Read the rest of the stream for logging purposes
+        remaining_data = bytearray(initial_buffer)
+        if not stream_exhausted:
+            try:
+                async for chunk in stream:
+                    if chunk:
+                        remaining_data.extend(chunk)
+                        if request_log:
+                            request_log.record_stream_chunk(chunk)
+            except Exception:
+                pass  # Best effort to capture remaining data
+        await close_stream()
+        
+        # Build a response to return if all backends fail
+        response = Response(
+            content=bytes(remaining_data),
+            status_code=resp.status_code,
+            headers=_filter_response_headers(resp.headers),
+            media_type=resp.headers.get("content-type", "text/event-stream"),
+        )
+        raise BackendRetryableError(sse_error, response=response)
+
     logger.info(f"Streaming request to {url} successful, status {resp.status_code}")
     headers_to_client = _filter_response_headers(resp.headers)
     media_type = headers_to_client.pop("content-type", None)
 
     async def iterator():
+        nonlocal stream_exhausted
         try:
             chunk_count = 0
-            stream = resp.aiter_raw()
-            while True:
-                if disconnect_checker and await disconnect_checker():
-                    raise asyncio.CancelledError("client disconnected")
-                try:
-                    chunk = await stream.__anext__()
-                except StopAsyncIteration:
-                    break
-                if chunk:
-                    chunk_count += 1
-                    if chunk_count % 10 == 0:  # Log every 10th chunk to avoid spam
-                        logger.debug(f"Streamed {chunk_count} chunks from {url}")
-                    if request_log:
-                        request_log.record_stream_chunk(chunk)
-                    yield chunk
+            
+            # First yield the buffered chunks
+            for chunk in buffered_chunks:
+                chunk_count += 1
+                yield chunk
+            
+            # Then continue with the rest of the stream
+            if not stream_exhausted:
+                while True:
+                    if disconnect_checker and await disconnect_checker():
+                        raise asyncio.CancelledError("client disconnected")
+                    try:
+                        chunk = await stream.__anext__()
+                    except StopAsyncIteration:
+                        break
+                    if chunk:
+                        chunk_count += 1
+                        if chunk_count % 10 == 0:  # Log every 10th chunk to avoid spam
+                            logger.debug(f"Streamed {chunk_count} chunks from {url}")
+                        if request_log:
+                            request_log.record_stream_chunk(chunk)
+                        yield chunk
         except asyncio.CancelledError as cancel_exc:
             logger.info(f"Streaming request to {url} cancelled by client")
             if request_log and not request_log.finalized:
