@@ -2,12 +2,21 @@
 # this one on audiollm adress
 
 model_list:
-  - model_name: GLM-4.6-Thinking
+  - model_name: GLM-4.6-nano
     litellm_params:
       api_type: openai
       model: z-ai/glm-4.6:thinking
       api_base: https://nano-gpt.com/api/v1thinking
       api_key: ${NANOGPT_API_KEY}
+      supports_reasoning: True
+      request_timeout: 540
+
+  - model_name: GLM-4.6
+    litellm_params:
+      api_type: openai
+      model: GLM-4.6
+      api_base: https://api.z.ai/api/coding/paas/v4
+      api_key: ${GLM_API_KEY}
       supports_reasoning: True
       request_timeout: 540
 
@@ -19,7 +28,7 @@ model_list:
       api_key: ${MINIMAX_API_KEY}
       request_timeout: 540
     
-  - model_name: MiniMax-M2-2
+  - model_name: MiniMax-M2-nano
     litellm_params:
       api_type: openai
       model: MiniMax-M2
@@ -28,12 +37,30 @@ model_list:
       supports_reasoning: True
       request_timeout: 540
 
-  - model_name: Kimi-K2-Thinking
+  - model_name: MiniMax-M2-synthetic
+    litellm_params:
+      api_type: openai
+      model: hf:MiniMaxAI/MiniMax-M2
+      api_base: https://api.synthetic.new/openai/v1
+      api_key: ${SYNTHETIC_API_KEY}
+      supports_reasoning: True
+      request_timeout: 540
+
+  - model_name: Kimi-K2-Thinking-nano
     litellm_params:
       api_type: openai
       model: moonshotai/kimi-k2-thinking
       api_base: https://nano-gpt.com/api/v1thinking
       api_key: ${NANOGPT_API_KEY}
+      supports_reasoning: True
+      request_timeout: 540
+
+  - model_name: Kimi-K2-Thinking-synthetic
+    litellm_params:
+      api_type: openai
+      model: hf:moonshotai/Kimi-K2-Thinking
+      api_base: https://api.synthetic.new/openai/v1
+      api_key: ${SYNTHETIC_API_KEY}
       supports_reasoning: True
       request_timeout: 540
 
