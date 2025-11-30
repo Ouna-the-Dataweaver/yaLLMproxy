@@ -4,7 +4,7 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Configuration
-PORT=17771
+PORT=6969
 VENV_PATH="$SCRIPT_DIR/.venv"
 
 # Check if virtual environment exists
