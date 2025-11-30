@@ -255,7 +255,27 @@ class RequestLogRecorder:
     def _safe_json_dict(data: Mapping[str, str]) -> str:
         try:
             normalized = {str(k): str(v) for k, v in data.items()}
-            return json.dumps(normalized, sort_keys=True)
+            # Mask sensitive information
+            masked_data = {}
+            for key, value in normalized.items():
+                key_lower = key.lower()
+                if key_lower in {"authorization", "proxy-connection"}:
+                    # Mask authorization headers: first 3 chars + **** 
+                    if isinstance(value, str) and value.startswith("Bearer "):
+                        bearer_token = value[7:]  # Remove "Bearer " prefix
+                        if bearer_token and bearer_token != "empty":
+                            masked_value = bearer_token[:3] + "****"
+                            masked_data[key] = f"Bearer {masked_value}"
+                        else:
+                            masked_data[key] = value
+                    else:
+                        masked_data[key] = value[:3] + "****" if len(value) > 3 else "****"
+                elif key_lower == "host":
+                    # Replace host with proxy_host for privacy
+                    masked_data[key] = "proxy_host"
+                else:
+                    masked_data[key] = value
+            return json.dumps(masked_data, sort_keys=True)
         except Exception:
             return str(data)
 
@@ -1147,6 +1167,18 @@ logger.info(f"Responses endpoint enabled: {enable_responses_endpoint}")
 
 @app.on_event("startup")
 async def startup_event():
+    # Print awesome ASCII art banner
+    print("""
+╔═════════════════════════════════════════╗
+║                                         ║
+║    ||  Y(et) A(nother) LLM proxy ||     ║
+║                                         ║
+║   =(^_^)=                    =(^_^)=    ║
+║                    =(^_^)=              ║
+║        =(^_^)=                =(^_^)=   ║
+╚═════════════════════════════════════════╝
+    """)
+    
     logger.info("yaLLMp Proxy server starting up...")
     logger.info("Configured bind address %s:%s", SERVER_HOST, SERVER_PORT)
     if SERVER_HOST == "0.0.0.0":
