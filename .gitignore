@@ -162,3 +162,7 @@ Thumbs.db
 # Cache directories
 .cache/
 *.cache
+
+# External files
+external/
+examples/
