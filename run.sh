@@ -4,19 +4,15 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Configuration
-PORT=6969
-VENV_PATH="$SCRIPT_DIR/.venv"
+PORT=7979
 
-# Check if virtual environment exists
-if [ ! -f "$VENV_PATH/bin/activate" ]; then
-    echo "[ERROR] Virtual environment not found at $VENV_PATH"
-    echo "Please run install.sh first to create the virtual environment."
+# Check if uv is available
+if ! command -v uv >/dev/null 2>&1; then
+    echo "[ERROR] uv is required but was not found in PATH."
+    echo "Install uv from https://github.com/astral-sh/uv and re-run this script."
     exit 1
 fi
 
-# Activate the virtual environment
-source "$VENV_PATH/bin/activate"
-
 # Start the proxy server
 echo "[INFO] Starting proxy server on http://0.0.0.0:$PORT"
-uvicorn proxy:app --host 0.0.0.0 --port $PORT
+uv run --project "$SCRIPT_DIR" uvicorn src.main:app --host 0.0.0.0 --port $PORT

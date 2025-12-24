@@ -1,6 +1,3 @@
-# LiteLLM config.yaml
-# this one on audiollm adress
-
 model_list:
   - model_name: GLM-4.6-nano
     litellm_params:
