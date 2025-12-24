@@ -28,15 +28,39 @@ logger.info(f"Proxy router initialized with {len(router.backends)} backends")
 # Set the router in the registry for routes to access
 set_router(router)
 
+# Server configuration - environment variables take priority over config file
+# Environment variables: YALLMP_HOST, YALLMP_PORT
+import os
+
+# Get host from env var first, then fallback to config
+SERVER_HOST = os.getenv("YALLMP_HOST")
+if SERVER_HOST is None:
+    # Check config file under proxy_settings.server.host
+    proxy_settings = config.get("proxy_settings") or {}
+    server_cfg = proxy_settings.get("server") or {}
+    SERVER_HOST = str(server_cfg.get("host", "127.0.0.1"))
+
+# Get port from env var first, then fallback to config
+SERVER_PORT_STR = os.getenv("YALLMP_PORT")
+if SERVER_PORT_STR is not None:
+    try:
+        SERVER_PORT = int(SERVER_PORT_STR)
+    except (TypeError, ValueError):
+        proxy_settings = config.get("proxy_settings") or {}
+        server_cfg = proxy_settings.get("server") or {}
+        SERVER_PORT = int(server_cfg.get("port", 8000))
+else:
+    # Fallback to config file
+    proxy_settings = config.get("proxy_settings") or {}
+    server_cfg = proxy_settings.get("server") or {}
+    try:
+        SERVER_PORT = int(server_cfg.get("port", 8000))
+    except (TypeError, ValueError):
+        SERVER_PORT = 8000
+
 # Check if responses endpoint should be enabled
 general_settings = config.get("general_settings") or {}
 enable_responses_endpoint = bool(general_settings.get("enable_responses_endpoint", False))
-server_cfg = general_settings.get("server") or {}
-SERVER_HOST = str(server_cfg.get("host", "127.0.0.1"))
-try:
-    SERVER_PORT = int(server_cfg.get("port", 8000))
-except (TypeError, ValueError):
-    SERVER_PORT = 8000
 
 logger.info(f"Responses endpoint enabled: {enable_responses_endpoint}")
 

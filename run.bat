@@ -5,7 +5,7 @@ REM Directory containing this script
 set "SCRIPT_DIR=%~dp0"
 
 REM Configuration
-set "PORT=7979"
+set "PORT=6969"
 
 REM Check if uv is available
 where uv >nul 2>nul
