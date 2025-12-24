@@ -3,19 +3,18 @@ setlocal enabledelayedexpansion
 
 REM Directory containing this script
 set "SCRIPT_DIR=%~dp0"
-REM Default venv path
-set "VENV_PATH=%SCRIPT_DIR%.venv"
 
-REM Check if virtual environment exists
-if not exist "%VENV_PATH%\Scripts\activate.bat" (
-    echo [ERROR] Virtual environment not found at %VENV_PATH%
-    echo Please run install.bat first to create the virtual environment.
+REM Configuration
+set "PORT=7979"
+
+REM Check if uv is available
+where uv >nul 2>nul
+if %errorlevel% neq 0 (
+    echo [ERROR] uv is required but was not found in PATH.
+    echo Install uv from https://github.com/astral-sh/uv and re-run this script.
     exit /b 1
 )
 
-REM Activate the virtual environment
-call "%VENV_PATH%\Scripts\activate.bat"
-
 REM Start the proxy server
-echo [INFO] Starting proxy server on http://0.0.0.0:6969
-uvicorn proxy:app --host 0.0.0.0 --port 6969
+echo [INFO] Starting proxy server on http://0.0.0.0:%PORT%
+uv run --project "%SCRIPT_DIR%" uvicorn src.main:app --host 0.0.0.0 --port %PORT%

@@ -22,23 +22,15 @@ fi
 
 PYTHON_BIN="$VENV_PATH/bin/python"
 
-# Install dependencies into the venv explicitly
-echo "[INFO] Installing proxy dependencies"
-uv pip install \
-  --python "$PYTHON_BIN" \
-  fastapi \
-  httpx \
-  pyyaml \
-  uvicorn \
-  openai 
-
-uv pip install "python-dotenv"
+# Install dependencies into the venv using uv sync
+echo "[INFO] Syncing proxy dependencies"
+uv sync \
+  --project "$SCRIPT_DIR" \
+  --python "$PYTHON_BIN"
 
 cat <<'MSG'
 
 [INFO] Installation complete.
-Activate the environment with:
-  source "$VENV_PATH/bin/activate"
-Then run the proxy, e.g.:
-  uvicorn proxy:app --host 0.0.0.0 --port 17771
+Run the proxy, e.g.:
+  uv run uvicorn proxy:app --host 0.0.0.0 --port 17771
 MSG

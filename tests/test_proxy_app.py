@@ -10,19 +10,28 @@ from fastapi.testclient import TestClient
 
 
 def _load_proxy_with_config(config_path: Path):
+    """Load the proxy module with a specific config file."""
     os.environ["YALLMP_CONFIG"] = str(config_path)
     module_name = f"proxy_test_{uuid.uuid4().hex}"
-    proxy_path = Path(__file__).resolve().parents[1] / "proxy.py"
-    spec = importlib.util.spec_from_file_location(module_name, proxy_path)
+    
+    # Import from src package instead of proxy.py
+    src_path = Path(__file__).resolve().parents[1] / "src"
+    src_init_path = src_path / "__init__.py"
+    
+    # Create a spec for the src package
+    spec = importlib.util.spec_from_file_location(module_name, src_init_path)
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
     assert spec.loader is not None
     spec.loader.exec_module(module)
+    
+    # Return the app and router from the module
     return module
 
 
 @pytest.fixture()
 def proxy_module(tmp_path):
+    """Create a proxy module with test configuration."""
     config = {
         "model_list": [
             {
@@ -54,6 +63,7 @@ def proxy_module(tmp_path):
 
 
 def test_models_endpoint_lists_configured_backends(proxy_module):
+    """Test that the models endpoint lists all configured backends."""
     expected_models = {"alpha", "beta"}
     with TestClient(proxy_module.app) as client:
         response = client.get("/v1/models")
@@ -65,6 +75,7 @@ def test_models_endpoint_lists_configured_backends(proxy_module):
 
 
 def test_admin_register_adds_model_and_lists_it(proxy_module):
+    """Test that a new model can be registered at runtime."""
     new_model = {
         "model_name": "gamma",
         "api_base": "http://gamma.local/v1",
@@ -87,3 +98,54 @@ def test_admin_register_adds_model_and_lists_it(proxy_module):
         models = client.get("/v1/models").json()
         model_ids = {entry["id"] for entry in models["data"]}
         assert "gamma" in model_ids
+
+
+def test_admin_register_replaces_existing_model(proxy_module):
+    """Test that registering an existing model replaces it."""
+    new_model = {
+        "model_name": "alpha",
+        "api_base": "http://alpha-new.local/v1",
+        "api_key": "alpha-new-key",
+    }
+
+    with TestClient(proxy_module.app) as client:
+        register_resp = client.post("/admin/models", json=new_model)
+        assert register_resp.status_code == 200
+        register_body = register_resp.json()
+        assert register_body["status"] == "ok"
+        assert register_body["model"] == "alpha"
+        assert register_body["replaced"] is True
+
+
+def test_chat_completions_requires_model_parameter(proxy_module):
+    """Test that chat completions endpoint requires a model parameter."""
+    with TestClient(proxy_module.app) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={"messages": [{"role": "user", "content": "Hello"}]}
+        )
+        assert response.status_code == 400
+        assert "model" in response.json()["detail"]["error"]["message"]
+
+
+def test_chat_completions_requires_messages(proxy_module):
+    """Test that chat completions endpoint requires messages."""
+    with TestClient(proxy_module.app) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={"model": "alpha"}
+        )
+        assert response.status_code == 400
+        assert "messages" in response.json()["detail"]["error"]["message"]
+
+
+def test_chat_completions_with_invalid_json(proxy_module):
+    """Test that invalid JSON in the request body is handled."""
+    with TestClient(proxy_module.app) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            content="not valid json",
+            headers={"Content-Type": "application/json"}
+        )
+        assert response.status_code == 400
+        assert "Invalid JSON" in response.json()["detail"]["error"]["message"]
