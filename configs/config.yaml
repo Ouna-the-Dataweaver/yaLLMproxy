@@ -8,10 +8,10 @@ model_list:
       supports_reasoning: True
       request_timeout: 540
 
-  - model_name: GLM-4.6
+  - model_name: GLM-4.7
     litellm_params:
       api_type: openai
-      model: GLM-4.6
+      model: GLM-4.7
       api_base: https://api.z.ai/api/coding/paas/v4
       api_key: ${GLM_API_KEY}
       supports_reasoning: True
@@ -66,11 +66,9 @@ router_settings:
   # Try the active model up to 2 times
   num_retries: 2
 
-# (Optional) proxy server bind — change to 0.0.0.0 only if you intend remote access
-# THESE HAS TO BE SET USING --host --port, no support for startup for now (TODO)
-general_settings:
+proxy_settings:
   server:
     host: 0.0.0.0
-    port: 6666
+    port: 7979
   # Enable/disable experimental OpenAI Responses API support
   enable_responses_endpoint: false
