@@ -14,6 +14,7 @@ from .backend import (
     build_outbound_headers,
     filter_response_headers,
     format_httpx_error,
+    _safe_headers_for_log,
 )
 from .exceptions import BackendRetryableError
 
@@ -223,8 +224,12 @@ class ProxyRouter:
         from .backend import DEFAULT_TIMEOUT
         
         url = backend.build_url(path, query)
-        outbound_headers = build_outbound_headers(headers, backend.api_key)
-        outbound_body = build_backend_body(payload, backend, body)
+        outbound_headers = build_outbound_headers(
+            headers, backend.api_key, is_stream=is_stream
+        )
+        outbound_body = build_backend_body(
+            payload, backend, body, is_stream=is_stream
+        )
         timeout = backend.timeout or DEFAULT_TIMEOUT
         if request_log:
             request_log.record_backend_attempt(backend.name, attempt_number, url)
@@ -232,21 +237,72 @@ class ProxyRouter:
         logger.debug(
             f"Executing request to {url} with timeout {timeout}s, stream: {is_stream}"
         )
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "Outbound headers for %s: %s",
+                backend.name,
+                _safe_headers_for_log(outbound_headers),
+            )
+        logger.debug(
+            f"HTTP/2 enabled for {backend.name}: {backend.http2}"
+        )
 
         if is_stream:
             logger.debug(f"Initiating streaming request to {url}")
-            return await _streaming_request(
-                url,
-                outbound_headers,
-                outbound_body,
-                timeout,
-                request_log,
-                disconnect_checker,
-            )
+            logger.debug(f"Body size for {backend.name}: {len(outbound_body)} bytes")
+            try:
+                return await _streaming_request(
+                    url,
+                    outbound_headers,
+                    outbound_body,
+                    timeout,
+                    http2=backend.http2,
+                    request_log=request_log,
+                    disconnect_checker=disconnect_checker,
+                )
+            except httpx.HTTPError as exc:
+                logger.error(
+                    "HTTP error during streaming to %s: %s (type: %s)",
+                    url,
+                    str(exc),
+                    exc.__class__.__name__,
+                )
+                if backend.http2:
+                    logger.warning(
+                        "HTTP/2 stream to %s failed (%s); retrying with HTTP/1.1",
+                        url,
+                        exc.__class__.__name__,
+                    )
+                    return await _streaming_request(
+                        url,
+                        outbound_headers,
+                        outbound_body,
+                        timeout,
+                        http2=False,
+                        request_log=request_log,
+                        disconnect_checker=disconnect_checker,
+                    )
+                raise
 
         logger.debug(f"Initiating non-streaming request to {url}")
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(url, headers=outbound_headers, content=outbound_body)
+        async def _post(http2_enabled: bool) -> httpx.Response:
+            async with httpx.AsyncClient(timeout=timeout, http2=http2_enabled) as client:
+                return await client.post(
+                    url, headers=outbound_headers, content=outbound_body
+                )
+
+        try:
+            resp = await _post(backend.http2)
+        except httpx.HTTPError as exc:
+            if backend.http2:
+                logger.warning(
+                    "HTTP/2 request to %s failed (%s); retrying with HTTP/1.1",
+                    url,
+                    exc.__class__.__name__,
+                )
+                resp = await _post(False)
+            else:
+                raise
 
         logger.debug(f"Received response from {url}: status {resp.status_code}")
 
@@ -282,12 +338,30 @@ class ProxyRouter:
             except (TypeError, ValueError):
                 timeout_val = None
 
-            from .backend import extract_api_type, extract_target_model
-            
+            from .backend import (
+                extract_api_type,
+                extract_target_model,
+                _parse_bool,
+                ParameterConfig,
+            )
+
             api_type = extract_api_type(params)
             target_model = extract_target_model(params, api_type)
 
             supports_reasoning = bool(params.get("supports_reasoning"))
+            http2 = _parse_bool(params.get("http2"))
+
+            # Parse parameter overrides
+            param_configs: Dict[str, ParameterConfig] = {}
+            raw_params = entry.get("parameters") or {}
+            for param_name, param_config in raw_params.items():
+                if isinstance(param_config, dict):
+                    default = param_config.get("default")
+                    allow_override = _parse_bool(param_config.get("allow_override", True))
+                    param_configs[param_name] = ParameterConfig(
+                        default=default,
+                        allow_override=allow_override,
+                    )
 
             backends[name] = Backend(
                 name=name,
@@ -297,6 +371,8 @@ class ProxyRouter:
                 target_model=target_model,
                 api_type=api_type,
                 supports_reasoning=supports_reasoning,
+                http2=http2,
+                parameters=param_configs,
             )
         return backends
 
@@ -331,19 +407,49 @@ async def _streaming_request(
     headers: dict[str, str],
     body: bytes,
     timeout: float,
+    http2: bool = False,
     request_log: Optional[Any] = None,
     disconnect_checker: Optional[Callable[[], Awaitable[bool]]] = None,
 ) -> Response:
-    from .backend import DEFAULT_RETRY_DELAY, MAX_RETRY_DELAY, RETRYABLE_STATUSES
+    from .backend import (
+        DEFAULT_RETRY_DELAY,
+        MAX_RETRY_DELAY,
+        RETRYABLE_STATUSES,
+        filter_response_headers,
+    )
     
     from fastapi.responses import StreamingResponse
     
     logger.debug(f"Setting up streaming client for {url}")
-    client = httpx.AsyncClient(timeout=timeout)
+    logger.debug(f"Stream timeout config - connect={timeout}s, read=None, write={timeout}s, pool={timeout}s")
+    logger.debug(f"HTTP/2 client: {http2}")
+    logger.debug(f"Request body size: {len(body)} bytes")
+    stream_timeout = httpx.Timeout(
+        connect=timeout, read=None, write=timeout, pool=timeout
+    )
+    client = httpx.AsyncClient(timeout=stream_timeout, http2=http2)
     request = client.build_request("POST", url, headers=headers, content=body)
 
     logger.debug(f"Sending streaming request to {url}")
-    resp = await client.send(request, stream=True)
+    logger.debug(f"Request method: {request.method}")
+    logger.debug(f"Request URL: {request.url}")
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug("Request headers: %s", _safe_headers_for_log(request.headers))
+    logger.debug(f"Request content-length: {request.headers.get('content-length', 'not set')}")
+    try:
+        logger.debug(f"About to send request, stream=True")
+        resp = await client.send(request, stream=True)
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "Received initial response from %s: status=%s, headers=%s",
+                url,
+                resp.status_code,
+                _safe_headers_for_log(resp.headers),
+            )
+    except Exception as exc:
+        logger.error(f"Failed to send streaming request to {url}: {exc} (type: {exc.__class__.__name__})")
+        await client.aclose()
+        raise
     if request_log:
         request_log.record_stream_headers(resp.status_code, resp.headers)
 
@@ -431,8 +537,6 @@ async def _streaming_request(
         await close_stream()
         
         # Build a response to return if all backends fail
-        from .backend import filter_response_headers
-        
         response = Response(
             content=bytes(remaining_data),
             status_code=resp.status_code,
@@ -495,4 +599,3 @@ async def _streaming_request(
         headers=headers_to_client,
         media_type=media_type or "text/event-stream",
     )
-

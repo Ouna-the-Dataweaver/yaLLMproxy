@@ -2,7 +2,7 @@
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional
 
 from fastapi import HTTPException
@@ -18,9 +18,24 @@ RETRYABLE_STATUSES = {408, 409, 429, 500, 502, 503, 504}
 
 
 @dataclass
+class ParameterConfig:
+    """Configuration for a single LLM parameter.
+
+    Attributes:
+        default: The default value to use when the parameter is missing from
+            the incoming request. Also the value used when allow_override is False.
+        allow_override: If True, the proxy uses the request value if present,
+            falling back to default. If False, the proxy always uses default,
+            ignoring the request value.
+    """
+    default: Any
+    allow_override: bool = True
+
+
+@dataclass
 class Backend:
     """Represents a backend LLM provider."""
-    
+
     name: str
     base_url: str
     api_key: str
@@ -28,6 +43,8 @@ class Backend:
     target_model: Optional[str]
     api_type: str = "openai"
     supports_reasoning: bool = False
+    http2: bool = False
+    parameters: dict[str, ParameterConfig] = field(default_factory=dict)
 
     def build_url(self, path: str, query: str) -> str:
         """Build the full URL for a backend request."""
@@ -47,6 +64,12 @@ class Backend:
         return url
 
 
+def _parse_bool(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
 HOP_BY_HOP_HEADERS = {
     "connection",
     "keep-alive",
@@ -57,6 +80,22 @@ HOP_BY_HOP_HEADERS = {
     "transfer-encoding",
     "upgrade",
 }
+
+
+def _safe_headers_for_log(headers: Mapping[str, str]) -> dict[str, str]:
+    try:
+        from ..logging.recorder import RequestLogRecorder
+
+        return RequestLogRecorder._safe_headers(headers)
+    except Exception:
+        masked: dict[str, str] = {}
+        for key, value in headers.items():
+            key_lower = str(key).lower()
+            if key_lower in {"authorization", "proxy-connection"}:
+                masked[str(key)] = "****"
+            else:
+                masked[str(key)] = str(value)
+        return masked
 
 
 def format_httpx_error(exc: Any, backend: Backend, url: Optional[str] = None) -> str:
@@ -82,20 +121,25 @@ def format_httpx_error(exc: Any, backend: Backend, url: Optional[str] = None) ->
 
 
 def build_outbound_headers(
-    incoming: Mapping[str, str], backend_api_key: str
+    incoming: Mapping[str, str], backend_api_key: str, is_stream: bool = False
 ) -> dict[str, str]:
     """Build headers for outbound requests to backends."""
     headers: dict[str, str] = {}
     normalized_keys: set[str] = set()
+    
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug("Incoming headers: %s", _safe_headers_for_log(incoming))
+    
     for key, value in incoming.items():
         key_lower = key.lower()
         # Strip hop-by-hop headers and sensitive headers
+        # Note: We preserve accept-encoding to allow compression negotiation
         if key_lower in HOP_BY_HOP_HEADERS or key_lower in {
-            "authorization", 
-            "host", 
-            "content-length", 
-            "accept-encoding"
+            "authorization",
+            "host",
+            "content-length"
         }:
+            logger.debug(f"Stripping header: {key}")
             continue
         if key_lower in normalized_keys:
             continue
@@ -105,20 +149,28 @@ def build_outbound_headers(
     if "content-type" not in normalized_keys:
         headers["Content-Type"] = incoming.get("content-type", "application/json")
         normalized_keys.add("content-type")
+    if is_stream:
+        headers["Accept"] = "text/event-stream"
+        normalized_keys.add("accept")
     if backend_api_key:
         headers["Authorization"] = f"Bearer {backend_api_key}"
         normalized_keys.add("authorization")
-    # Explicitly request uncompressed responses
-    headers["Accept-Encoding"] = "identity"
+    
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug("Built outbound headers: %s", _safe_headers_for_log(headers))
+        logger.debug("Outbound header count: %s", len(headers))
     return headers
 
 
 def build_backend_body(
-    payload: Mapping[str, Any], backend: Backend, original_body: bytes
+    payload: Mapping[str, Any],
+    backend: Backend,
+    original_body: bytes,
+    is_stream: bool = False,
 ) -> bytes:
-    """Build the request body for a backend, rewriting model names as needed."""
+    """Build the request body for a backend, rewriting model names and applying parameter overrides as needed."""
     import asyncio
-    
+
     target_model = backend.target_model
     needs_thinking = False
     if backend.supports_reasoning:
@@ -127,11 +179,16 @@ def build_backend_body(
             isinstance(thinking, Mapping) and thinking.get("type")
         )
 
-    if not target_model and not needs_thinking:
+    # Check if any parameter transformation is needed
+    needs_param_override = bool(backend.parameters)
+
+    if not target_model and not needs_thinking and not is_stream and not needs_param_override:
         return original_body
 
     try:
         updated_payload = dict(payload)
+        if is_stream and updated_payload.get("stream") is not True:
+            updated_payload["stream"] = True
         if target_model:
             updated_payload["model"] = target_model
             logger.debug(
@@ -140,6 +197,25 @@ def build_backend_body(
         if needs_thinking:
             updated_payload["thinking"] = {"type": "enabled"}
             logger.debug("Enabled reasoning block for backend %s", backend.name)
+
+        # Apply parameter overrides
+        for param_name, config in backend.parameters.items():
+            if config.allow_override:
+                # Use request value if present, else default
+                if param_name not in updated_payload:
+                    updated_payload[param_name] = config.default
+                    logger.debug(
+                        "Applied default %s=%s for backend %s (request missing)",
+                        param_name, config.default, backend.name
+                    )
+            else:
+                # Always use configured value, ignoring request
+                updated_payload[param_name] = config.default
+                logger.debug(
+                    "Forced %s=%s for backend %s (override disabled)",
+                    param_name, config.default, backend.name
+                )
+
         rewritten = json.dumps(updated_payload).encode("utf-8")
         return rewritten
     except (TypeError, ValueError) as exc:
@@ -221,4 +297,3 @@ def extract_api_type(params: Mapping[str, Any]) -> str:
         return "openai"
     normalized = str(raw_api_type).strip().lower()
     return normalized or "openai"
-
