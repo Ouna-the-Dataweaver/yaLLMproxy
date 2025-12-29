@@ -45,10 +45,11 @@ def load_config(path: str | None = None) -> dict:
         raise RuntimeError(f"Config file not found: {config_path}")
     
     # Load .env file from the same directory as the config file
+    # Note: override=True ensures .env values take precedence over shell env vars
     env_path = config_path.parent / ".env"
     if env_path.exists():
         logger.info(f"Loading environment variables from {env_path}")
-        load_dotenv(env_path)
+        load_dotenv(env_path, override=True)
     
     with config_path.open("r", encoding="utf-8") as fh:
         data = yaml.safe_load(fh) or {}
@@ -72,6 +73,9 @@ def _substitute_env_vars(obj: Any) -> Any:
     
     Returns:
         The object with environment variables substituted.
+    
+    Raises:
+        ValueError: If a referenced environment variable is not set.
     """
     import re
     
@@ -85,7 +89,15 @@ def _substitute_env_vars(obj: Any) -> Any:
         
         def replace_var(match):
             var_name = match.group(1) or match.group(2)
-            return os.getenv(var_name, match.group(0))  # Return original if not found
+            value = os.getenv(var_name)
+            if value is None:
+                logger.warning(
+                    f"⚠️  CONFIG ERROR: Environment variable '${var_name}' is not set! "
+                    f"Check your .env file or export it in your shell. "
+                    f"The literal placeholder will be used (request will likely fail)."
+                )
+                return match.group(0)  # Return original placeholder
+            return value
         
         return pattern.sub(replace_var, obj)
     else:
