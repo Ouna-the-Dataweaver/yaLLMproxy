@@ -82,6 +82,10 @@ model_list:
       target_model: gpt-4          # Rewrite model name in requests (optional)
       supports_reasoning: false    # Enable reasoning block injection (optional)
       api_type: openai             # API type: openai, anthropic, etc. (optional)
+    parameters:                    # Per-model parameter defaults (optional)
+      temperature:
+        default: 1.0               # Default value if not specified in request
+        allow_override: false       # If true, use request value if provided (default: true)
 
 router_settings:
   num_retries: 1                   # Number of retry attempts per backend
