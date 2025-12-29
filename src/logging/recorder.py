@@ -1,6 +1,7 @@
 """Request logging and error tracking for the proxy."""
 
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -108,10 +109,9 @@ class RequestLogRecorder:
         self._current_backend: Optional[str] = None
         self._last_http_status: Optional[int] = None
         self._error_logged = False
+        self._request_json: Optional[dict[str, Any]] = None
         REQUEST_LOG_DIR.mkdir(parents=True, exist_ok=True)
-        self._append_text(
-            f"request_time={self._started}\nmodel={self.model_name}\nis_stream={self.is_stream}\npath={self.request_path}\n"
-        )
+        self._append_text(f"log_start={self._started}\n")
 
     def _append_text(self, text: str) -> None:
         self._buffer.extend(text.encode("utf-8"))
@@ -124,12 +124,34 @@ class RequestLogRecorder:
     ) -> None:
         if self._finalized:
             return
-        header_dump = self._safe_json_dict(headers)
-        self._append_text(f"=== REQUEST ===\nmethod={method}\nquery={query or ''}\nheaders={header_dump}\n")
-        self._append_text(f"body_len={len(body)}\n-- REQUEST BODY START --\n")
+        safe_headers = self._safe_headers(headers)
+        body_text: Optional[str] = None
+        body_json: Optional[Any] = None
+        body_base64: Optional[str] = None
+        body_is_json = False
         if body:
-            self._append_text(self._format_payload(body))
-        self._append_text("-- REQUEST BODY END --\n")
+            try:
+                body_text = body.decode("utf-8")
+                try:
+                    body_json = json.loads(body_text)
+                    body_is_json = True
+                except json.JSONDecodeError:
+                    body_is_json = False
+            except UnicodeDecodeError:
+                body_base64 = base64.b64encode(body).decode("ascii")
+        self._request_json = {
+            "request_time": self._started,
+            "model": self.model_name,
+            "is_stream": self.is_stream,
+            "path": self.request_path,
+            "method": method,
+            "query": query or "",
+            "headers": safe_headers,
+            "body_len": len(body),
+            "body_is_json": body_is_json,
+            "body": body_json if body_is_json else body_text,
+            "body_base64": body_base64,
+        }
 
     def record_route(self, route: list[str]) -> None:
         if self._finalized:
@@ -233,6 +255,7 @@ class RequestLogRecorder:
             with tmp_path.open("wb") as fh:
                 fh.write(data)
             os.replace(tmp_path, self.log_path)
+            self._write_request_json()
 
         await asyncio.to_thread(_write)
 
@@ -241,34 +264,48 @@ class RequestLogRecorder:
         with tmp_path.open("wb") as fh:
             fh.write(self._buffer)
         os.replace(tmp_path, self.log_path)
+        self._write_request_json()
+
+    def _write_request_json(self) -> None:
+        if not self._request_json:
+            return
+        json_path = self.log_path.with_suffix(".json")
+        tmp_path = json_path.with_suffix(json_path.suffix + ".tmp")
+        content = json.dumps(self._request_json, ensure_ascii=True, indent=2)
+        tmp_path.write_text(content + "\n", encoding="utf-8")
+        os.replace(tmp_path, json_path)
 
     @staticmethod
     def _safe_json_dict(data: Mapping[str, str]) -> str:
         try:
-            normalized = {str(k): str(v) for k, v in data.items()}
-            # Mask sensitive information
-            masked_data = {}
-            for key, value in normalized.items():
-                key_lower = key.lower()
-                if key_lower in {"authorization", "proxy-connection"}:
-                    # Mask authorization headers: first 3 chars + ****
-                    if isinstance(value, str) and value.startswith("Bearer "):
-                        bearer_token = value[7:]  # Remove "Bearer " prefix
-                        if bearer_token and bearer_token != "empty":
-                            masked_value = bearer_token[:3] + "****"
-                            masked_data[key] = f"Bearer {masked_value}"
-                        else:
-                            masked_data[key] = value
-                    else:
-                        masked_data[key] = value[:3] + "****" if len(value) > 3 else "****"
-                elif key_lower == "host":
-                    # Replace host with proxy_host for privacy
-                    masked_data[key] = "proxy_host"
-                else:
-                    masked_data[key] = value
-            return json.dumps(masked_data, sort_keys=True)
+            return json.dumps(RequestLogRecorder._safe_headers(data), sort_keys=True)
         except Exception:
             return str(data)
+
+    @staticmethod
+    def _safe_headers(data: Mapping[str, str]) -> dict[str, str]:
+        normalized = {str(k): str(v) for k, v in data.items()}
+        # Mask sensitive information
+        masked_data: dict[str, str] = {}
+        for key, value in normalized.items():
+            key_lower = key.lower()
+            if key_lower in {"authorization", "proxy-connection"}:
+                # Mask authorization headers: first 3 chars + ****
+                if isinstance(value, str) and value.startswith("Bearer "):
+                    bearer_token = value[7:]  # Remove "Bearer " prefix
+                    if bearer_token and bearer_token != "empty":
+                        masked_value = bearer_token[:3] + "****"
+                        masked_data[key] = f"Bearer {masked_value}"
+                    else:
+                        masked_data[key] = value
+                else:
+                    masked_data[key] = value[:3] + "****" if len(value) > 3 else "****"
+            elif key_lower == "host":
+                # Replace host with proxy_host for privacy
+                masked_data[key] = "proxy_host"
+            else:
+                masked_data[key] = value
+        return masked_data
 
     @staticmethod
     def _safe_fragment(text: str) -> str:
@@ -307,4 +344,3 @@ class RequestLogRecorder:
         except json.JSONDecodeError:
             return None
         return json.dumps(parsed, ensure_ascii=False, indent=2)
-

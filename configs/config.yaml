@@ -20,9 +20,12 @@ model_list:
       temperature:
         default: 1.0
         allow_override: false  # Always force t=1.0 for this model
-      max_tokens:
-        default: 8192
-        allow_override: true   # Use request value if provided, else 8192
+      top_p:
+        default: 0.95
+        allow_override: false
+      top_k:
+        default: 40
+        allow_override: false
 
   - model_name: MiniMax-M2
     litellm_params:

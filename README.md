@@ -49,7 +49,7 @@ run.bat
 
 ### Config File
 
-Place a configuration file at `config.yaml` in the project root, or set the `YALLMP_CONFIG` environment variable to point to another path:
+Default configuration lives at `configs/config.yaml`. You can override it by setting `YALLMP_CONFIG` to another path:
 
 ```bash
 export YALLMP_CONFIG=/path/to/your/config.yaml
@@ -57,14 +57,16 @@ export YALLMP_CONFIG=/path/to/your/config.yaml
 
 ### Environment Variables
 
-Environment variables can be substituted in the YAML configuration using `${VAR}` or `$VAR` syntax. If you want `.env` loading, export variables in your shell or use `python-dotenv` before starting the server:
+Environment variables can be substituted in the YAML configuration using `${VAR}` or `$VAR` syntax. These will be loaded from the `.env` file in the same directory as the config file (e.g., `configs/.env` when using `configs/config.yaml`). If an environment variable is not found, a **warning is logged** and the literal placeholder remains in the config (requests will likely fail).
+
+**Priority:** `.env` file values take precedence over shell environment variables. If you set `MY_VAR=abc` in your shell and also have `MY_VAR=xyz` in your `.env` file, the value `xyz` from the `.env` file will be used.
 
 ```yaml
 model_list:
   - model_name: gpt-4
     litellm_params:
       api_base: https://api.openai.com/v1
-      api_key: ${OPENAI_API_KEY}  # Will be substituted from environment
+      api_key: ${OPENAI_API_KEY}  # Loaded from .env or shell env
 ```
 
 ### Configuration Structure
@@ -86,12 +88,28 @@ router_settings:
   fallbacks:
     - my-model: [fallback-model]   # Fallback order for each model
 
-general_settings:
+proxy_settings:
   server:
-    host: 0.0.0.0                  # Bind address
-    port: 8000                     # Port number
+    host: 127.0.0.1                # Bind address
+    port: 7978                     # Port number
   enable_responses_endpoint: false # Enable /v1/responses endpoint
+
+forwarder_settings:
+  listen:
+    host: 0.0.0.0                  # External listen address
+    port: 7979                     # External listen port
+  target:
+    host: 127.0.0.1                # Proxy host
+    port: 7978                     # Proxy port
 ```
+
+## Forwarder
+
+The TCP forwarder is optional but useful when you need a separate inbound port or a separate process for the inbound traffic (e.g. you have a VPN which you must use for API access, but it breaks inbound traffic(or WSL shenanigans), in that case you can whitelist the forwarder executable/process, or run forwader in windows, and keep proxy running under VPN/in WSL etc.):
+
+It reads `forwarder_settings` from `configs/config.yaml`. You can override with
+`FORWARD_LISTEN_HOST`, `FORWARD_LISTEN_PORT`, `FORWARD_TARGET_HOST`,
+`FORWARD_TARGET_PORT` at runtime.
 
 ## Project Structure
 
@@ -186,7 +204,9 @@ All requests and responses are logged to `logs/requests/` with detailed informat
 - Stream chunks (for streaming responses)
 - Errors and final outcomes
 
-Logs are stored as text files with names like `YYYYMMDD_HHMMSS-<id>_<model>.log`. Errors are additionally logged in `logs/errors/`.
+Logs are stored as text files with names like `YYYYMMDD_HHMMSS-<id>_<model>.log`.
+A JSON sidecar (`.json`) with the original request is written alongside each log.
+Errors are additionally logged in `logs/errors/`.
 
 ### Sensitive Data Masking
 
@@ -197,20 +217,20 @@ Authorization and proxy-related headers are masked in logs (Bearer tokens show o
 The `replay_request.py` script in the scripts directory allows you to replay logged requests for debugging:
 
 ```bash
-# Replay a logged request
-python scripts/replay_request.py logs/requests/20231125_143052-abc123_gpt-4o.log
+# Replay a logged request (use the .json sidecar)
+python scripts/replay_request.py logs/requests/20231125_143052-abc123_gpt-4o.json
 
 # With explicit base URL
-python scripts/replay_request.py logs/requests/20231125_143052-abc123_gpt-4o.log --base-url http://localhost:8000
+python scripts/replay_request.py logs/requests/20231125_143052-abc123_gpt-4o.json --base-url http://localhost:8000
 
 # Override model name
-python scripts/replay_request.py logs/requests/20231125_143052-abc123_gpt-4o.log --model gpt-3.5-turbo
+python scripts/replay_request.py logs/requests/20231125_143052-abc123_gpt-4o.json --model gpt-3.5-turbo
 
 # Force streaming mode
-python scripts/replay_request.py logs/requests/20231125_143052-abc123_gpt-4o.log --stream-mode on
+python scripts/replay_request.py logs/requests/20231125_143052-abc123_gpt-4o.json --stream-mode on
 
 # Print curl command without sending
-python scripts/replay_request.py logs/requests/20231125_143052-abc123_gpt-4o.log --print-curl
+python scripts/replay_request.py logs/requests/20231125_143052-abc123_gpt-4o.json --print-curl
 ```
 
 ## Running Tests

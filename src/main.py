@@ -58,9 +58,15 @@ else:
     except (TypeError, ValueError):
         SERVER_PORT = 8000
 
-# Check if responses endpoint should be enabled
+# Check if responses endpoint should be enabled (prefer proxy_settings for current configs)
+proxy_settings = config.get("proxy_settings") or {}
 general_settings = config.get("general_settings") or {}
-enable_responses_endpoint = bool(general_settings.get("enable_responses_endpoint", False))
+if "enable_responses_endpoint" in proxy_settings:
+    enable_responses_endpoint = bool(proxy_settings.get("enable_responses_endpoint"))
+else:
+    enable_responses_endpoint = bool(
+        general_settings.get("enable_responses_endpoint", False)
+    )
 
 logger.info(f"Responses endpoint enabled: {enable_responses_endpoint}")
 
