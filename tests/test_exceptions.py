@@ -8,7 +8,7 @@ import pytest
 # Add src directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from core.exceptions import (
+from src.core.exceptions import (
     ProxyError,
     BackendRetryableError,
     ConfigurationError,
@@ -78,4 +78,3 @@ class TestInvalidRequestError:
         error = InvalidRequestError("missing parameter", code="missing_param")
         assert error.message == "missing parameter"
         assert error.code == "missing_param"
-
