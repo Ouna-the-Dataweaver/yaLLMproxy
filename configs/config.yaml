@@ -1,6 +1,6 @@
 model_list:
   - model_name: GLM-4.6-nano
-    litellm_params:
+    model_params:
       api_type: openai
       model: z-ai/glm-4.6:thinking
       api_base: https://nano-gpt.com/api/v1thinking
@@ -9,42 +9,49 @@ model_list:
       request_timeout: 540
 
   - model_name: GLM-4.7
-    litellm_params:
+    model_params:
       api_type: openai
       model: GLM-4.7
       api_base: https://api.z.ai/api/coding/paas/v4
       api_key: ${GLM_API_KEY}
-      supports_reasoning: True
+      thinking:
+        type: "enabled"
       request_timeout: 540
-    parameters:
-      temperature:
-        default: 1.0
-        allow_override: false  # Always force t=1.0 for this model
-      top_p:
-        default: 0.95
-        allow_override: false
-      top_k:
-        default: 40
-        allow_override: false
-
-  - model_name: MiniMax-M2
-    litellm_params:
-      api_type: openai
-      model: MiniMax-M2
-      api_base: https://api.minimax.io/v1
-      api_key: ${MINIMAX_API_KEY}
-      request_timeout: 540
+      parameters:
+        temperature:
+          default: 1.0
+          allow_override: false  # Always force t=1.0 for this model
+        top_p:
+          default: 0.95
+          allow_override: false
+    parsers:
+      enabled: true
+      response:
+        - swap_reasoning_content
+      swap_reasoning_content:
+        mode: "reasoning_to_content"
+      
 
   - model_name: MiniMax-M2.1
-    litellm_params:
+    model_params:
       api_type: openai
       model: MiniMax-M2.1
       api_base: https://api.minimax.io/v1
       api_key: ${MINIMAX_API_KEY}
       request_timeout: 540
+      parameters:
+        temperature:
+          default: 1.0
+          allow_override: false  # Always force t=1.0 for this model
+        top_p:
+          default: 0.95
+          allow_override: false
+        top_k:
+          default: 40
+          allow_override: false
     
   - model_name: MiniMax-M2-nano
-    litellm_params:
+    model_params:
       api_type: openai
       model: MiniMax-M2
       api_base: https://nano-gpt.com/api/v1thinking
@@ -53,7 +60,7 @@ model_list:
       request_timeout: 540
 
   - model_name: MiniMax-M2-synthetic
-    litellm_params:
+    model_params:
       api_type: openai
       model: hf:MiniMaxAI/MiniMax-M2
       api_base: https://api.synthetic.new/openai/v1
@@ -62,16 +69,23 @@ model_list:
       request_timeout: 540
 
   - model_name: Kimi-K2-Thinking-nano
-    litellm_params:
+    model_params:
       api_type: openai
       model: moonshotai/kimi-k2-thinking
       api_base: https://nano-gpt.com/api/v1thinking
       api_key: ${NANOGPT_API_KEY}
       supports_reasoning: True
       request_timeout: 540
+    parsers:
+      enabled: true
+      response:
+        - parse_unparsed
+      parse_unparsed:
+        parse_thinking: false
+        parse_tool_calls: true
 
   - model_name: Kimi-K2-Thinking-synthetic
-    litellm_params:
+    model_params:
       api_type: openai
       model: hf:moonshotai/Kimi-K2-Thinking
       api_base: https://api.synthetic.new/openai/v1
@@ -90,6 +104,29 @@ proxy_settings:
     port: 7979
   # Enable/disable experimental OpenAI Responses API support
   enable_responses_endpoint: false
+  logging:
+    log_parsed_response: true
+    log_parsed_stream: true
+  # Global response parser defaults (disabled by default; overridden per-model)
+  parsers:
+    enabled: false
+    # Response parser order (parse_unparsed runs before swap_reasoning_content if both enabled)
+    response:
+      - parse_unparsed
+      - swap_reasoning_content
+    # Optional path filters (substring match); defaults to /chat/completions when empty
+    paths:
+      - /chat/completions
+    # Parser-specific configs
+    parse_unparsed:
+      parse_thinking: true
+      parse_tool_calls: true
+      think_tag: "think"
+      tool_tag: "tool_call"
+    swap_reasoning_content:
+      mode: "reasoning_to_content"
+      think_tag: "think"
+      include_newline: true
 
 forwarder_settings:
   listen:

@@ -173,11 +173,27 @@ def build_backend_body(
 
     target_model = backend.target_model
     needs_thinking = False
+    thinking_type_to_set = None
+    
     if backend.supports_reasoning:
         thinking = payload.get("thinking")
-        needs_thinking = not (
-            isinstance(thinking, Mapping) and thinking.get("type")
-        )
+        if isinstance(thinking, Mapping):
+            # User explicitly specified thinking parameter - respect their choice
+            thinking_type = thinking.get("type")
+            if thinking_type == "enabled":
+                needs_thinking = True
+                thinking_type_to_set = "enabled"
+            elif thinking_type == "disabled":
+                needs_thinking = False
+                # Don't add anything - let the backend use its default (usually disabled)
+            else:
+                # Unknown type, enable thinking as default for reasoning-enabled backends
+                needs_thinking = True
+                thinking_type_to_set = "enabled"
+        else:
+            # No thinking parameter specified, enable thinking by default for this backend
+            needs_thinking = True
+            thinking_type_to_set = "enabled"
 
     # Check if any parameter transformation is needed
     needs_param_override = bool(backend.parameters)
@@ -194,9 +210,9 @@ def build_backend_body(
             logger.debug(
                 "Rewrote model for backend %s to %s", backend.name, target_model
             )
-        if needs_thinking:
-            updated_payload["thinking"] = {"type": "enabled"}
-            logger.debug("Enabled reasoning block for backend %s", backend.name)
+        if needs_thinking and thinking_type_to_set:
+            updated_payload["thinking"] = {"type": thinking_type_to_set}
+            logger.debug("Set thinking type to '%s' for backend %s", thinking_type_to_set, backend.name)
 
         # Apply parameter overrides
         for param_name, config in backend.parameters.items():

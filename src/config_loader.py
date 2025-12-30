@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 logger = logging.getLogger("yallmp-proxy")
 
-# Default path to the LiteLLM-style config file (relative to project root)
+# Default path to the config file (relative to project root)
 DEFAULT_CONFIG_PATH = "configs/config.yaml"
 
 # Environment variable to override config path

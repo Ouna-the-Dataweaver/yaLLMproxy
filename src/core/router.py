@@ -15,12 +15,18 @@ from .backend import (
     filter_response_headers,
     format_httpx_error,
     _safe_headers_for_log,
+    _parse_bool,
 )
 from .exceptions import BackendRetryableError
 
 logger = logging.getLogger("yallmp-proxy")
 
 from .sse import detect_sse_stream_error
+from ..parsers import (
+    ParserContext,
+    build_response_parser_overrides,
+    build_response_parser_pipeline,
+)
 
 DEFAULT_TIMEOUT = 30
 
@@ -33,6 +39,17 @@ class ProxyRouter:
         if not self.backends:
             raise RuntimeError("No backends found in config")
         self._lock = asyncio.Lock()
+        self.response_parsers = build_response_parser_pipeline(config)
+        self.response_parser_overrides = build_response_parser_overrides(config)
+
+        proxy_settings = config.get("proxy_settings") or {}
+        logging_cfg = proxy_settings.get("logging") or {}
+        self.log_parsed_response = _parse_bool(logging_cfg.get("log_parsed_response"))
+        log_parsed_stream_raw = logging_cfg.get("log_parsed_stream")
+        if log_parsed_stream_raw is None:
+            self.log_parsed_stream = self.log_parsed_response
+        else:
+            self.log_parsed_stream = _parse_bool(log_parsed_stream_raw)
 
         router_cfg = config.get("router_settings") or {}
         self.num_retries = max(1, int(router_cfg.get("num_retries", 1)))
@@ -53,6 +70,11 @@ class ProxyRouter:
         logger.info(
             f"Received request for model: {model_name}, path: {path}, stream: {is_stream}"
         )
+
+        if request_log:
+            request_log.configure_parsed_logging(
+                self.log_parsed_response, self.log_parsed_stream
+            )
         
         try:
             route = await self._build_route(model_name)
@@ -77,8 +99,9 @@ class ProxyRouter:
                     payload,
                     is_stream,
                     headers,
-                    request_log,
-                    disconnect_checker,
+                    model_name=model_name,
+                    request_log=request_log,
+                    disconnect_checker=disconnect_checker,
                 )
                 logger.info(f"Successfully served model {model_name} via backend {backend.name}")
                 return response
@@ -133,6 +156,11 @@ class ProxyRouter:
                 self.fallbacks[backend.name] = fallbacks
             return replaced
 
+    def _select_response_parsers(self, backend_name: str):
+        if backend_name in self.response_parser_overrides:
+            return self.response_parser_overrides[backend_name]
+        return self.response_parsers
+
     async def list_model_names(self) -> List[str]:
         async with self._lock:
             return list(self.backends.keys())
@@ -146,6 +174,7 @@ class ProxyRouter:
         payload: Mapping[str, Any],
         is_stream: bool,
         headers: Mapping[str, str],
+        model_name: str,
         request_log: Optional[Any] = None,
         disconnect_checker: Optional[Callable[[], Awaitable[bool]]] = None,
     ) -> Response:
@@ -169,6 +198,7 @@ class ProxyRouter:
                     is_stream,
                     headers,
                     attempt + 1,
+                    model_name,
                     request_log,
                     disconnect_checker,
                 )
@@ -218,6 +248,7 @@ class ProxyRouter:
         is_stream: bool,
         headers: Mapping[str, str],
         attempt_number: int,
+        model_name: str,
         request_log: Optional[Any] = None,
         disconnect_checker: Optional[Callable[[], Awaitable[bool]]] = None,
     ) -> Response:
@@ -250,6 +281,13 @@ class ProxyRouter:
         if is_stream:
             logger.debug(f"Initiating streaming request to {url}")
             logger.debug(f"Body size for {backend.name}: {len(outbound_body)} bytes")
+            pipeline = self._select_response_parsers(backend.name)
+            parser_context = ParserContext(
+                path=path,
+                model=model_name,
+                backend=backend.name,
+                is_stream=is_stream,
+            )
             try:
                 return await _streaming_request(
                     url,
@@ -259,6 +297,8 @@ class ProxyRouter:
                     http2=backend.http2,
                     request_log=request_log,
                     disconnect_checker=disconnect_checker,
+                    parser_pipeline=pipeline,
+                    parser_context=parser_context,
                 )
             except httpx.HTTPError as exc:
                 logger.error(
@@ -281,6 +321,8 @@ class ProxyRouter:
                         http2=False,
                         request_log=request_log,
                         disconnect_checker=disconnect_checker,
+                        parser_pipeline=pipeline,
+                        parser_context=parser_context,
                     )
                 raise
 
@@ -320,6 +362,22 @@ class ProxyRouter:
                 f"{backend.name} returned status {resp.status_code}", response=response
             )
 
+        pipeline = self._select_response_parsers(backend.name)
+        parser_context = ParserContext(
+            path=path,
+            model=model_name,
+            backend=backend.name,
+            is_stream=is_stream,
+        )
+        parsed_body = pipeline.transform_response_body(
+            resp.content, resp.headers.get("content-type"), parser_context
+        )
+        if parsed_body is not None:
+            if request_log:
+                request_log.record_parsed_response(
+                    resp.status_code, resp.headers, parsed_body
+                )
+            return _build_response_from_httpx(resp, parsed_body)
         return _build_response_from_httpx(resp)
 
     @staticmethod
@@ -327,7 +385,7 @@ class ProxyRouter:
         backends: Dict[str, Backend] = {}
         for entry in entries:
             name = entry.get("model_name")
-            params = entry.get("litellm_params") or {}
+            params = entry.get("model_params") or {}
             base = (params.get("api_base") or "").strip()
             if not name or not base:
                 continue
@@ -410,6 +468,8 @@ async def _streaming_request(
     http2: bool = False,
     request_log: Optional[Any] = None,
     disconnect_checker: Optional[Callable[[], Awaitable[bool]]] = None,
+    parser_pipeline: Optional[Any] = None,
+    parser_context: Optional[ParserContext] = None,
 ) -> Response:
     from .backend import (
         DEFAULT_RETRY_DELAY,
@@ -548,6 +608,22 @@ async def _streaming_request(
     logger.info(f"Streaming request to {url} successful, status {resp.status_code}")
     headers_to_client = filter_response_headers(resp.headers)
     media_type = headers_to_client.pop("content-type", None)
+    stream_parser = None
+    if parser_pipeline and parser_context:
+        stream_parser = parser_pipeline.create_stream_parser(parser_context)
+    if request_log and stream_parser:
+        request_log.record_parsed_stream_headers(resp.status_code, resp.headers)
+
+    def _process_chunk(chunk: bytes) -> list[bytes]:
+        if not stream_parser:
+            return [chunk]
+        parsed_chunks = stream_parser.feed_bytes(chunk)
+        if not parsed_chunks:
+            return []
+        combined = b"".join(parsed_chunks)
+        if request_log:
+            request_log.record_parsed_stream_chunk(combined)
+        return [combined]
 
     async def iterator():
         nonlocal stream_exhausted
@@ -557,7 +633,8 @@ async def _streaming_request(
             # First yield the buffered chunks
             for chunk in buffered_chunks:
                 chunk_count += 1
-                yield chunk
+                for out_chunk in _process_chunk(chunk):
+                    yield out_chunk
             
             # Then continue with the rest of the stream
             if not stream_exhausted:
@@ -574,7 +651,13 @@ async def _streaming_request(
                             logger.debug(f"Streamed {chunk_count} chunks from {url}")
                         if request_log:
                             request_log.record_stream_chunk(chunk)
-                        yield chunk
+                        for out_chunk in _process_chunk(chunk):
+                            yield out_chunk
+            if stream_parser:
+                for out_chunk in stream_parser.finish():
+                    if request_log:
+                        request_log.record_parsed_stream_chunk(out_chunk)
+                    yield out_chunk
         except asyncio.CancelledError as cancel_exc:
             logger.info(f"Streaming request to {url} cancelled by client")
             if request_log and not request_log.finalized:

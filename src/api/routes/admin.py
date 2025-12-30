@@ -52,7 +52,7 @@ def _backend_from_runtime_payload(payload: dict[str, Any]) -> tuple[Backend, Opt
     if not model_name:
         raise ValueError("model_name is required")
 
-    params = payload.get("litellm_params") or payload
+    params = payload.get("model_params") or payload
     api_base = str(params.get("api_base") or params.get("base_url") or "").strip()
     if not api_base:
         raise ValueError("api_base is required")
@@ -90,7 +90,7 @@ async def register_model(request: Request) -> dict:
     
     Request body should contain:
     - model_name: The name to register this backend as
-    - litellm_params: Dictionary with:
+    - model_params: Dictionary with:
         - api_base: The base URL of the backend API
         - api_key: Optional API key for the backend
         - request_timeout: Optional timeout in seconds

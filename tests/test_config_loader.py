@@ -23,7 +23,7 @@ class TestLoadConfig:
             "model_list": [
                 {
                     "model_name": "test-model",
-                    "litellm_params": {
+                    "model_params": {
                         "api_base": "http://test.local/v1",
                         "api_key": "test-key",
                     },
@@ -54,7 +54,7 @@ class TestLoadConfig:
             "model_list": [
                 {
                     "model_name": "test-model",
-                    "litellm_params": {
+                    "model_params": {
                         "api_base": "http://test.local/v1",
                         "api_key": "${TEST_API_KEY}",
                     },
@@ -68,7 +68,7 @@ class TestLoadConfig:
             
             try:
                 result = load_config(f.name)
-                assert result["model_list"][0]["litellm_params"]["api_key"] == "my-secret-key"
+                assert result["model_list"][0]["model_params"]["api_key"] == "my-secret-key"
             finally:
                 os.unlink(f.name)
                 del os.environ["TEST_API_KEY"]
@@ -81,7 +81,7 @@ class TestLoadConfig:
             "model_list": [
                 {
                     "model_name": "test-model",
-                    "litellm_params": {
+                    "model_params": {
                         "api_base": "http://test.local/v1",
                         "api_key": "$SIMPLE_VAR",
                     },
@@ -95,7 +95,7 @@ class TestLoadConfig:
             
             try:
                 result = load_config(f.name)
-                assert result["model_list"][0]["litellm_params"]["api_key"] == "simple-value"
+                assert result["model_list"][0]["model_params"]["api_key"] == "simple-value"
             finally:
                 os.unlink(f.name)
                 del os.environ["SIMPLE_VAR"]
@@ -106,7 +106,7 @@ class TestLoadConfig:
             "model_list": [
                 {
                     "model_name": "test-model",
-                    "litellm_params": {
+                    "model_params": {
                         "api_base": "http://test.local/v1",
                         "api_key": "${UNDEFINED_VAR}",
                     },
@@ -120,7 +120,7 @@ class TestLoadConfig:
             
             try:
                 result = load_config(f.name)
-                assert result["model_list"][0]["litellm_params"]["api_key"] == "${UNDEFINED_VAR}"
+                assert result["model_list"][0]["model_params"]["api_key"] == "${UNDEFINED_VAR}"
             finally:
                 os.unlink(f.name)
 

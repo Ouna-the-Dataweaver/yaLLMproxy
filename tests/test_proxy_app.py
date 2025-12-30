@@ -36,7 +36,7 @@ def proxy_module(tmp_path):
         "model_list": [
             {
                 "model_name": "alpha",
-                "litellm_params": {
+                "model_params": {
                     "model": "openai/gpt-4o-mini",
                     "api_base": "http://alpha.local/v1",
                     "api_key": "alpha-key",
@@ -44,7 +44,7 @@ def proxy_module(tmp_path):
             },
             {
                 "model_name": "beta",
-                "litellm_params": {
+                "model_params": {
                     "model": "openai/gpt-4o-mini",
                     "api_base": "http://beta.local/v1",
                     "api_key": "beta-key",
@@ -57,7 +57,7 @@ def proxy_module(tmp_path):
             "enable_responses_endpoint": False,
         },
     }
-    config_path = tmp_path / "litellm_config.yaml"
+    config_path = tmp_path / "model_config.yaml"
     config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
     return _load_proxy_with_config(config_path)
 
