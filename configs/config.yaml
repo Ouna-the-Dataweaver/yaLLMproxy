@@ -30,6 +30,14 @@ model_list:
         - swap_reasoning_content
       swap_reasoning_content:
         mode: "reasoning_to_content"
+        think_tag: "think"
+        think_open:
+          prefix: "\n"
+          suffix: ""
+        think_close:
+          prefix: ""
+          suffix: ""
+        include_newline: true
       
 
   - model_name: MiniMax-M2.1
@@ -126,6 +134,12 @@ proxy_settings:
     swap_reasoning_content:
       mode: "reasoning_to_content"
       think_tag: "think"
+      think_open:
+        prefix: ""
+        suffix: ""
+      think_close:
+        prefix: ""
+        suffix: ""
       include_newline: true
 
 forwarder_settings:
