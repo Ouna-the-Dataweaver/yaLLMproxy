@@ -1,3 +1,11 @@
+# External files
+external/
+examples/
+
+# logs
+logs/
+
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -162,7 +170,3 @@ Thumbs.db
 # Cache directories
 .cache/
 *.cache
-
-# External files
-external/
-examples/
