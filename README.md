@@ -115,7 +115,13 @@ proxy_settings:
     swap_reasoning_content:        # Swap reasoning_content <-> content
       mode: reasoning_to_content   # reasoning_to_content | content_to_reasoning | auto
       think_tag: think
-      include_newline: true
+      think_open:
+        prefix: ""                 # Prefix before <think>
+        suffix: ""                 # Suffix after <think>
+      think_close:
+        prefix: ""                 # Prefix before </think>
+        suffix: ""                 # Suffix after </think>
+      include_newline: true        # Default true: add newline between </think> and content
 
 forwarder_settings:
   listen:
@@ -130,6 +136,17 @@ Per-model parser overrides can be added to individual entries in `model_list`.
 When present, they replace the global `proxy_settings.parsers` config for that model.
 If `enabled` is omitted, per-model parsers default to enabled (set `enabled: false`
 to explicitly disable parsing on that model).
+
+To help align formatting with a Jinja chat template, you can inspect a template
+and print suggested `think_open`/`think_close` prefixes and suffixes:
+
+```bash
+python scripts/inspect_template.py template_example.jinja
+```
+
+Copy the suggested values into your `swap_reasoning_content` config. If you set
+`think_close.suffix` to include a newline, consider setting `include_newline: false`
+to avoid double newlines.
 
 ```yaml
 model_list:
