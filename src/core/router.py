@@ -156,6 +156,15 @@ class ProxyRouter:
                 self.fallbacks[backend.name] = fallbacks
             return replaced
 
+    async def unregister_backend(self, backend_name: str) -> bool:
+        """Unregister a backend at runtime. Returns True if backend existed and was removed."""
+        async with self._lock:
+            if backend_name in self.backends:
+                del self.backends[backend_name]
+                self.fallbacks.pop(backend_name, None)
+                return True
+            return False
+
     def _select_response_parsers(self, backend_name: str):
         if backend_name in self.response_parser_overrides:
             return self.response_parser_overrides[backend_name]
@@ -430,6 +439,7 @@ class ProxyRouter:
                 api_type=api_type,
                 supports_reasoning=supports_reasoning,
                 http2=http2,
+                editable=False,
                 parameters=param_configs,
             )
         return backends

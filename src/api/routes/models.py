@@ -21,11 +21,13 @@ async def list_models() -> dict:
     router = get_router()
     models = []
     for model_name in await router.list_model_names():
+        backend = router.backends.get(model_name)
         models.append({
             "id": model_name,
             "object": "model",
             "created": int(Path(__file__).with_name("..").with_name("..").with_name("..").stat().st_ctime),
-            "owned_by": "yallmp-proxy"
+            "owned_by": "yallmp-proxy",
+            "editable": backend.editable if backend else False,
         })
     
     return {
