@@ -12,7 +12,7 @@ from .config_loader import load_config
 from .core import ProxyRouter
 from .core.registry import set_router
 from .logging import logger as setup_logger
-from .api.routes import chat_completions, list_models, register_model, responses
+from .api.routes import chat_completions, list_models, register_model, responses, config as config_routes
 
 # Import logging setup
 from .logging import setup_logging
@@ -75,6 +75,15 @@ logger.info(f"Responses endpoint enabled: {enable_responses_endpoint}")
 app = FastAPI(title="yaLLMp Proxy")
 logger.info("FastAPI application created")
 
+# Mount static files for admin UI
+static_dir = Path(__file__).parent.parent / "static"
+if static_dir.exists():
+    from fastapi.staticfiles import StaticFiles
+    app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+    logger.info(f"Static files mounted from {static_dir}")
+else:
+    logger.warning(f"Static directory not found at {static_dir}, admin UI will not be available")
+
 
 @app.on_event("startup")
 async def startup_event():
@@ -125,6 +134,14 @@ async def shutdown_event():
 app.post("/v1/chat/completions")(chat_completions)
 app.get("/v1/models")(list_models)
 app.post("/admin/models")(register_model)
+
+# Config management routes for admin UI
+app.get("/admin/config")(config_routes.get_full_config)
+app.put("/admin/config")(config_routes.update_config)
+app.get("/admin/models")(config_routes.get_models_list)
+app.delete("/admin/models/{model_name}")(config_routes.delete_model)
+app.get("/admin/")(config_routes.serve_admin_ui)
+app.get("/admin_2/")(config_routes.serve_admin_ui_v2)
 
 # Conditionally register responses endpoint
 if enable_responses_endpoint:

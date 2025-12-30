@@ -44,6 +44,7 @@ class Backend:
     api_type: str = "openai"
     supports_reasoning: bool = False
     http2: bool = False
+    editable: bool = False
     parameters: dict[str, ParameterConfig] = field(default_factory=dict)
 
     def build_url(self, path: str, query: str) -> str:

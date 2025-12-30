@@ -79,6 +79,7 @@ def _backend_from_runtime_payload(payload: dict[str, Any]) -> tuple[Backend, Opt
         target_model=target_model,
         api_type=api_type,
         supports_reasoning=supports_reasoning,
+        editable=True,
     )
     return backend, fallbacks
 
