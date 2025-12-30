@@ -267,7 +267,7 @@ class ResponseParser:
 
     def apply_stream_event(
         self, event: dict[str, Any], state: Any, ctx: ParserContext
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | list[dict[str, Any]]:
         return event
 
     def finalize_stream(self, state: Any, ctx: ParserContext) -> list[dict[str, Any]]:
@@ -459,11 +459,37 @@ class ReasoningSwapParser(ResponseParser):
         self.mode = mode_aliases.get(mode_raw, "reasoning_to_content")
         self.think_tag = str(config.get("think_tag") or "think")
         self.include_newline = _parse_bool(config.get("include_newline", True))
+        think_open_cfg = config.get("think_open") or {}
+        think_close_cfg = config.get("think_close") or {}
+        if isinstance(think_open_cfg, str):
+            self.think_open_prefix = think_open_cfg
+            self.think_open_suffix = ""
+        elif isinstance(think_open_cfg, Mapping):
+            self.think_open_prefix = str(think_open_cfg.get("prefix") or "")
+            self.think_open_suffix = str(think_open_cfg.get("suffix") or "")
+        else:
+            self.think_open_prefix = ""
+            self.think_open_suffix = ""
+        if isinstance(think_close_cfg, str):
+            self.think_close_prefix = think_close_cfg
+            self.think_close_suffix = ""
+        elif isinstance(think_close_cfg, Mapping):
+            self.think_close_prefix = str(think_close_cfg.get("prefix") or "")
+            self.think_close_suffix = str(think_close_cfg.get("suffix") or "")
+        else:
+            self.think_close_prefix = ""
+            self.think_close_suffix = ""
+
+    def _think_open(self) -> str:
+        return f"{self.think_open_prefix}<{self.think_tag}>{self.think_open_suffix}"
+
+    def _think_close(self) -> str:
+        return f"{self.think_close_prefix}</{self.think_tag}>{self.think_close_suffix}"
 
     def _wrap_reasoning(self, reasoning: str, content: Optional[str]) -> str:
-        open_tag = f"<{self.think_tag}>"
-        close_tag = f"</{self.think_tag}>"
-        prefix = f"{open_tag}{reasoning}{close_tag}"
+        open_block = self._think_open()
+        close_block = self._think_close()
+        prefix = f"{open_block}{reasoning}{close_block}"
         if content:
             sep = "\n" if self.include_newline else ""
             return prefix + sep + content
@@ -527,38 +553,49 @@ class ReasoningSwapParser(ResponseParser):
 
     def apply_stream_event(
         self, event: dict[str, Any], state: ReasoningSwapStreamState, ctx: ParserContext
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | list[dict[str, Any]]:
         choices = event.get("choices")
         if not isinstance(choices, list):
             return event
 
+        split_choices: list[dict[str, Any]] = []
+
         for choice in choices:
             delta = choice.get("delta")
-            if not isinstance(delta, dict):
-                continue
+            delta_is_dict = isinstance(delta, dict)
+            if not delta_is_dict:
+                delta = None
             choice_index = int(choice.get("index", 0))
             choice_state = self._get_choice_state(state, choice_index)
 
             mode = self.mode
             if mode == "auto":
                 if choice_state.mode is None:
-                    if isinstance(delta.get("reasoning_content"), str):
+                    if delta and isinstance(delta.get("reasoning_content"), str):
                         choice_state.mode = "reasoning_to_content"
-                    else:
+                    elif delta:
                         choice_state.mode = "content_to_reasoning"
+                    else:
+                        continue
                 mode = choice_state.mode or "reasoning_to_content"
 
             if mode == "reasoning_to_content":
-                reasoning = delta.get("reasoning_content")
-                content = delta.get("content")
+                reasoning = delta.get("reasoning_content") if delta else None
+                content = delta.get("content") if delta else None
+                tool_calls = None
+                if delta and "tool_calls" in delta:
+                    tool_calls = delta.get("tool_calls")
+                elif isinstance(choice.get("tool_calls"), list):
+                    tool_calls = choice.get("tool_calls")
                 new_content: Optional[str] = None
 
                 if isinstance(reasoning, str) and reasoning:
-                    open_tag = f"<{self.think_tag}>"
-                    close_tag = f"</{self.think_tag}>"
-                    prefix = "" if choice_state.inside_reasoning else open_tag
+                    open_block = self._think_open()
+                    close_block = self._think_close()
+                    prefix = "" if choice_state.inside_reasoning else open_block
                     if isinstance(content, str) and content:
-                        new_content = f"{prefix}{reasoning}{close_tag}{content}"
+                        sep = "\n" if self.include_newline else ""
+                        new_content = f"{prefix}{reasoning}{close_block}{sep}{content}"
                         choice_state.inside_reasoning = False
                     else:
                         new_content = f"{prefix}{reasoning}"
@@ -566,21 +603,43 @@ class ReasoningSwapParser(ResponseParser):
                     delta.pop("reasoning_content", None)
 
                 if isinstance(content, str) and content and choice_state.inside_reasoning:
-                    close_tag = f"</{self.think_tag}>"
-                    new_content = f"{close_tag}{content}"
+                    close_block = self._think_close()
+                    sep = "\n" if self.include_newline else ""
+                    new_content = f"{close_block}{sep}{content}"
                     choice_state.inside_reasoning = False
 
                 if new_content is not None:
                     delta["content"] = new_content
 
+                split_content: Optional[str] = None
+                if tool_calls:
+                    if delta_is_dict:
+                        existing_content = delta.get("content")
+                        if isinstance(existing_content, str) and existing_content:
+                            split_content = existing_content
+                            delta.pop("content", None)
+                    if choice_state.inside_reasoning:
+                        close_block = self._think_close()
+                        split_content = (split_content or "") + close_block
+                        choice_state.inside_reasoning = False
+                    if split_content:
+                        split_choices.append(
+                            {"index": choice_index, "delta": {"content": split_content}}
+                        )
+
                 if choice_state.inside_reasoning and choice.get("finish_reason") is not None:
-                    close_tag = f"</{self.think_tag}>"
-                    delta["content"] = (delta.get("content") or "") + close_tag
+                    close_block = self._think_close()
+                    if not delta:
+                        delta = {}
+                        choice["delta"] = delta
+                    delta["content"] = (delta.get("content") or "") + close_block
                     choice_state.inside_reasoning = False
 
                 continue
 
             if mode == "content_to_reasoning":
+                if not delta:
+                    continue
                 content = delta.get("content")
                 if not isinstance(content, str) or not content:
                     continue
@@ -604,6 +663,10 @@ class ReasoningSwapParser(ResponseParser):
                         delta["reasoning_content"] = result.reasoning
                 continue
 
+        if split_choices:
+            close_event = {key: value for key, value in event.items() if key != "choices"}
+            close_event["choices"] = split_choices
+            return [close_event, event]
         return event
 
     def finalize_stream(
@@ -611,7 +674,7 @@ class ReasoningSwapParser(ResponseParser):
     ) -> list[dict[str, Any]]:
         events: list[dict[str, Any]] = []
         if self.mode == "reasoning_to_content":
-            close_tag = f"</{self.think_tag}>"
+            close_tag = self._think_close()
             for choice_index, choice_state in state.choices.items():
                 if choice_state.inside_reasoning:
                     events.append(
@@ -727,24 +790,38 @@ class ResponseStreamParser:
             output.append(leftover)
         return output
 
-    def _apply_event(self, event: dict[str, Any]) -> dict[str, Any]:
-        current = event
+    def _apply_event(self, event: dict[str, Any]) -> list[dict[str, Any]]:
+        current_events = [event]
         for parser, state in zip(self.pipeline.parsers, self.states):
-            current = parser.apply_stream_event(current, state, self.ctx)
-        return current
+            next_events: list[dict[str, Any]] = []
+            for current in current_events:
+                updated = parser.apply_stream_event(current, state, self.ctx)
+                if isinstance(updated, list):
+                    next_events.extend(updated)
+                else:
+                    next_events.append(updated)
+            current_events = next_events
+        return current_events
 
-    def _apply_event_from_index(self, event: dict[str, Any], start: int) -> dict[str, Any]:
-        current = event
+    def _apply_event_from_index(self, event: dict[str, Any], start: int) -> list[dict[str, Any]]:
+        current_events = [event]
         for parser, state in zip(self.pipeline.parsers[start:], self.states[start:]):
-            current = parser.apply_stream_event(current, state, self.ctx)
-        return current
+            next_events: list[dict[str, Any]] = []
+            for current in current_events:
+                updated = parser.apply_stream_event(current, state, self.ctx)
+                if isinstance(updated, list):
+                    next_events.extend(updated)
+                else:
+                    next_events.append(updated)
+            current_events = next_events
+        return current_events
 
     def _finalize_events(self) -> list[dict[str, Any]]:
         extras: list[dict[str, Any]] = []
         for idx, parser in enumerate(self.pipeline.parsers):
             emitted = parser.finalize_stream(self.states[idx], self.ctx)
             for event in emitted:
-                extras.append(self._apply_event_from_index(event, idx + 1))
+                extras.extend(self._apply_event_from_index(event, idx + 1))
         return [self._merge_envelope(event) for event in extras]
 
     def _merge_envelope(self, event: dict[str, Any]) -> dict[str, Any]:
@@ -778,13 +855,23 @@ class ResponseStreamParser:
         if not isinstance(payload, dict):
             return [event.encode()]
 
-        updated = self._apply_event(payload)
-        if isinstance(updated, dict):
-            envelope = dict(updated)
+        updated_events = self._apply_event(payload)
+        if not updated_events:
+            return [event.encode()]
+
+        output: list[bytes] = []
+        for updated in updated_events:
+            if not isinstance(updated, dict):
+                output.append(event.encode())
+                continue
+            merged = self._merge_envelope(updated)
+            envelope = dict(merged)
             envelope.pop("choices", None)
-            self._last_envelope = envelope
-        event.data = json.dumps(updated, ensure_ascii=False)
-        return [event.encode()]
+            if envelope:
+                self._last_envelope = envelope
+            data = json.dumps(merged, ensure_ascii=False)
+            output.append(SSEEvent(data=data, other_lines=event.other_lines).encode())
+        return output
 
 
 class ResponseParserPipeline:
