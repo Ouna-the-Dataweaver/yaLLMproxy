@@ -9,7 +9,7 @@ import pytest
 # Add src directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from core.backend import (
+from src.core.backend import (
     Backend,
     build_outbound_headers,
     build_backend_body,
@@ -146,21 +146,20 @@ class TestBuildOutboundHeaders:
         assert "Transfer-Encoding" not in result
         assert result.get("Content-Type") == "application/json"
 
-    def test_replaces_accept_encoding_with_identity(self):
-        """Test that accept-encoding is replaced with identity."""
+    def test_preserves_accept_encoding(self):
+        """Test that accept-encoding is preserved."""
         incoming = {
             "Accept-Encoding": "gzip, deflate",
             "Content-Type": "application/json",
         }
         result = build_outbound_headers(incoming, "")
-        # The incoming Accept-Encoding is stripped, but identity is added
-        assert result.get("Accept-Encoding") == "identity"
+        assert result.get("Accept-Encoding") == "gzip, deflate"
 
-    def test_adds_identity_encoding_if_not_present(self):
-        """Test that identity encoding is added if not present."""
+    def test_does_not_add_accept_encoding_if_missing(self):
+        """Test that accept-encoding is not added if missing."""
         incoming = {"Content-Type": "application/json"}
         result = build_outbound_headers(incoming, "")
-        assert result.get("Accept-Encoding") == "identity"
+        assert "Accept-Encoding" not in result
 
     def test_preserves_custom_headers(self):
         """Test that custom headers are preserved."""
@@ -226,17 +225,9 @@ class TestBuildBackendBody:
         parsed = json.loads(result)
         assert parsed.get("thinking") == {"type": "enabled"}
 
-    def test_does_not_add_thinking_when_already_present_in_payload(self):
-        """Test that thinking is not overwritten if already present in payload.
-        
-        Note: The function returns original_body when no modifications are needed.
-        If thinking is present in payload but not in original_body, the original
-        body is returned unchanged. This is the expected behavior.
-        """
-        # When payload has thinking but no target_model, original_body is returned
-        # This is because the function only modifies the body when target_model
-        # is set or when thinking needs to be added
-        payload = {"model": "test", "messages": [], "thinking": {"type": "custom"}}
+    def test_does_not_add_thinking_when_disabled(self):
+        """Test that thinking is not added when explicitly disabled."""
+        payload = {"model": "test", "messages": [], "thinking": {"type": "disabled"}}
         backend = Backend(
             name="test",
             base_url="https://api.example.com",
@@ -248,8 +239,6 @@ class TestBuildBackendBody:
         # The original body doesn't have thinking
         original_body = b'{"model": "test", "messages": []}'
         result = build_backend_body(payload, backend, original_body)
-        # When target_model is None and thinking is already present,
-        # the function returns original_body unchanged
         assert result == original_body
 
 

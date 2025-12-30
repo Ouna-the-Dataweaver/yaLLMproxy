@@ -6,7 +6,7 @@ from pathlib import Path
 # Add src directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from core.sse import detect_sse_stream_error, STREAM_ERROR_CHECK_BUFFER_SIZE
+from src.core.sse import detect_sse_stream_error, STREAM_ERROR_CHECK_BUFFER_SIZE
 
 
 class TestDetectSseStreamError:
@@ -68,4 +68,3 @@ class TestDetectSseStreamError:
     def test_buffer_size_constant(self):
         """Test that STREAM_ERROR_CHECK_BUFFER_SIZE is defined."""
         assert STREAM_ERROR_CHECK_BUFFER_SIZE == 4096
-

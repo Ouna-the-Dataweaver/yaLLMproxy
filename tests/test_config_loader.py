@@ -14,6 +14,16 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from config_loader import load_config, _substitute_env_vars
 
 
+def _write_temp_yaml(data) -> str:
+    fd, path = tempfile.mkstemp(suffix=".yaml")
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        if isinstance(data, str):
+            handle.write(data)
+        else:
+            yaml.safe_dump(data, handle)
+    return path
+
+
 class TestLoadConfig:
     """Tests for loading configuration from YAML files."""
 
@@ -31,15 +41,12 @@ class TestLoadConfig:
             ]
         }
         
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
-            yaml.safe_dump(config_data, f)
-            f.flush()
-            
-            try:
-                result = load_config(f.name)
-                assert result["model_list"][0]["model_name"] == "test-model"
-            finally:
-                os.unlink(f.name)
+        path = _write_temp_yaml(config_data)
+        try:
+            result = load_config(path)
+            assert result["model_list"][0]["model_name"] == "test-model"
+        finally:
+            os.unlink(path)
 
     def test_raises_error_for_missing_config(self):
         """Test that error is raised for missing config file."""
@@ -62,16 +69,13 @@ class TestLoadConfig:
             ]
         }
         
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
-            yaml.safe_dump(config_data, f)
-            f.flush()
-            
-            try:
-                result = load_config(f.name)
-                assert result["model_list"][0]["model_params"]["api_key"] == "my-secret-key"
-            finally:
-                os.unlink(f.name)
-                del os.environ["TEST_API_KEY"]
+        path = _write_temp_yaml(config_data)
+        try:
+            result = load_config(path)
+            assert result["model_list"][0]["model_params"]["api_key"] == "my-secret-key"
+        finally:
+            os.unlink(path)
+            del os.environ["TEST_API_KEY"]
 
     def test_substitutes_simple_env_var_syntax(self):
         """Test that $VAR syntax is also substituted."""
@@ -89,16 +93,13 @@ class TestLoadConfig:
             ]
         }
         
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
-            yaml.safe_dump(config_data, f)
-            f.flush()
-            
-            try:
-                result = load_config(f.name)
-                assert result["model_list"][0]["model_params"]["api_key"] == "simple-value"
-            finally:
-                os.unlink(f.name)
-                del os.environ["SIMPLE_VAR"]
+        path = _write_temp_yaml(config_data)
+        try:
+            result = load_config(path)
+            assert result["model_list"][0]["model_params"]["api_key"] == "simple-value"
+        finally:
+            os.unlink(path)
+            del os.environ["SIMPLE_VAR"]
 
     def test_preserves_undefined_env_vars(self):
         """Test that undefined environment variables are preserved."""
@@ -114,27 +115,21 @@ class TestLoadConfig:
             ]
         }
         
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
-            yaml.safe_dump(config_data, f)
-            f.flush()
-            
-            try:
-                result = load_config(f.name)
-                assert result["model_list"][0]["model_params"]["api_key"] == "${UNDEFINED_VAR}"
-            finally:
-                os.unlink(f.name)
+        path = _write_temp_yaml(config_data)
+        try:
+            result = load_config(path)
+            assert result["model_list"][0]["model_params"]["api_key"] == "${UNDEFINED_VAR}"
+        finally:
+            os.unlink(path)
 
     def test_loads_empty_config(self):
         """Test loading an empty configuration."""
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
-            f.write("")
-            f.flush()
-            
-            try:
-                result = load_config(f.name)
-                assert result == {}
-            finally:
-                os.unlink(f.name)
+        path = _write_temp_yaml("")
+        try:
+            result = load_config(path)
+            assert result == {}
+        finally:
+            os.unlink(path)
 
     def test_substitutes_in_nested_config(self):
         """Test that environment variables are substituted in nested values."""
@@ -149,16 +144,13 @@ class TestLoadConfig:
             }
         }
         
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
-            yaml.safe_dump(config_data, f)
-            f.flush()
-            
-            try:
-                result = load_config(f.name)
-                assert result["general_settings"]["server"]["port"] == "nested-value"
-            finally:
-                os.unlink(f.name)
-                del os.environ["NESTED_KEY"]
+        path = _write_temp_yaml(config_data)
+        try:
+            result = load_config(path)
+            assert result["general_settings"]["server"]["port"] == "nested-value"
+        finally:
+            os.unlink(path)
+            del os.environ["NESTED_KEY"]
 
     def test_substitutes_in_list_values(self):
         """Test that environment variables are substituted in list values."""
@@ -172,16 +164,13 @@ class TestLoadConfig:
             }
         }
         
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
-            yaml.safe_dump(config_data, f)
-            f.flush()
-            
-            try:
-                result = load_config(f.name)
-                assert result["router_settings"]["fallbacks"][0]["model1"][0] == "list-value"
-            finally:
-                os.unlink(f.name)
-                del os.environ["LIST_VAR"]
+        path = _write_temp_yaml(config_data)
+        try:
+            result = load_config(path)
+            assert result["router_settings"]["fallbacks"][0]["model1"][0] == "list-value"
+        finally:
+            os.unlink(path)
+            del os.environ["LIST_VAR"]
 
 
 class TestSubstituteEnvVars:
@@ -227,4 +216,3 @@ class TestSubstituteEnvVars:
         
         result = _substitute_env_vars([1, 2, 3])
         assert result == [1, 2, 3]
-
