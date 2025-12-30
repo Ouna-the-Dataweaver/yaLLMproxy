@@ -215,7 +215,7 @@ def resolve_api_key(config: Optional[dict], model_name: Optional[str]) -> Option
     entry = _lookup_model_entry(config, model_name)
     if not entry:
         return None
-    api_key = (entry.get("litellm_params") or {}).get("api_key")
+    api_key = (entry.get("model_params") or {}).get("api_key")
     if not api_key or not isinstance(api_key, str):
         return None
     if "****" in api_key or api_key.strip().startswith("$"):
@@ -230,7 +230,7 @@ def resolve_api_base(config: Optional[dict], model_name: Optional[str]) -> Optio
     entry = _lookup_model_entry(config, model_name)
     if not entry:
         return None
-    api_base = (entry.get("litellm_params") or {}).get("api_base")
+    api_base = (entry.get("model_params") or {}).get("api_base")
     if not api_base or not isinstance(api_base, str):
         return None
     logger.debug("Resolved api_base for model %s: %s", model_name, api_base or "missing")
@@ -243,7 +243,7 @@ def resolve_http2(config: Optional[dict], model_name: Optional[str]) -> Optional
     entry = _lookup_model_entry(config, model_name)
     if not entry:
         return None
-    http2 = (entry.get("litellm_params") or {}).get("http2")
+    http2 = (entry.get("model_params") or {}).get("http2")
     if http2 is None:
         return None
     resolved = bool(http2)

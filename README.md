@@ -64,7 +64,7 @@ Environment variables can be substituted in the YAML configuration using `${VAR}
 ```yaml
 model_list:
   - model_name: gpt-4
-    litellm_params:
+    model_params:
       api_base: https://api.openai.com/v1
       api_key: ${OPENAI_API_KEY}  # Loaded from .env or shell env
 ```
@@ -74,7 +74,7 @@ model_list:
 ```yaml
 model_list:
   - model_name: my-model           # Display name for the model
-    litellm_params:
+    model_params:
       api_base: https://api.example.com/v1  # Backend URL
       api_key: sk-xxx              # API key (use env vars for security)
       model: gpt-4o                # Upstream model name (optional)
@@ -85,7 +85,7 @@ model_list:
     parameters:                    # Per-model parameter defaults (optional)
       temperature:
         default: 1.0               # Default value if not specified in request
-        allow_override: false       # If true, use request value if provided (default: true)
+        allow_override: false      # If true, use request value if provided (default: true)
 
 router_settings:
   num_retries: 1                   # Number of retry attempts per backend
@@ -97,6 +97,25 @@ proxy_settings:
     host: 127.0.0.1                # Bind address
     port: 7978                     # Port number
   enable_responses_endpoint: false # Enable /v1/responses endpoint
+  logging:                         # Request logging options (optional)
+    log_parsed_response: false     # Write parsed non-stream responses to *.parsed.log
+    log_parsed_stream: false       # Write parsed stream chunks to *.parsed.log
+  parsers:                         # Response parser pipeline (optional)
+    enabled: false
+    response:                      # Ordered response parsers
+      - parse_unparsed
+      - swap_reasoning_content
+    paths:                         # Apply to paths containing any of these strings
+      - /chat/completions
+    parse_unparsed:                # Parse <think> / <tool_call> tags into structured fields
+      parse_thinking: true
+      parse_tool_calls: true
+      think_tag: think
+      tool_tag: tool_call
+    swap_reasoning_content:        # Swap reasoning_content <-> content
+      mode: reasoning_to_content   # reasoning_to_content | content_to_reasoning | auto
+      think_tag: think
+      include_newline: true
 
 forwarder_settings:
   listen:
@@ -105,6 +124,25 @@ forwarder_settings:
   target:
     host: 127.0.0.1                # Proxy host
     port: 7978                     # Proxy port
+```
+
+Per-model parser overrides can be added to individual entries in `model_list`.
+When present, they replace the global `proxy_settings.parsers` config for that model.
+If `enabled` is omitted, per-model parsers default to enabled (set `enabled: false`
+to explicitly disable parsing on that model).
+
+```yaml
+model_list:
+  - model_name: GLM-4.7
+    model_params:
+      api_base: https://api.z.ai/api/coding/paas/v4
+      api_key: ${GLM_API_KEY}
+    parsers:
+      enabled: true
+      response:
+        - swap_reasoning_content
+      swap_reasoning_content:
+        mode: reasoning_to_content
 ```
 
 ## Forwarder
@@ -211,6 +249,9 @@ All requests and responses are logged to `logs/requests/` with detailed informat
 Logs are stored as text files with names like `YYYYMMDD_HHMMSS-<id>_<model>.log`.
 A JSON sidecar (`.json`) with the original request is written alongside each log.
 Errors are additionally logged in `logs/errors/`.
+When parsed response logging is enabled, a separate file
+`YYYYMMDD_HHMMSS-<id>_<model>.parsed.log` is written containing the parsed
+response body or parsed stream chunks.
 
 ### Sensitive Data Masking
 

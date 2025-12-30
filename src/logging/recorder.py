@@ -92,24 +92,42 @@ def log_error_event(
 class RequestLogRecorder:
     """Capture request/response lifecycle data and flush asynchronously."""
     
-    def __init__(self, model_name: str, is_stream: bool, path: str) -> None:
+    def __init__(
+        self,
+        model_name: str,
+        is_stream: bool,
+        path: str,
+        log_parsed_response: bool = False,
+        log_parsed_stream: Optional[bool] = None,
+    ) -> None:
         safe_model = self._safe_fragment(model_name or "unknown")
         timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
         import uuid
         short_id = uuid.uuid4().hex[:4]
         filename = f"{timestamp}-{short_id}_{safe_model}.log"
         self.log_path = REQUEST_LOG_DIR / filename
+        self.parsed_log_path = self.log_path.with_name(
+            f"{self.log_path.stem}.parsed.log"
+        )
         self.model_name = model_name or "unknown"
         self.is_stream = is_stream
         self.request_path = path
         self._buffer = bytearray()
+        self._parsed_buffer = bytearray()
         self._finalized = False
         self._stream_chunks = 0
+        self._parsed_stream_chunks = 0
         self._started = datetime.utcnow().isoformat() + "Z"
         self._current_backend: Optional[str] = None
         self._last_http_status: Optional[int] = None
         self._error_logged = False
         self._request_json: Optional[dict[str, Any]] = None
+        self._log_parsed_response = bool(log_parsed_response)
+        if log_parsed_stream is None:
+            self._log_parsed_stream = self._log_parsed_response
+        else:
+            self._log_parsed_stream = bool(log_parsed_stream)
+        self._parsed_initialized = False
         REQUEST_LOG_DIR.mkdir(parents=True, exist_ok=True)
         self._append_text(f"log_start={self._started}\n")
 
@@ -118,6 +136,29 @@ class RequestLogRecorder:
 
     def _append_bytes(self, data: bytes) -> None:
         self._buffer.extend(data)
+
+    def _append_parsed_text(self, text: str) -> None:
+        self._parsed_buffer.extend(text.encode("utf-8"))
+
+    def _append_parsed_bytes(self, data: bytes) -> None:
+        self._parsed_buffer.extend(data)
+
+    def _init_parsed_log(self) -> None:
+        if self._parsed_initialized:
+            return
+        self._parsed_initialized = True
+        self._append_parsed_text(f"log_start={self._started}\n")
+
+    def configure_parsed_logging(
+        self, log_parsed_response: bool, log_parsed_stream: Optional[bool] = None
+    ) -> None:
+        if self._finalized:
+            return
+        self._log_parsed_response = bool(log_parsed_response)
+        if log_parsed_stream is None:
+            self._log_parsed_stream = self._log_parsed_response
+        else:
+            self._log_parsed_stream = bool(log_parsed_stream)
 
     def record_request(
         self, method: str, query: str, headers: Mapping[str, str], body: bytes
@@ -179,6 +220,21 @@ class RequestLogRecorder:
             self._append_text(self._format_payload(body))
         self._append_text("-- RESPONSE BODY END --\n")
 
+    def record_parsed_response(
+        self, status: int, headers: Mapping[str, str], body: bytes
+    ) -> None:
+        if self._finalized or not self._log_parsed_response:
+            return
+        self._init_parsed_log()
+        header_dump = self._safe_json_dict(headers)
+        self._append_parsed_text(
+            f"=== PARSED RESPONSE ===\nstatus={status}\nresponse_headers={header_dump}\n"
+        )
+        self._append_parsed_text(f"body_len={len(body)}\n-- PARSED BODY START --\n")
+        if body:
+            self._append_parsed_text(self._format_payload(body))
+        self._append_parsed_text("-- PARSED BODY END --\n")
+
     def record_stream_headers(self, status: int, headers: Mapping[str, str]) -> None:
         if self._finalized:
             return
@@ -186,6 +242,17 @@ class RequestLogRecorder:
         header_dump = self._safe_json_dict(headers)
         self._append_text(
             f"=== STREAM RESPONSE ===\nstatus={status}\nresponse_headers={header_dump}\n"
+        )
+
+    def record_parsed_stream_headers(
+        self, status: int, headers: Mapping[str, str]
+    ) -> None:
+        if self._finalized or not self._log_parsed_stream:
+            return
+        self._init_parsed_log()
+        header_dump = self._safe_json_dict(headers)
+        self._append_parsed_text(
+            f"=== PARSED STREAM RESPONSE ===\nstatus={status}\nresponse_headers={header_dump}\n"
         )
 
     def record_stream_chunk(self, chunk: bytes) -> None:
@@ -197,6 +264,17 @@ class RequestLogRecorder:
         )
         self._append_text(self._format_payload(chunk))
         self._append_text("-- END STREAM CHUNK --\n")
+
+    def record_parsed_stream_chunk(self, chunk: bytes) -> None:
+        if self._finalized or not self._log_parsed_stream:
+            return
+        self._init_parsed_log()
+        self._parsed_stream_chunks += 1
+        self._append_parsed_text(
+            f"-- PARSED STREAM CHUNK {self._parsed_stream_chunks} len={len(chunk)} --\n"
+        )
+        self._append_parsed_text(self._format_payload(chunk))
+        self._append_parsed_text("-- END PARSED STREAM CHUNK --\n")
 
     def record_error(self, message: str, error_type: Optional[str] = None) -> None:
         if self._finalized:
@@ -255,6 +333,7 @@ class RequestLogRecorder:
             with tmp_path.open("wb") as fh:
                 fh.write(data)
             os.replace(tmp_path, self.log_path)
+            self._write_parsed_log()
             self._write_request_json()
 
         await asyncio.to_thread(_write)
@@ -264,7 +343,16 @@ class RequestLogRecorder:
         with tmp_path.open("wb") as fh:
             fh.write(self._buffer)
         os.replace(tmp_path, self.log_path)
+        self._write_parsed_log()
         self._write_request_json()
+
+    def _write_parsed_log(self) -> None:
+        if not self._parsed_buffer:
+            return
+        tmp_path = self.parsed_log_path.with_suffix(self.parsed_log_path.suffix + ".tmp")
+        with tmp_path.open("wb") as fh:
+            fh.write(self._parsed_buffer)
+        os.replace(tmp_path, self.parsed_log_path)
 
     def _write_request_json(self) -> None:
         if not self._request_json:
