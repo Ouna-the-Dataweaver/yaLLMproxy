@@ -1,21 +1,38 @@
 @echo off
 setlocal enabledelayedexpansion
 
-REM Directory containing this script
+REM Directory containing this script (strip trailing backslash to avoid quote escaping)
 set "SCRIPT_DIR=%~dp0"
-REM Default venv path
-set "VENV_PATH=%SCRIPT_DIR%.venv"
+if "%SCRIPT_DIR:~-1%"=="\" set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
 
-REM Check if virtual environment exists
-if not exist "%VENV_PATH%\Scripts\activate.bat" (
-    echo [ERROR] Virtual environment not found at %VENV_PATH%
-    echo Please run install.bat first to create the virtual environment.
+REM Configuration (override with config, then YALLMP_HOST / YALLMP_PORT)
+set "HOST=127.0.0.1"
+set "PORT=7978"
+
+REM Check if uv is available
+where uv >nul 2>nul
+if %errorlevel% neq 0 (
+    echo [ERROR] uv is required but was not found in PATH.
+    echo Install uv from https://github.com/astral-sh/uv and re-run this script.
     exit /b 1
 )
 
-REM Activate the virtual environment
-call "%VENV_PATH%\Scripts\activate.bat"
+for /f "usebackq delims=" %%A in (`uv run --project "%SCRIPT_DIR%" python "%SCRIPT_DIR%\scripts\print_run_config.py" ^| findstr /b CFG_`) do set "%%A"
+if not "%CFG_PROXY_HOST%"=="" set "HOST=%CFG_PROXY_HOST%"
+if not "%CFG_PROXY_PORT%"=="" set "PORT=%CFG_PROXY_PORT%"
+
+if not "%YALLMP_HOST%"=="" set "HOST=%YALLMP_HOST%"
+if not "%YALLMP_PORT%"=="" set "PORT=%YALLMP_PORT%"
+
+REM Optional flags
+set "RELOAD_ARG="
+:parse_args
+if "%~1"=="" goto after_args
+if /i "%~1"=="--reload" set "RELOAD_ARG=--reload"
+shift
+goto parse_args
+:after_args
 
 REM Start the proxy server
-echo [INFO] Starting proxy server on http://0.0.0.0:6969
-uvicorn proxy:app --host 0.0.0.0 --port 6969
+echo [INFO] Starting proxy server on http://%HOST%:%PORT%
+uv run --project "%SCRIPT_DIR%" uvicorn src.main:app --host %HOST% --port %PORT% %RELOAD_ARG%

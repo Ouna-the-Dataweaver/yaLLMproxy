@@ -8,14 +8,13 @@ like API keys, proxy hosts, and authorization tokens are properly masked in logs
 
 import unittest
 import json
-from unittest.mock import patch, MagicMock
-import sys
 from pathlib import Path
 
-# Add the parent directory to the path to import the proxy module
+# Add the src directory to the path to import the logging module
+import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from proxy import RequestLogRecorder
+from src.logging.recorder import RequestLogRecorder
 
 
 class TestDataMasking(unittest.TestCase):
