@@ -33,6 +33,13 @@ if [[ -n "${YALLMP_PORT:-}" ]]; then
     PORT="$YALLMP_PORT"
 fi
 
+RELOAD_ARGS=()
+for arg in "$@"; do
+    if [[ "$arg" == "--reload" ]]; then
+        RELOAD_ARGS+=(--reload)
+    fi
+done
+
 # Start the proxy server
 echo "[INFO] Starting proxy server on http://$HOST:$PORT"
-uv run --project "$SCRIPT_DIR" uvicorn src.main:app --host "$HOST" --port "$PORT"
+uv run --project "$SCRIPT_DIR" uvicorn src.main:app --host "$HOST" --port "$PORT" "${RELOAD_ARGS[@]}"

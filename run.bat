@@ -24,6 +24,15 @@ if not "%CFG_PROXY_PORT%"=="" set "PORT=%CFG_PROXY_PORT%"
 if not "%YALLMP_HOST%"=="" set "HOST=%YALLMP_HOST%"
 if not "%YALLMP_PORT%"=="" set "PORT=%YALLMP_PORT%"
 
+REM Optional flags
+set "RELOAD_ARG="
+:parse_args
+if "%~1"=="" goto after_args
+if /i "%~1"=="--reload" set "RELOAD_ARG=--reload"
+shift
+goto parse_args
+:after_args
+
 REM Start the proxy server
 echo [INFO] Starting proxy server on http://%HOST%:%PORT%
-uv run --project "%SCRIPT_DIR%" uvicorn src.main:app --host %HOST% --port %PORT%
+uv run --project "%SCRIPT_DIR%" uvicorn src.main:app --host %HOST% --port %PORT% %RELOAD_ARG%
