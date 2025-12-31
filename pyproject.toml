@@ -23,10 +23,22 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+    "jinja2>=3.1.0",
     "pytest>=7.4.0",
     "pytest-asyncio>=0.21.0",
     "httpx[http2]>=0.24.0",
 ]
+
+[dependency-groups]
+dev = [
+    "httpx[http2]>=0.24.0",
+    "jinja2>=3.1.0",
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+]
+
+[tool.uv]
+default-groups = ["dev"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
