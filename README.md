@@ -141,7 +141,7 @@ To help align formatting with a Jinja chat template, you can inspect a template
 and print suggested `think_open`/`think_close` prefixes and suffixes:
 
 ```bash
-python scripts/inspect_template.py template_example.jinja
+uv run python scripts/inspect_template.py template_example.jinja
 ```
 
 Copy the suggested values into your `swap_reasoning_content` config. If you set
@@ -280,19 +280,19 @@ The `replay_request.py` script in the scripts directory allows you to replay log
 
 ```bash
 # Replay a logged request (use the .json sidecar)
-python scripts/replay_request.py logs/requests/20231125_143052-abc123_gpt-4o.json
+uv run python scripts/replay_request.py logs/requests/20231125_143052-abc123_gpt-4o.json
 
 # With explicit base URL
-python scripts/replay_request.py logs/requests/20231125_143052-abc123_gpt-4o.json --base-url http://localhost:8000
+uv run python scripts/replay_request.py logs/requests/20231125_143052-abc123_gpt-4o.json --base-url http://localhost:8000
 
 # Override model name
-python scripts/replay_request.py logs/requests/20231125_143052-abc123_gpt-4o.json --model gpt-3.5-turbo
+uv run python scripts/replay_request.py logs/requests/20231125_143052-abc123_gpt-4o.json --model gpt-3.5-turbo
 
 # Force streaming mode
-python scripts/replay_request.py logs/requests/20231125_143052-abc123_gpt-4o.json --stream-mode on
+uv run python scripts/replay_request.py logs/requests/20231125_143052-abc123_gpt-4o.json --stream-mode on
 
 # Print curl command without sending
-python scripts/replay_request.py logs/requests/20231125_143052-abc123_gpt-4o.json --print-curl
+uv run python scripts/replay_request.py logs/requests/20231125_143052-abc123_gpt-4o.json --print-curl
 ```
 
 ## Running Tests
