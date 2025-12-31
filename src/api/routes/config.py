@@ -8,7 +8,7 @@ from fastapi import HTTPException
 from fastapi.responses import FileResponse
 
 from ...core.registry import get_router
-from ...config_loader import load_config, CONFIG_PATH
+from ...config_store import CONFIG_STORE
 
 logger = logging.getLogger("yallmp-proxy")
 
@@ -22,7 +22,7 @@ async def get_full_config() -> dict:
         The complete configuration dictionary.
     """
     try:
-        config = load_config()
+        config = CONFIG_STORE.get_default_raw()
         # Mask sensitive values for display
         return _mask_sensitive_data(config)
     except Exception as exc:
@@ -41,71 +41,29 @@ async def update_config(new_config: dict) -> dict:
     Returns:
         Success status.
     """
-    import yaml
-    from pathlib import Path
-    
-    config_path = Path(CONFIG_PATH)
-    
     try:
-        # Write back to config file
-        with config_path.open("w", encoding="utf-8") as f:
-            yaml.safe_dump(new_config, f, default_flow_style=False, sort_keys=False)
-        
-        logger.info(f"Configuration updated at {config_path}")
+        CONFIG_STORE.save_default(new_config)
+        logger.info("Configuration updated at %s", CONFIG_STORE.default_path)
         return {"status": "ok", "message": "Configuration saved successfully"}
     except Exception as exc:
         logger.error(f"Failed to save config: {exc}")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-async def get_models_list() -> list[dict]:
+async def get_models_list() -> dict:
     """Get detailed list of all registered models.
     
     GET /admin/models
     
     Returns:
-        List of models with their full configuration.
+        Dictionary with default and added model lists.
     """
-    from ...core.registry import get_router
-    
-    config = load_config()
-    config_models = config.get("model_list", [])
-    
-    # Get model names from config file
-    config_model_names = {m.get("model_name") for m in config_models}
-    
-    # Get runtime-registered models from router
-    router = get_router()
-    runtime_models = []
-    for backend in router.backends.values():
-        if backend.name not in config_model_names:
-            # This is a runtime-registered model
-            runtime_models.append({
-                "model_name": backend.name,
-                "model_params": {
-                    "api_base": backend.base_url,
-                    "api_type": backend.api_type,
-                    "model": backend.target_model or "",
-                    "request_timeout": backend.timeout,
-                    "supports_reasoning": backend.supports_reasoning,
-                },
-                "editable": backend.editable,
-            })
-    
-    # Combine config models (with editable=False) and runtime models (with editable=True)
-    all_models = []
-    
-    # Add config models
-    for model in config_models:
-        model_copy = dict(model)
-        model_copy["editable"] = False
-        all_models.append(model_copy)
-    
-    # Add runtime models
-    all_models.extend(runtime_models)
-    
-    # Return masked config for security
-    return [_mask_sensitive_data(model) for model in all_models]
+    default_models, added_models = CONFIG_STORE.list_models()
+
+    return {
+        "default": [_mask_sensitive_data(model) for model in default_models],
+        "added": [_mask_sensitive_data(model) for model in added_models],
+    }
 
 
 async def delete_model(model_name: str) -> dict:
@@ -121,31 +79,32 @@ async def delete_model(model_name: str) -> dict:
     
     Note:
         This only deletes runtime-registered models (editable=true).
-        Config-loaded models cannot be deleted as they are defined in config.yaml.
+        Config-loaded models cannot be deleted as they are defined in config_default.yaml.
     """
-    config = load_config()
+    config = CONFIG_STORE.get_default_raw()
     config_model_names = {m.get("model_name") for m in config.get("model_list", [])}
     
     # Config-loaded models cannot be deleted
     if model_name in config_model_names:
         raise HTTPException(
             status_code=400, 
-            detail=f"Model '{model_name}' is loaded from config.yaml and cannot be deleted. "
-                   f"Edit the config file and restart the proxy to remove it."
+            detail=f"Model '{model_name}' is loaded from config_default.yaml and cannot be deleted. "
+                   f"Edit config_default.yaml and restart the proxy to remove it."
         )
     
     # Only runtime-registered models can be deleted
     router = get_router()
-    if model_name not in router.backends:
+    removed_from_config = CONFIG_STORE.delete_added_model(model_name)
+    removed_from_router = False
+    if model_name in router.backends:
+        removed_from_router = await router.unregister_backend(model_name)
+    if not removed_from_config and not removed_from_router:
         raise HTTPException(status_code=404, detail=f"Model '{model_name}' not found")
     
-    # Remove from router
-    removed = await router.unregister_backend(model_name)
-    if removed:
+    if removed_from_router or removed_from_config:
         logger.info(f"Runtime model '{model_name}' deleted from memory")
         return {"status": "ok", "message": f"Model '{model_name}' deleted successfully"}
-    else:
-        raise HTTPException(status_code=500, detail=f"Failed to delete model '{model_name}'")
+    raise HTTPException(status_code=500, detail=f"Failed to delete model '{model_name}'")
 
 
 async def serve_admin_ui():

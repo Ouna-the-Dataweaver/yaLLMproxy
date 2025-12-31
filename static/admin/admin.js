@@ -61,44 +61,80 @@ async function fetchModels() {
     }
 }
 
-function renderModels(models) {
-    const container = document.getElementById('modelList');
-    const countEl = document.getElementById('modelCount');
+function renderModels(payload) {
+    const defaultModels = payload?.default || [];
+    const addedModels = payload?.added || [];
 
-    // Update count
-    countEl.textContent = models.length;
+    const defaultCountEl = document.getElementById('defaultCount');
+    const addedCountEl = document.getElementById('addedCount');
+    if (defaultCountEl) {
+        defaultCountEl.textContent = defaultModels.length;
+    }
+    if (addedCountEl) {
+        addedCountEl.textContent = addedModels.length;
+    }
 
-    // Render empty state
-    if (models.length === 0) {
+    renderModelList('defaultModelList', defaultModels, {
+        title: 'No default models configured',
+        description: 'Add models to config_default.yaml to show them here.',
+        showAdd: false,
+        transparentIcon: false
+    });
+    renderModelList('addedModelList', addedModels, {
+        title: 'No added models yet',
+        description: 'Register models via the admin UI or API to populate this list.',
+        showAdd: true,
+        transparentIcon: true
+    });
+}
+
+function renderModelList(containerId, models, emptyState) {
+    const container = document.getElementById(containerId);
+    if (!container) {
+        return;
+    }
+
+    if (!models || models.length === 0) {
+        const addButton = emptyState.showAdd ? `
+            <button class="btn btn-primary" type="button" data-action="add-model">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="12" y1="5" x2="12" y2="19"/>
+                    <line x1="5" y1="12" x2="19" y2="12"/>
+                </svg>
+                Add Your First Model
+            </button>
+        ` : '';
+        const iconClass = emptyState.transparentIcon ? 'empty-icon empty-icon-clear' : 'empty-icon';
+
         container.innerHTML = `
             <div class="empty-state">
-                <div class="empty-icon">
+                <div class="${iconClass}">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
                         <line x1="8" y1="21" x2="16" y2="21"/>
                         <line x1="12" y1="17" x2="12" y2="21"/>
                     </svg>
                 </div>
-                <h3 class="empty-title">No models configured</h3>
-                <p class="empty-description">Get started by adding your first LLM model to the proxy</p>
-                <button class="btn btn-primary" onclick="openAddModal()">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <line x1="12" y1="5" x2="12" y2="19"/>
-                        <line x1="5" y1="12" x2="19" y2="12"/>
-                    </svg>
-                    Add Your First Model
-                </button>
+                <h3 class="empty-title">${emptyState.title}</h3>
+                <p class="empty-description">${emptyState.description}</p>
+                ${addButton}
             </div>
         `;
         return;
     }
 
-    // Render model list
-    container.innerHTML = models.map((model, index) => {
+    container.innerHTML = renderModelCards(models);
+}
+
+function renderModelCards(models) {
+    return models.map((model, index) => {
         const params = model.model_params || {};
         const apiType = params.api_type || 'openai';
         const supportsReasoning = params.supports_reasoning;
         const editable = model.editable !== false; // Default to true if not specified
+        const safeModelName = escapeHtml(model.model_name);
+        const source = model.source || (editable ? 'added' : 'default');
+        const sourceLabel = source === 'added' ? 'Added' : 'Default';
 
         let badges = '';
         if (apiType === 'openai') {
@@ -112,9 +148,9 @@ function renderModels(models) {
         
         // Add editable/locked badge
         if (editable) {
-            badges += `<span class="badge badge-editable">Runtime</span>`;
+            badges += `<span class="badge badge-editable">${sourceLabel}</span>`;
         } else {
-            badges += `<span class="badge badge-locked">Config</span>`;
+            badges += `<span class="badge badge-locked">${sourceLabel}</span>`;
         }
 
         const details = [];
@@ -132,12 +168,14 @@ function renderModels(models) {
         const deleteDisabled = !editable ? 'btn-disabled tooltip' : '';
         const editTooltip = !editable ? 'data-tooltip="Config-loaded models cannot be modified"' : '';
         const deleteTooltip = !editable ? 'data-tooltip="Config-loaded models cannot be deleted"' : '';
+        const editAria = !editable ? 'aria-disabled="true"' : 'aria-disabled="false"';
+        const deleteAria = !editable ? 'aria-disabled="true"' : 'aria-disabled="false"';
 
         return `
             <div class="model-item" style="animation-delay: ${index * 0.08}s">
                 <div class="model-info">
                     <div class="model-name-row">
-                        <span class="model-name">${escapeHtml(model.model_name)}</span>
+                        <span class="model-name">${safeModelName}</span>
                         <div class="badges">${badges}</div>
                     </div>
                     <div class="model-details">
@@ -150,15 +188,21 @@ function renderModels(models) {
                     </div>
                 </div>
                 <div class="model-actions">
-                    <button class="btn btn-secondary btn-icon ${editDisabled}" 
-                            onclick="${editable ? `editModel('${escapeJs(model.model_name)}')` : ''}" 
+                    <button class="btn btn-secondary btn-icon ${editDisabled}"
+                            type="button"
+                            data-action="edit"
+                            data-model="${safeModelName}"
                             ${editTooltip}
+                            ${editAria}
                             title="${editable ? 'Edit model' : 'Config-loaded models cannot be modified'}">
                         ${Icons.edit}
                     </button>
-                    <button class="btn btn-danger btn-icon ${deleteDisabled}" 
-                            onclick="${editable ? `deleteModel('${escapeJs(model.model_name)}')` : ''}" 
+                    <button class="btn btn-danger btn-icon ${deleteDisabled}"
+                            type="button"
+                            data-action="delete"
+                            data-model="${safeModelName}"
                             ${deleteTooltip}
+                            ${deleteAria}
                             title="${editable ? 'Delete model' : 'Config-loaded models cannot be deleted'}">
                         ${Icons.trash}
                     </button>
@@ -175,30 +219,27 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-function escapeJs(text) {
-    if (!text) return '';
-    return text
-        .replace(/\\/g, '\\\\')
-        .replace(/'/g, "\\'")
-        .replace(/"/g, '\\"')
-        .replace(/\n/g, '\\n')
-        .replace(/\r/g, '\\r');
-}
-
 async function loadModels() {
-    const container = document.getElementById('modelList');
-    container.innerHTML = `
+    const defaultContainer = document.getElementById('defaultModelList');
+    const addedContainer = document.getElementById('addedModelList');
+    const loadingMarkup = `
         <div class="loading">
             <div class="spinner"></div>
             <span>Loading models...</span>
         </div>
     `;
+    if (defaultContainer) {
+        defaultContainer.innerHTML = loadingMarkup;
+    }
+    if (addedContainer) {
+        addedContainer.innerHTML = loadingMarkup;
+    }
 
     try {
-        const models = await fetchModels();
-        renderModels(models);
+        const payload = await fetchModels();
+        renderModels(payload);
     } catch (error) {
-        container.innerHTML = `
+        const errorMarkup = `
             <div class="empty-state">
                 <div class="empty-icon" style="background: rgba(239, 68, 68, 0.1);">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: #ef4444;">
@@ -209,7 +250,7 @@ async function loadModels() {
                 </div>
                 <h3 class="empty-title">Unable to load models</h3>
                 <p class="empty-description">Make sure the proxy server is running and try again</p>
-                <button class="btn btn-primary" onclick="loadModels()">
+                <button class="btn btn-primary" type="button" data-action="retry-load">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <polyline points="23 4 23 10 17 10"/>
                         <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
@@ -218,6 +259,12 @@ async function loadModels() {
                 </button>
             </div>
         `;
+        if (defaultContainer) {
+            defaultContainer.innerHTML = errorMarkup;
+        }
+        if (addedContainer) {
+            addedContainer.innerHTML = errorMarkup;
+        }
     }
 }
 
@@ -247,27 +294,18 @@ async function saveModel(event) {
 
     try {
         if (editName && editName !== modelData.model_name) {
-            // Rename scenario - update via config
-            await updateConfigWithModel(editName, modelData);
+            await upsertModel(modelData);
+            await deleteModel(editName, true);
             showNotification(`Model renamed to "${modelData.model_name}"`, 'success');
-        } else if (editName) {
-            // Edit same model
-            await updateConfigWithModel(editName, modelData);
-            showNotification(`Model "${modelData.model_name}" updated`, 'success');
         } else {
-            // Add new model
-            const response = await fetch(`${API_BASE}/models`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(modelData)
-            });
-
-            if (!response.ok) {
-                const error = await response.json();
-                throw new Error(error.detail || 'Failed to add model');
+            const result = await upsertModel(modelData);
+            if (editName) {
+                showNotification(`Model "${modelData.model_name}" updated`, 'success');
+            } else if (result.replaced) {
+                showNotification(`Model "${modelData.model_name}" replaced`, 'success');
+            } else {
+                showNotification(`Model "${modelData.model_name}" added successfully`, 'success');
             }
-
-            showNotification(`Model "${modelData.model_name}" added successfully`, 'success');
         }
 
         closeModal();
@@ -278,40 +316,26 @@ async function saveModel(event) {
     }
 }
 
-async function updateConfigWithModel(oldName, newModel) {
-    const configResponse = await fetch(`${API_BASE}/config`);
-    if (!configResponse.ok) {
-        throw new Error('Failed to fetch configuration');
-    }
-
-    const config = await configResponse.json();
-
-    const modelIndex = config.model_list?.findIndex(m => m.model_name === oldName);
-    if (modelIndex < 0) {
-        throw new Error('Model not found in configuration');
-    }
-
-    if (!config.model_list) {
-        config.model_list = [];
-    }
-
-    config.model_list[modelIndex] = newModel;
-
-    const response = await fetch(`${API_BASE}/config`, {
-        method: 'PUT',
+async function upsertModel(modelData) {
+    const response = await fetch(`${API_BASE}/models`, {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(config)
+        body: JSON.stringify(modelData)
     });
 
     if (!response.ok) {
         const error = await response.json();
-        throw new Error(error.detail || 'Failed to update configuration');
+        throw new Error(error.detail || 'Failed to save model');
     }
+
+    return response.json();
 }
 
-async function deleteModel(modelName) {
-    if (!confirm(`Are you sure you want to delete "${modelName}"?\n\nThis action cannot be undone.`)) {
-        return;
+async function deleteModel(modelName, skipConfirm = false) {
+    if (!skipConfirm) {
+        if (!confirm(`Are you sure you want to delete "${modelName}"?\n\nThis action cannot be undone.`)) {
+            return;
+        }
     }
 
     try {
@@ -352,7 +376,8 @@ function openAddModal() {
 }
 
 function editModel(modelName) {
-    fetchModels().then(models => {
+    fetchModels().then(payload => {
+        const models = [...(payload?.default || []), ...(payload?.added || [])];
         const model = models.find(m => m.model_name === modelName);
         if (!model) {
             showNotification('Model not found', 'error');
@@ -417,5 +442,52 @@ document.getElementById('modal').addEventListener('click', function(e) {
 // Form submission
 document.getElementById('modelForm').addEventListener('submit', saveModel);
 
+function handleModelListClick(event) {
+    const target = event.target.closest('[data-action]');
+    if (!target) {
+        return;
+    }
+    if (target.classList.contains('btn-disabled')) {
+        return;
+    }
+
+    const action = target.dataset.action;
+    if (action === 'edit') {
+        editModel(target.dataset.model || '');
+    } else if (action === 'delete') {
+        deleteModel(target.dataset.model || '');
+    } else if (action === 'add-model') {
+        openAddModal();
+    } else if (action === 'retry-load') {
+        loadModels();
+    }
+}
+
+function initAdminUi() {
+    const themeButton = document.querySelector('.theme-toggle');
+    if (themeButton) {
+        themeButton.addEventListener('click', themeToggle);
+    }
+
+    const addButton = document.getElementById('addModelBtn');
+    if (addButton) {
+        addButton.addEventListener('click', openAddModal);
+    }
+
+    document.querySelectorAll('[data-action="close-modal"]').forEach((button) => {
+        button.addEventListener('click', closeModal);
+    });
+
+    ['defaultModelList', 'addedModelList'].forEach((id) => {
+        const modelList = document.getElementById(id);
+        if (modelList) {
+            modelList.addEventListener('click', handleModelListClick);
+        }
+    });
+
+    updateThemeIcons(ThemeManager.getCurrent());
+    loadModels();
+}
+
 // Initialize
-document.addEventListener('DOMContentLoaded', loadModels);
+document.addEventListener('DOMContentLoaded', initAdminUi);

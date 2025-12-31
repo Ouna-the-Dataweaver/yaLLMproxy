@@ -3,16 +3,17 @@
 import asyncio
 import logging
 import socket
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import Response
 
-from .config_loader import load_config
+from .config_store import CONFIG_STORE
 from .core import ProxyRouter
 from .core.registry import set_router
 from .logging import logger as setup_logger
-from .api.routes import chat_completions, list_models, register_model, responses, config as config_routes
+from .api.routes import chat_completions, list_models, register_model, responses, config as config_routes, usage
 
 # Import logging setup
 from .logging import setup_logging
@@ -21,7 +22,7 @@ from .logging import setup_logging
 logger = setup_logging()
 
 # Load configuration
-config = load_config()
+config = CONFIG_STORE.get_runtime_config()
 router = ProxyRouter(config)
 logger.info(f"Proxy router initialized with {len(router.backends)} backends")
 
@@ -72,7 +73,16 @@ logger.info(f"Responses endpoint enabled: {enable_responses_endpoint}")
 
 
 # Create FastAPI application
-app = FastAPI(title="yaLLMp Proxy")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await startup_event()
+    try:
+        yield
+    finally:
+        await shutdown_event()
+
+
+app = FastAPI(title="yaLLMp Proxy", lifespan=lifespan)
 logger.info("FastAPI application created")
 
 # Mount static files for admin UI
@@ -85,9 +95,17 @@ else:
     logger.warning(f"Static directory not found at {static_dir}, admin UI will not be available")
 
 
-@app.on_event("startup")
 async def startup_event():
     """Handle application startup."""
+    import sys
+    # Set UTF-8 encoding for Windows
+    if sys.platform == "win32":
+        import codecs
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+    
     # Print awesome ASCII art banner
     print("""
 ╔═════════════════════════════════════════╗
@@ -117,7 +135,6 @@ async def startup_event():
     logger.info("yaLLMp Proxy server ready to handle requests")
 
 
-@app.on_event("shutdown")
 async def shutdown_event():
     """Handle application shutdown."""
     from .logging.recorder import _PENDING_LOG_TASKS
@@ -142,6 +159,11 @@ app.get("/admin/models")(config_routes.get_models_list)
 app.delete("/admin/models/{model_name}")(config_routes.delete_model)
 app.get("/admin/")(config_routes.serve_admin_ui)
 app.get("/admin_2/")(config_routes.serve_admin_ui_v2)
+
+# Usage statistics route
+app.get("/usage")(usage.usage_page)
+app.get("/api/usage")(usage.get_usage)
+app.get("/api/usage/page")(usage.usage_page)
 
 # Conditionally register responses endpoint
 if enable_responses_endpoint:

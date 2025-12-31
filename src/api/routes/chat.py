@@ -2,16 +2,34 @@
 
 import json
 import logging
-from typing import Any, Mapping, Optional
+from typing import Any, Callable, Mapping, Optional
 
 from fastapi import HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
+from starlette.background import BackgroundTask, BackgroundTasks
 
 from ...core import normalize_request_model
 from ...core.registry import get_router
 from ...logging import RequestLogRecorder
+from ...usage_metrics import USAGE_COUNTERS
 
 logger = logging.getLogger("yallmp-proxy")
+
+
+def _attach_finish_task(response: Response, finish: Callable[[], None]) -> None:
+    existing = getattr(response, "background", None)
+    if existing is None:
+        response.background = BackgroundTask(finish)
+        return
+
+    tasks = BackgroundTasks()
+    if isinstance(existing, BackgroundTasks):
+        for task in existing.tasks:
+            tasks.add_task(task.func, *task.args, **task.kwargs)
+    else:
+        tasks.add_task(existing.func, *existing.args, **existing.kwargs)
+    tasks.add_task(finish)
+    response.background = tasks
 
 
 async def handle_openai_request(request: Request) -> Response:
@@ -27,6 +45,7 @@ async def handle_openai_request(request: Request) -> Response:
         A Response or StreamingResponse with the completion results.
     """
     logger.info(f"Handling {request.method} request to {request.url.path}")
+    tracker = USAGE_COUNTERS.start_request()
     
     body = await request.body()
     request_log: Optional[RequestLogRecorder] = None
@@ -38,6 +57,7 @@ async def handle_openai_request(request: Request) -> Response:
         request_log.record_request(request.method, request.url.query, request.headers, body)
         request_log.record_error(f"invalid json: {exc}")
         request_log.finalize("error")
+        tracker.finish()
         raise HTTPException(
             status_code=400,
             detail={
@@ -55,6 +75,7 @@ async def handle_openai_request(request: Request) -> Response:
         request_log.record_request(request.method, request.url.query, request.headers, body)
         request_log.record_error("payload must be a JSON object")
         request_log.finalize("error")
+        tracker.finish()
         raise HTTPException(
             status_code=400,
             detail={
@@ -73,6 +94,7 @@ async def handle_openai_request(request: Request) -> Response:
         request_log.record_request(request.method, request.url.query, request.headers, body)
         request_log.record_error("missing model parameter")
         request_log.finalize("error")
+        tracker.finish()
         raise HTTPException(
             status_code=400,
             detail={
@@ -95,15 +117,16 @@ async def handle_openai_request(request: Request) -> Response:
             request_log.record_request(request.method, request.url.query, request.headers, body)
             request_log.record_error("missing messages array")
             request_log.finalize("error")
+            tracker.finish()
             raise HTTPException(
                 status_code=400,
                 detail={
                     "error": {
                         "message": "You must provide a messages array",
                         "type": "invalid_request_error",
-                        "code": "missing_parameter"
+                        "code": "missing_parameter",
                     }
-                }
+                },
             )
 
     is_stream = bool(payload.get("stream"))
@@ -130,12 +153,17 @@ async def handle_openai_request(request: Request) -> Response:
         logger.info(f"Request for model {model_name} completed successfully")
         if not is_stream and request_log and not request_log.finalized:
             request_log.finalize("success")
+        if isinstance(response, StreamingResponse):
+            _attach_finish_task(response, tracker.finish)
+            return response
+        tracker.finish()
         return response
     except Exception as e:
         logger.error(f"Error processing request for model {model_name}: {e}")
         if request_log and not request_log.finalized:
             request_log.record_error(str(e))
             request_log.finalize("error")
+        tracker.finish()
         raise
 
 

@@ -386,6 +386,14 @@ class ProxyRouter:
                 request_log.record_parsed_response(
                     resp.status_code, resp.headers, parsed_body
                 )
+                # Extract and record usage stats from the parsed response
+                try:
+                    import json as json_module
+                    payload = json_module.loads(parsed_body)
+                    if isinstance(payload, dict) and "usage" in payload:
+                        request_log.record_usage_stats(payload["usage"])
+                except (json_module.JSONDecodeError, TypeError):
+                    pass
             return _build_response_from_httpx(resp, parsed_body)
         return _build_response_from_httpx(resp)
 
@@ -417,6 +425,7 @@ class ProxyRouter:
 
             supports_reasoning = bool(params.get("supports_reasoning"))
             http2 = _parse_bool(params.get("http2"))
+            editable = _parse_bool(entry.get("editable"))
 
             # Parse parameter overrides
             param_configs: Dict[str, ParameterConfig] = {}
@@ -439,7 +448,7 @@ class ProxyRouter:
                 api_type=api_type,
                 supports_reasoning=supports_reasoning,
                 http2=http2,
-                editable=False,
+                editable=editable,
                 parameters=param_configs,
             )
         return backends

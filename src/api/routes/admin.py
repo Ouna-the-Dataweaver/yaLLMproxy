@@ -6,6 +6,7 @@ from typing import Any, Optional
 
 from fastapi import HTTPException, Request
 
+from ...config_store import CONFIG_STORE
 from ...core import Backend, extract_api_type, extract_target_model
 from ...core.registry import get_router
 
@@ -33,14 +34,16 @@ def _normalize_fallbacks(value: Any) -> Optional[list[str]]:
     raise ValueError("fallbacks must be a string or list of strings")
 
 
-def _backend_from_runtime_payload(payload: dict[str, Any]) -> tuple[Backend, Optional[list[str]]]:
+def _backend_from_runtime_payload(
+    payload: dict[str, Any]
+) -> tuple[Backend, Optional[list[str]], dict[str, Any]]:
     """Create a Backend instance from runtime registration payload.
     
     Args:
         payload: The JSON payload from the registration request.
     
     Returns:
-        A tuple of (Backend, fallbacks list).
+        A tuple of (Backend, fallbacks list, model config entry).
     
     Raises:
         ValueError: If required fields are missing or invalid.
@@ -81,7 +84,76 @@ def _backend_from_runtime_payload(payload: dict[str, Any]) -> tuple[Backend, Opt
         supports_reasoning=supports_reasoning,
         editable=True,
     )
-    return backend, fallbacks
+    model_entry = _build_model_entry(
+        payload,
+        model_name,
+        api_base,
+        api_key,
+        timeout_raw,
+        api_type,
+        target_model,
+        supports_reasoning,
+    )
+    return backend, fallbacks, model_entry
+
+
+def _normalize_config_scope(value: Any) -> str:
+    if value is None:
+        return "added"
+    scope = str(value).strip().lower()
+    if scope in {"added", "default"}:
+        return scope
+    raise ValueError("config_scope must be 'added' or 'default'")
+
+
+def _build_model_entry(
+    payload: dict[str, Any],
+    model_name: str,
+    api_base: str,
+    api_key: str,
+    timeout_raw: Any,
+    api_type: str,
+    target_model: Optional[str],
+    supports_reasoning: bool,
+) -> dict[str, Any]:
+    params = dict(payload.get("model_params") or {})
+    if not params:
+        params = dict(payload)
+        for key in ("model_name", "name", "fallbacks", "config_scope"):
+            params.pop(key, None)
+
+    if "api_base" not in params and "base_url" in params:
+        params["api_base"] = params.pop("base_url")
+    if "api_base" not in params:
+        params["api_base"] = api_base
+    if api_key and "api_key" not in params:
+        params["api_key"] = api_key
+    if "request_timeout" not in params and "timeout" in params:
+        params["request_timeout"] = params.pop("timeout")
+    if "request_timeout" not in params and timeout_raw is not None:
+        params["request_timeout"] = timeout_raw
+    if "api_type" not in params:
+        params["api_type"] = api_type
+    if "supports_reasoning" not in params:
+        params["supports_reasoning"] = supports_reasoning
+    if "model" not in params and target_model:
+        params["model"] = target_model
+    params.pop("target_model", None)
+
+    for key, value in list(params.items()):
+        if value is None:
+            params.pop(key, None)
+        elif isinstance(value, str) and not value.strip():
+            params.pop(key, None)
+
+    entry = {
+        "model_name": model_name,
+        "model_params": params,
+    }
+    for key in ("parameters", "parsers"):
+        if key in payload:
+            entry[key] = payload[key]
+    return entry
 
 
 async def register_model(request: Request) -> dict:
@@ -98,6 +170,7 @@ async def register_model(request: Request) -> dict:
         - api_type: Optional API type (default: "openai")
         - target_model: Optional target model name override
         - supports_reasoning: Optional bool for reasoning support
+    - config_scope: Optional target config ("added" or "default", default: "added")
     
     Returns:
         A dictionary with status, model name, and whether it was replaced.
@@ -109,13 +182,42 @@ async def register_model(request: Request) -> dict:
         raise HTTPException(status_code=400, detail="Invalid JSON body") from exc
 
     try:
-        backend, fallbacks = _backend_from_runtime_payload(payload)
+        backend, fallbacks, model_entry = _backend_from_runtime_payload(payload)
+        config_scope = _normalize_config_scope(payload.get("config_scope"))
     except ValueError as exc:
         logger.error("Failed to register model: %s", exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    default_models = CONFIG_STORE.get_default_raw().get("model_list", []) or []
+    added_models = CONFIG_STORE.get_added_raw().get("model_list", []) or []
+    default_names = {m.get("model_name") for m in default_models}
+    added_names = {m.get("model_name") for m in added_models}
+
+    if config_scope == "added" and backend.name in default_names:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Model '{backend.name}' exists in config_default.yaml. "
+                "Use config_scope='default' or choose another name."
+            ),
+        )
+    if config_scope == "default" and backend.name in added_names:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Model '{backend.name}' exists in config_added.yaml. "
+                "Delete it first or choose another name."
+            ),
+        )
+
     router = get_router()
-    replaced = await router.register_backend(backend, fallbacks)
+    backend.editable = config_scope == "added"
+    if config_scope == "default":
+        replaced = CONFIG_STORE.upsert_default_model(model_entry, fallbacks)
+    else:
+        replaced = CONFIG_STORE.upsert_added_model(model_entry, fallbacks)
+
+    await router.register_backend(backend, fallbacks)
     logger.info(
         "Registered model '%s' (replaced=%s) base=%s fallbacks=%s",
         backend.name,
@@ -128,4 +230,5 @@ async def register_model(request: Request) -> dict:
         "model": backend.name,
         "replaced": replaced,
         "fallbacks": fallbacks or [],
+        "config_scope": config_scope,
     }
