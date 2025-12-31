@@ -1,10 +1,11 @@
 @echo off
 setlocal enabledelayedexpansion
 
-REM Directory containing this script (so we can create .venv next to it)
+REM Directory containing this script (strip trailing backslash to avoid quote escaping)
 set "SCRIPT_DIR=%~dp0"
+if "%SCRIPT_DIR:~-1%"=="\" set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
 REM Allow overriding VENV_PATH, default to .venv beside script
-if not defined VENV_PATH set "VENV_PATH=%SCRIPT_DIR%.venv"
+if not defined VENV_PATH set "VENV_PATH=%SCRIPT_DIR%\.venv"
 
 REM Check if uv is available
 where uv >nul 2>nul
