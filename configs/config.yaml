@@ -32,12 +32,12 @@ model_list:
         mode: "reasoning_to_content"
         think_tag: "think"
         think_open:
-          prefix: "\n"
+          prefix: ""
           suffix: ""
         think_close:
           prefix: ""
           suffix: ""
-        include_newline: true
+        include_newline: false
       
 
   - model_name: MiniMax-M2.1

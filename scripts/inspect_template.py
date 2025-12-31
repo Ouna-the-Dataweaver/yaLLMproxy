@@ -6,7 +6,7 @@ import argparse
 import re
 from collections import Counter
 from pathlib import Path
-from typing import Iterable, Tuple
+from typing import Any, Iterable, Tuple
 
 
 STRING_RE = re.compile(r"(?P<quote>['\"])(?P<body>(?:\\.|(?!\1).)*)\1", re.DOTALL)
@@ -72,34 +72,12 @@ def _detect_include_newline(template_text: str) -> bool:
     return content_pattern.search(template_text) is not None
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Inspect a Jinja template for think tag formatting hints."
-    )
-    parser.add_argument(
-        "template",
-        nargs="?",
-        default="template_example.jinja",
-        help="Path to the Jinja template.",
-    )
-    parser.add_argument(
-        "--think-tag",
-        default="think",
-        help="Thinking tag name to inspect (default: think).",
-    )
-    args = parser.parse_args()
-
-    template_path = Path(args.template)
-    if not template_path.exists():
-        print(f"Template not found: {template_path}")
-        return 1
-
-    template_text = template_path.read_text(encoding="utf-8")
+def analyze_template(template_text: str, think_tag: str = "think") -> dict[str, Any]:
     literals = [match.group("body") for match in STRING_RE.finditer(template_text)]
     expressions = [match.group(1) for match in EXPR_RE.finditer(template_text)]
 
-    open_tag = f"<{args.think_tag}>"
-    close_tag = f"</{args.think_tag}>"
+    open_tag = f"<{think_tag}>"
+    close_tag = f"</{think_tag}>"
 
     open_candidates = _find_tag_literals(
         literals,
@@ -146,6 +124,68 @@ def main() -> int:
     else:
         close_prefix, close_suffix = _pick_candidate(close_candidates)
     include_newline = _detect_include_newline(template_text)
+
+    config = {
+        "think_tag": think_tag,
+        "think_open": {
+            "prefix": open_prefix,
+            "suffix": open_suffix,
+        },
+        "think_close": {
+            "prefix": close_prefix,
+            "suffix": close_suffix,
+        },
+        "include_newline": include_newline,
+    }
+    return {
+        "think_tag": think_tag,
+        "open_candidates": open_candidates,
+        "close_candidates": close_candidates,
+        "render_open_candidates": render_open_candidates,
+        "render_close_candidates": render_close_candidates,
+        "include_newline": include_newline,
+        "config": config,
+    }
+
+
+def extract_think_config(template_text: str, think_tag: str = "think") -> dict[str, Any]:
+    return analyze_template(template_text, think_tag=think_tag)["config"]
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Inspect a Jinja template for think tag formatting hints."
+    )
+    parser.add_argument(
+        "template",
+        nargs="?",
+        default="template_example.jinja",
+        help="Path to the Jinja template.",
+    )
+    parser.add_argument(
+        "--think-tag",
+        default="think",
+        help="Thinking tag name to inspect (default: think).",
+    )
+    args = parser.parse_args()
+
+    template_path = Path(args.template)
+    if not template_path.exists():
+        print(f"Template not found: {template_path}")
+        return 1
+
+    template_text = template_path.read_text(encoding="utf-8")
+    analysis = analyze_template(template_text, think_tag=args.think_tag)
+    open_candidates = analysis["open_candidates"]
+    close_candidates = analysis["close_candidates"]
+    render_open_candidates = analysis["render_open_candidates"]
+    render_close_candidates = analysis["render_close_candidates"]
+    include_newline = analysis["include_newline"]
+    config = analysis["config"]
+    open_prefix = config["think_open"]["prefix"]
+    open_suffix = config["think_open"]["suffix"]
+    close_prefix = config["think_close"]["prefix"]
+    close_suffix = config["think_close"]["suffix"]
 
     print(f"Template: {template_path}")
     print(f"think_tag: {args.think_tag}")
