@@ -13,13 +13,7 @@ You are provided with function signatures within <tools></tools> XML tags:
 </tools>
 
 For each function call, output the function name and arguments within the following XML format:
-<tool_call>{function-name}
-<arg_key>{arg-key-1}</arg_key>
-<arg_value>{arg-value-1}</arg_value>
-<arg_key>{arg-key-2}</arg_key>
-<arg_value>{arg-value-2}</arg_value>
-...
-</tool_call>{%- endif -%}
+<tool_call>{function-name}<arg_key>{arg-key-1}</arg_key><arg_value>{arg-value-1}</arg_value><arg_key>{arg-key-2}</arg_key><arg_value>{arg-value-2}</arg_value>...</tool_call>{%- endif -%}
 {%- macro visible_text(content) -%}
     {%- if content is string -%}
         {{- content }}
@@ -42,9 +36,7 @@ For each function call, output the function name and arguments within the follow
     {%- endif %}
 {%- endfor %}
 {% for m in messages %}
-{%- if m.role == 'user' -%}<|user|>
-{{ visible_text(m.content) }}
-{{- '/nothink' if (enable_thinking is defined and not enable_thinking and not visible_text(m.content).endswith("/nothink")) else '' -}}
+{%- if m.role == 'user' -%}<|user|>{{ visible_text(m.content) }}
 {%- elif m.role == 'assistant' -%}
 <|assistant|>
 {%- set reasoning_content = '' %}
@@ -57,47 +49,38 @@ For each function call, output the function name and arguments within the follow
         {%- set content = content.split('</think>')[-1].lstrip('\n') %}
     {%- endif %}
 {%- endif %}
-{%- if loop.index0 > ns.last_user_index and reasoning_content -%}
-{{ '\n<think>' + reasoning_content.strip() +  '</think>'}}
+{%- if ((clear_thinking is defined and not clear_thinking) or loop.index0 > ns.last_user_index) and reasoning_content -%}
+{{ '<think>' + reasoning_content.strip() +  '</think>'}}
 {%- else -%}
-{{ '\n<think></think>' }}
+{{ '</think>' }}
 {%- endif -%}
 {%- if content.strip() -%}
-{{ '\n' + content.strip() }}
+{{ content.strip() }}
 {%- endif -%}
 {% if m.tool_calls %}
 {% for tc in m.tool_calls %}
 {%- if tc.function %}
     {%- set tc = tc.function %}
 {%- endif %}
-{{ '\n<tool_call>' + tc.name }}
-{% set _args = tc.arguments %}
-{% for k, v in _args.items() %}
-<arg_key>{{ k }}</arg_key>
-<arg_value>{{ v | tojson(ensure_ascii=False) if v is not string else v }}</arg_value>
-{% endfor %}
-</tool_call>{% endfor %}
+{{- '<tool_call>' + tc.name -}}
+{% set _args = tc.arguments %}{% for k, v in _args.items() %}<arg_key>{{ k }}</arg_key><arg_value>{{ v | tojson(ensure_ascii=False) if v is not string else v }}</arg_value>{% endfor %}</tool_call>{% endfor %}
 {% endif %}
 {%- elif m.role == 'tool' -%}
 {%- if m.content is string -%}
 {%- if loop.first or (messages[loop.index0 - 1].role != "tool") %}
     {{- '<|observation|>' }}
 {%- endif %}
-{{- '\n<tool_response>\n' }}
+{{- '<tool_response>' }}
 {{- m.content }}
-{{- '\n</tool_response>' }}
+{{- '</tool_response>' }}
 {%- else -%}
 <|observation|>{% for tr in m.content %}
-
-<tool_response>
-{{ tr.output if tr.output is defined else tr }}
-</tool_response>{% endfor -%}
+<tool_response>{{ tr.output if tr.output is defined else tr }}</tool_response>{% endfor -%}
 {% endif -%}
 {%- elif m.role == 'system' -%}
-<|system|>
-{{ visible_text(m.content) }}
+<|system|>{{ visible_text(m.content) }}
 {%- endif -%}
 {%- endfor -%}
 {%- if add_generation_prompt -%}
-    <|assistant|>{{- '\n<think></think>' if (enable_thinking is defined and not enable_thinking) else '' -}}
+    <|assistant|>{{- '</think>' if (enable_thinking is defined and not enable_thinking) else '<think>' -}}
 {%- endif -%}
