@@ -15,12 +15,32 @@ DEFAULT_CONFIG_PATH = "configs/config_default.yaml"
 ADDED_CONFIG_PATH = "configs/config_added.yaml"
 
 # Environment variables to override config paths
-CONFIG_DEFAULT_PATH = (
-    os.getenv("YALLMP_CONFIG_DEFAULT")
-    or os.getenv("YALLMP_CONFIG")
-    or DEFAULT_CONFIG_PATH
-)
-CONFIG_ADDED_PATH = os.getenv("YALLMP_CONFIG_ADDED", ADDED_CONFIG_PATH)
+# Priority: YALLMP_CONFIG_DEFAULT (if set) > DEFAULT_CONFIG_PATH
+# YALLMP_CONFIG is retired - use YALLMP_CONFIG_DEFAULT instead
+default_path_override = os.getenv("YALLMP_CONFIG_DEFAULT")
+if default_path_override:
+    CONFIG_DEFAULT_PATH = default_path_override
+    logger.info(
+        f"Using override config path from YALLMP_CONFIG_DEFAULT: {CONFIG_DEFAULT_PATH}"
+    )
+else:
+    CONFIG_DEFAULT_PATH = DEFAULT_CONFIG_PATH
+    logger.info(
+        f"Using default config path: {CONFIG_DEFAULT_PATH} (set YALLMP_CONFIG_DEFAULT to override)"
+    )
+
+# Priority: YALLMP_CONFIG_ADDED (if set) > ADDED_CONFIG_PATH
+added_path_override = os.getenv("YALLMP_CONFIG_ADDED")
+if added_path_override:
+    CONFIG_ADDED_PATH = added_path_override
+    logger.info(
+        f"Using override added config path from YALLMP_CONFIG_ADDED: {CONFIG_ADDED_PATH}"
+    )
+else:
+    CONFIG_ADDED_PATH = ADDED_CONFIG_PATH
+    logger.info(
+        f"Using default added config path: {CONFIG_ADDED_PATH} (set YALLMP_CONFIG_ADDED to override)"
+    )
 
 
 def resolve_config_path(path: str) -> Path:
@@ -71,7 +91,8 @@ def load_config(
 
     config_path = resolve_config_path(path)
 
-    logger.info(f"Loading configuration from {config_path}")
+    logger.info(f"Loading configuration from: {config_path}")
+    logger.info(f"Resolved absolute path: {config_path.resolve()}")
 
     if not config_path.exists():
         logger.error(f"Config file not found: {config_path}")
