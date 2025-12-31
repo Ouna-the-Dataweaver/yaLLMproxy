@@ -49,7 +49,7 @@ run.bat
 
 ### Config File
 
-Default configuration lives at `configs/config_default.yaml`, with runtime-added models stored in `configs/config_added.yaml`. You can override them by setting `YALLMP_CONFIG_DEFAULT` and `YALLMP_CONFIG_ADDED` (or `YALLMP_CONFIG` for backwards-compatible default config overrides):
+Default configuration lives at `configs/config_default.yaml`, with runtime-added models stored in `configs/config_added.yaml`. You can override them by setting `YALLMP_CONFIG_DEFAULT` and `YALLMP_CONFIG_ADDED`:
 
 ```bash
 export YALLMP_CONFIG_DEFAULT=/path/to/your/config_default.yaml

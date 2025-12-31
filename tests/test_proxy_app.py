@@ -13,7 +13,6 @@ def _load_proxy_with_config(default_path: Path, added_path: Path):
     """Load the proxy module with specific config files."""
     os.environ["YALLMP_CONFIG_DEFAULT"] = str(default_path)
     os.environ["YALLMP_CONFIG_ADDED"] = str(added_path)
-    os.environ["YALLMP_CONFIG"] = str(default_path)
     module_name = f"proxy_test_{uuid.uuid4().hex}"
     
     # Import from src package instead of proxy.py
