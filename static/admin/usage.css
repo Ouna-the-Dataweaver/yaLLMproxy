@@ -1,0 +1,115 @@
+/* Usage page specific styles. */
+.panel {
+  margin-bottom: 24px;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+}
+
+.stat-card {
+  background: var(--surface-strong);
+  border: 1px solid var(--border);
+  padding: 20px;
+  box-shadow: var(--shadow-soft);
+}
+
+.stat-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-muted);
+  margin-bottom: 4px;
+}
+
+.stat-value {
+  font-family: 'Bricolage Grotesque', sans-serif;
+  font-size: 1.5rem;
+  color: var(--ink);
+}
+
+.panel-note {
+  margin-top: 18px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: center;
+  color: var(--ink-muted);
+  font-size: 0.9rem;
+}
+
+.panel-note strong {
+  color: var(--ink);
+  font-family: 'Space Mono', monospace;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  background: var(--surface-strong);
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.status-pill::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ink-muted);
+}
+
+.status-pill.status-ok::before {
+  background: #16a34a;
+}
+
+.status-pill.status-warn::before {
+  background: #f97316;
+}
+
+.history-placeholder {
+  background: var(--surface-strong);
+  border: 1px dashed rgba(30, 27, 22, 0.16);
+  padding: 24px;
+  box-shadow: var(--shadow-soft);
+}
+
+[data-theme="dark"] .history-placeholder {
+  border-color: rgba(230, 237, 243, 0.18);
+}
+
+.history-placeholder h3 {
+  font-family: 'Bricolage Grotesque', sans-serif;
+  font-size: 1.15rem;
+  margin-bottom: 8px;
+}
+
+.history-placeholder p {
+  color: var(--ink-muted);
+  margin-bottom: 14px;
+}
+
+.history-list {
+  list-style: none;
+  display: grid;
+  gap: 10px;
+  padding: 0;
+  margin: 0;
+}
+
+.history-list li {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font-size: 0.9rem;
+}
+
+.spinner {
+  border-radius: 50%;
+}

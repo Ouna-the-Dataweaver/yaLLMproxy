@@ -1,0 +1,57 @@
+/* Shared Theme CSS - Light/Dark Mode Support */
+
+:root {
+  /* Light mode (current cream/beige theme) */
+  --bg: #f6f1e9;
+  --bg-soft: #f2e7d8;
+  --surface: #fff7ee;
+  --surface-strong: #f9efdf;
+  --ink: #1e1b16;
+  --ink-soft: #4b473f;
+  --ink-muted: #6f6a60;
+  --accent: #0f766e;
+  --accent-strong: #0b5d57;
+  --accent-soft: #c8e7e0;
+  --accent-glow: rgba(15, 118, 110, 0.2);
+  --coral: #ee6c4d;
+  --coral-soft: rgba(238, 108, 77, 0.18);
+  --gold: #caa447;
+  --border: rgba(30, 27, 22, 0.08);
+  --shadow: 0 24px 60px rgba(30, 27, 22, 0.18);
+  --shadow-soft: 0 16px 40px rgba(30, 27, 22, 0.12);
+}
+
+[data-theme="dark"] {
+  /* Dark mode (matching dark IDE aesthetic) */
+  --bg: #0d1117;
+  --bg-soft: #161b22;
+  --surface: #21262d;
+  --surface-strong: #30363d;
+  --ink: #e6edf3;
+  --ink-soft: #b1bac4;
+  --ink-muted: #8b949e;
+  --accent: #39d0d6;
+  --accent-strong: #2bb3b9;
+  --accent-soft: rgba(57, 208, 214, 0.15);
+  --accent-glow: rgba(57, 208, 214, 0.2);
+  --coral: #ff7b5c;
+  --coral-soft: rgba(255, 123, 92, 0.18);
+  --gold: #d4a444;
+  --border: rgba(230, 237, 243, 0.1);
+  --shadow: 0 24px 60px rgba(0, 0, 0, 0.4);
+  --shadow-soft: 0 16px 40px rgba(0, 0, 0, 0.3);
+}
+
+/* Smooth theme transition */
+body,
+* {
+  transition: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+[data-theme="dark"] .sun-icon {
+  display: none;
+}
+
+[data-theme="light"] .moon-icon {
+  display: none;
+}

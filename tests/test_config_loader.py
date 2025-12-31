@@ -77,6 +77,30 @@ class TestLoadConfig:
             os.unlink(path)
             del os.environ["TEST_API_KEY"]
 
+    def test_env_file_overrides_os_env(self, tmp_path):
+        """Test that config-specific env files override os.environ values."""
+        os.environ["TEST_API_KEY"] = "from-os"
+        config_path = tmp_path / "config_default.yaml"
+        env_path = tmp_path / ".env_default"
+        env_path.write_text("TEST_API_KEY=from-env\n", encoding="utf-8")
+        config_data = {
+            "model_list": [
+                {
+                    "model_name": "test-model",
+                    "model_params": {
+                        "api_base": "http://test.local/v1",
+                        "api_key": "${TEST_API_KEY}",
+                    },
+                }
+            ]
+        }
+        config_path.write_text(yaml.safe_dump(config_data), encoding="utf-8")
+        try:
+            result = load_config(str(config_path))
+            assert result["model_list"][0]["model_params"]["api_key"] == "from-env"
+        finally:
+            del os.environ["TEST_API_KEY"]
+
     def test_substitutes_simple_env_var_syntax(self):
         """Test that $VAR syntax is also substituted."""
         os.environ["SIMPLE_VAR"] = "simple-value"
@@ -182,6 +206,11 @@ class TestSubstituteEnvVars:
         result = _substitute_env_vars("prefix-${TEST_VAR}-suffix")
         assert result == "prefix-test-value-suffix"
         del os.environ["TEST_VAR"]
+
+    def test_prefers_env_values_mapping(self):
+        """Test substitution uses provided env mapping first."""
+        result = _substitute_env_vars("${MAPPED_VAR}", {"MAPPED_VAR": "mapped"})
+        assert result == "mapped"
 
     def test_substitutes_multiple_vars(self):
         """Test substitution of multiple variables."""

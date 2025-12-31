@@ -49,15 +49,16 @@ run.bat
 
 ### Config File
 
-Default configuration lives at `configs/config.yaml`. You can override it by setting `YALLMP_CONFIG` to another path:
+Default configuration lives at `configs/config_default.yaml`, with runtime-added models stored in `configs/config_added.yaml`. You can override them by setting `YALLMP_CONFIG_DEFAULT` and `YALLMP_CONFIG_ADDED` (or `YALLMP_CONFIG` for backwards-compatible default config overrides):
 
 ```bash
-export YALLMP_CONFIG=/path/to/your/config.yaml
+export YALLMP_CONFIG_DEFAULT=/path/to/your/config_default.yaml
+export YALLMP_CONFIG_ADDED=/path/to/your/config_added.yaml
 ```
 
 ### Environment Variables
 
-Environment variables can be substituted in the YAML configuration using `${VAR}` or `$VAR` syntax. These will be loaded from the `.env` file in the same directory as the config file (e.g., `configs/.env` when using `configs/config.yaml`). If an environment variable is not found, a **warning is logged** and the literal placeholder remains in the config (requests will likely fail).
+Environment variables can be substituted in the YAML configuration using `${VAR}` or `$VAR` syntax. These will be loaded from the config-specific `.env` file in the same directory (e.g., `configs/.env_default` for `configs/config_default.yaml` and `configs/.env_added` for `configs/config_added.yaml`). If an environment variable is not found, a **warning is logged** and the literal placeholder remains in the config (requests will likely fail).
 
 **Priority:** `.env` file values take precedence over shell environment variables. If you set `MY_VAR=abc` in your shell and also have `MY_VAR=xyz` in your `.env` file, the value `xyz` from the `.env` file will be used.
 
@@ -166,7 +167,7 @@ model_list:
 
 The TCP forwarder is optional but useful when you need a separate inbound port or a separate process for the inbound traffic (e.g. you have a VPN which you must use for API access, but it breaks inbound traffic(or WSL shenanigans), in that case you can whitelist the forwarder executable/process, or run forwader in windows, and keep proxy running under VPN/in WSL etc.):
 
-It reads `forwarder_settings` from `configs/config.yaml`. You can override with
+It reads `forwarder_settings` from `configs/config_default.yaml`. You can override with
 `FORWARD_LISTEN_HOST`, `FORWARD_LISTEN_PORT`, `FORWARD_TARGET_HOST`,
 `FORWARD_TARGET_PORT` at runtime.
 
@@ -200,7 +201,8 @@ yaLLMproxy/
 │   ├── routing/                 # Model routing utilities
 │   └── types/                   # Type definitions (chat, model schemas)
 ├── tests/                       # Test suite
-├── config.yaml                  # Configuration file
+├── config_default.yaml          # Default configuration file
+├── config_added.yaml            # Runtime-added models
 ├── pyproject.toml               # Project metadata & dependencies
 └── README.md                    # This file
 ```

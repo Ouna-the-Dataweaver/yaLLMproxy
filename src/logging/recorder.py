@@ -122,6 +122,7 @@ class RequestLogRecorder:
         self._last_http_status: Optional[int] = None
         self._error_logged = False
         self._request_json: Optional[dict[str, Any]] = None
+        self._usage_stats: Optional[dict[str, Any]] = None
         self._log_parsed_response = bool(log_parsed_response)
         if log_parsed_stream is None:
             self._log_parsed_stream = self._log_parsed_response
@@ -307,6 +308,13 @@ class RequestLogRecorder:
                 request_log_path=self.log_path,
             )
 
+    def record_usage_stats(self, usage: dict[str, Any]) -> None:
+        """Record usage statistics from the response."""
+        if self._finalized:
+            return
+        if usage:
+            self._usage_stats = dict(usage)
+
     def finalize(self, outcome: str) -> None:
         if self._finalized:
             return
@@ -359,7 +367,10 @@ class RequestLogRecorder:
             return
         json_path = self.log_path.with_suffix(".json")
         tmp_path = json_path.with_suffix(json_path.suffix + ".tmp")
-        content = json.dumps(self._request_json, ensure_ascii=True, indent=2)
+        output_data = dict(self._request_json)
+        if self._usage_stats:
+            output_data["usage"] = self._usage_stats
+        content = json.dumps(output_data, ensure_ascii=True, indent=2)
         tmp_path.write_text(content + "\n", encoding="utf-8")
         os.replace(tmp_path, json_path)
 
