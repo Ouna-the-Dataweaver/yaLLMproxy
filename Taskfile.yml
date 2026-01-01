@@ -47,3 +47,11 @@ tasks:
     desc: Run tests
     cmds:
       - uv run pytest tests -v
+
+  clean:
+    desc: Clear all logs (deletes all files in logs directory)
+    cmds:
+      - cmd: cmd /c rmdir /s /q "{{.TASKFILE_DIR}}\logs" && mkdir "{{.TASKFILE_DIR}}\logs"
+        platforms: [windows]
+      - cmd: rm -rf "{{.TASKFILE_DIR}}/logs" && mkdir -p "{{.TASKFILE_DIR}}/logs"
+        platforms: [linux, darwin]
