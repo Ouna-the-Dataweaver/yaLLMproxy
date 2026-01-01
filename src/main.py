@@ -9,17 +9,17 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.responses import Response
 
+# Import logging setup FIRST before anything that might log
+from .logging import setup_logging
+
+# Initialize logging BEFORE importing config_store
+logger = setup_logging()
+
+# Now import config store (it will log config paths during initialization)
 from .config_store import CONFIG_STORE
 from .core import ProxyRouter
 from .core.registry import set_router
-from .logging import logger as setup_logger
 from .api.routes import chat_completions, list_models, register_model, responses, config as config_routes, usage
-
-# Import logging setup
-from .logging import setup_logging
-
-# Initialize logging
-logger = setup_logging()
 
 # Load configuration
 config = CONFIG_STORE.get_runtime_config()

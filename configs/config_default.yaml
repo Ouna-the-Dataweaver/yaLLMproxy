@@ -67,15 +67,6 @@ model_list:
       supports_reasoning: True
       request_timeout: 540
 
-  - model_name: MiniMax-M2-synthetic
-    model_params:
-      api_type: openai
-      model: hf:MiniMaxAI/MiniMax-M2
-      api_base: https://api.synthetic.new/openai/v1
-      api_key: ${SYNTHETIC_API_KEY}
-      supports_reasoning: True
-      request_timeout: 540
-
   - model_name: Kimi-K2-Thinking-nano
     model_params:
       api_type: openai
@@ -91,15 +82,6 @@ model_list:
       parse_unparsed:
         parse_thinking: false
         parse_tool_calls: true
-
-  - model_name: Kimi-K2-Thinking-synthetic
-    model_params:
-      api_type: openai
-      model: hf:moonshotai/Kimi-K2-Thinking
-      api_base: https://api.synthetic.new/openai/v1
-      api_key: ${SYNTHETIC_API_KEY}
-      supports_reasoning: True
-      request_timeout: 540
 
 # Router / reliability settings
 router_settings:
