@@ -9,3 +9,4 @@ This file contains rules and guidelines for working with this repository.
 6. Configs are stored in `configs/config_default.yaml` and `configs/config_added.yaml`, with keys in `configs/.env_default` and `configs/.env_added`. There are special utility scripts for streamlined config (and key) loading.
 7. `task run` to run proxy, `task run:reload` to run proxy with autoreload for autoreloading app on changes, task forwarder to run forwarder. 
 8. By default `forwarder` in not needed, but also by default it's using different .venv(.venv_fwd).
+9. Ask user if they want to update `README.md` and `docs/` files to reflect changes after work is done. 
