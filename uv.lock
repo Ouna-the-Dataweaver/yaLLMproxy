@@ -1932,14 +1932,6 @@ dependencies = [
     { name = "uvicorn", extra = ["standard"] },
 ]
 
-[package.optional-dependencies]
-dev = [
-    { name = "httpx", extra = ["http2"] },
-    { name = "jinja2" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-]
-
 [package.dev-dependencies]
 dev = [
     { name = "httpx", extra = ["http2"] },
@@ -1953,19 +1945,14 @@ requires-dist = [
     { name = "aiohttp", specifier = ">=3.13.2" },
     { name = "fastapi", specifier = ">=0.100.0" },
     { name = "httpx", extras = ["http2"], specifier = ">=0.24.0" },
-    { name = "httpx", extras = ["http2"], marker = "extra == 'dev'", specifier = ">=0.24.0" },
-    { name = "jinja2", marker = "extra == 'dev'", specifier = ">=3.1.0" },
     { name = "openai", specifier = ">=2.14.0" },
     { name = "pycurl", specifier = ">=7.45.7" },
     { name = "pyopenssl", specifier = ">=25.3.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.4.0" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "requests", specifier = ">=2.32.5" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.23.0" },
 ]
-provides-extras = ["dev"]
 
 [package.metadata.requires-dev]
 dev = [
