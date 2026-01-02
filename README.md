@@ -154,6 +154,7 @@ It reads `forwarder_settings` from `configs/config_default.yaml`. You can overri
 - [API Reference](docs/api.md) - Complete endpoint documentation
 - [Configuration Guide](docs/configuration.md) - Config options, environment variables
 - [Project Structure](docs/project-structure.md) - Directory layout and module descriptions
+- [Known Issues](docs/known_issues.md) - Known bugs, limitations, and workarounds
 
 
 ```
