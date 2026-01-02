@@ -507,15 +507,15 @@ async def _streaming_request(
         connect=timeout, read=None, write=timeout, pool=timeout
     )
     client = httpx.AsyncClient(timeout=stream_timeout, http2=http2)
-    request = client.build_request("POST", url, headers=headers, content=body)
-
-    logger.debug(f"Sending streaming request to {url}")
-    logger.debug(f"Request method: {request.method}")
-    logger.debug(f"Request URL: {request.url}")
-    if logger.isEnabledFor(logging.DEBUG):
-        logger.debug("Request headers: %s", _safe_headers_for_log(request.headers))
-    logger.debug(f"Request content-length: {request.headers.get('content-length', 'not set')}")
     try:
+        request = client.build_request("POST", url, headers=headers, content=body)
+
+        logger.debug(f"Sending streaming request to {url}")
+        logger.debug(f"Request method: {request.method}")
+        logger.debug(f"Request URL: {request.url}")
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug("Request headers: %s", _safe_headers_for_log(request.headers))
+        logger.debug(f"Request content-length: {request.headers.get('content-length', 'not set')}")
         logger.debug(f"About to send request, stream=True")
         resp = await client.send(request, stream=True)
         if logger.isEnabledFor(logging.DEBUG):
