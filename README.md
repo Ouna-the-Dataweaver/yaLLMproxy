@@ -31,6 +31,7 @@ uv sync
 # Run the proxy
 uv run python -m src.main
 # Or use: task run
+```
 
 ### Alternative: Using scripts
 
@@ -51,7 +52,7 @@ task run:reload
 
 ```bash
 # List available models
-curl http://localhost:7978/v1/models
+curl http://localhost:7979/v1/models
 ```
 
 ### Configuration Structure
@@ -75,7 +76,7 @@ model_list:
 proxy_settings:
   server:
     host: 127.0.0.1                # Bind address
-    port: 7978                     # Port number
+    port: 7979                     # Port number
   enable_responses_endpoint: false # Enable /v1/responses endpoint
   logging:                         # Request logging options (optional)
     log_parsed_response: false     # Write parsed non-stream responses to *.parsed.log
@@ -106,10 +107,10 @@ proxy_settings:
 forwarder_settings:
   listen:
     host: 0.0.0.0                  # External listen address
-    port: 7979                     # External listen port
+    port: 6969                     # External listen port
   target:
     host: 127.0.0.1                # Proxy host
-    port: 7978                     # Proxy port
+    port: 7979                     # Proxy port
 ```
 
 Per-model parser overrides can be added to individual entries in `model_list`.

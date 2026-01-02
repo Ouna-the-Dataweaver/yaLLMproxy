@@ -7,6 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from src.core.sse import detect_sse_stream_error, STREAM_ERROR_CHECK_BUFFER_SIZE
+from src.parsers.response_pipeline import SSEDecoder
 
 
 class TestDetectSseStreamError:
@@ -68,3 +69,20 @@ class TestDetectSseStreamError:
     def test_buffer_size_constant(self):
         """Test that STREAM_ERROR_CHECK_BUFFER_SIZE is defined."""
         assert STREAM_ERROR_CHECK_BUFFER_SIZE == 4096
+
+
+def test_sse_decoder_emits_event_for_complete_chunk():
+    """Test that SSEDecoder emits an event for a complete SSE chunk."""
+    decoder = SSEDecoder()
+    events = decoder.feed(b"data: hello\n\n")
+    assert len(events) == 1
+    assert events[0].data == "hello"
+    assert events[0].other_lines == []
+
+
+def test_sse_decoder_buffers_until_flush():
+    """Test that SSEDecoder buffers incomplete events until flush is called."""
+    decoder = SSEDecoder()
+    events = decoder.feed(b"data: hello")
+    assert events == []
+    assert decoder.flush() == b"data: hello"
