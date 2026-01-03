@@ -157,8 +157,8 @@ app.get("/admin/config")(config_routes.get_full_config)
 app.put("/admin/config")(config_routes.update_config)
 app.get("/admin/models")(config_routes.get_models_list)
 app.delete("/admin/models/{model_name}")(config_routes.delete_model)
+app.post("/admin/models/copy")(config_routes.copy_model)
 app.get("/admin/")(config_routes.serve_admin_ui)
-app.get("/admin_2/")(config_routes.serve_admin_ui_v2)
 
 # Usage statistics route
 app.get("/usage")(usage.usage_page)

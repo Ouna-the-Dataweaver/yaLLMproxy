@@ -2,6 +2,25 @@
 
 Complete reference for yaLLMproxy configuration options.
 
+## Table of Contents
+
+- [Configuration Files](#configuration-files)
+- [Full Configuration Reference](#full-configuration-reference)
+- [Model Configuration](#model-configuration)
+  - [Required Fields](#required-fields)
+  - [Optional Fields](#optional-fields)
+  - [Parameter Overrides](#parameter-overrides)
+  - [Model Inheritance](#model-inheritance)
+  - [Model Copying](#model-copying)
+- [Response Parsers](#response-parsers)
+- [Per-Model Parser Overrides](#per-model-parser-overrides)
+- [Environment Variables](#environment-variables)
+- [Router Settings](#router-settings)
+- [Logging Configuration](#logging-configuration)
+- [Template Inspection](#template-inspection)
+- [Configuration Validation](#configuration-validation)
+- [Hot Reloading](#hot-reloading)
+
 ## Configuration Files
 
 yaLLMproxy uses two configuration files:
@@ -135,6 +154,161 @@ parameters:
     default: 0.95
     allow_override: true      # If true, use request value if provided
 ```
+
+## Model Inheritance
+
+Models can inherit configuration from other models using the `extends` field. This allows you to create derived models with configuration overrides without duplicating the full configuration.
+
+### Basic Inheritance
+
+```yaml
+model_list:
+  # Base model with full configuration
+  - model_name: GLM-4.7
+    model_params:
+      api_base: https://api.example.com/v1
+      api_key: ${GLM_API_KEY}
+      parameters:
+        temperature:
+          default: 1.0
+          allow_override: false
+    parsers:
+      enabled: true
+      response:
+        - swap_reasoning_content
+
+  # Derived model inherits from GLM-4.7, adds custom parsers
+  - model_name: GLM-4.7:Cursor
+    extends: GLM-4.7
+    parsers:
+      enabled: true
+      response:
+        - parse_unparsed
+        - swap_reasoning_content
+```
+
+The derived model `GLM-4.7:Cursor` inherits:
+- All `model_params` from `GLM-4.7` (api_base, api_key, parameters, etc.)
+- Then overrides/extends with its own configuration (parsers)
+
+### How Inheritance Works
+
+1. The base model is fully resolved first (including its own inheritance chain)
+2. Derived model settings are deep-merged on top
+3. Nested configurations (like `parameters`, `parsers`) are merged recursively
+4. Lists are replaced (not merged) - e.g., `response` parser list
+5. The `extends` field is removed from the resolved model
+
+### Chained Inheritance
+
+Inheritance chains are supported:
+
+```yaml
+model_list:
+  - model_name: base-model
+    model_params:
+      api_base: https://base.local/v1
+      api_key: ${BASE_KEY}
+
+  - model_name: middle-model
+    extends: base-model
+    model_params:
+      api_key: ${MIDDLE_KEY}
+      request_timeout: 120
+
+  - model_name: derived-model
+    extends: middle-model
+    model_params:
+      parameters:
+        temperature:
+          default: 0.7
+```
+
+The final `derived-model` will have:
+- `api_base` from `base-model` (inherited through chain)
+- `api_key` from `middle-model`
+- `request_timeout` from `middle-model`
+- `temperature` parameter set to 0.7
+
+### Inheritance Across Config Files
+
+Models in `config_added.yaml` can inherit from models in `config_default.yaml`:
+
+```yaml
+# configs/config_default.yaml
+model_list:
+  - model_name: GLM-4.7
+    model_params:
+      api_base: https://api.z.ai/api/coding/paas/v4
+      api_key: ${GLM_API_KEY}
+    parsers:
+      enabled: true
+      response:
+        - swap_reasoning_content
+
+# configs/config_added.yaml
+model_list:
+  - model_name: GLM-4.7:Custom
+    extends: GLM-4.7
+    parsers:
+      response:
+        - parse_unparsed
+        - swap_reasoning_content
+```
+
+### Error Handling
+
+- **Circular references**: Detected and raises error (e.g., A extends B, B extends A)
+- **Missing base model**: Raises error if the referenced model doesn't exist
+- **Maximum depth**: Inheritance chains are limited to 10 levels
+
+## Model Copying
+
+You can duplicate existing models via the Admin API to create new models with modified configuration.
+
+### Copy Model API
+
+```http
+POST /admin/models/copy?source={source_model}&target={new_model}
+```
+
+**Example using curl:**
+
+```bash
+curl -X POST "http://localhost:7979/admin/models/copy?source=GLM-4.7&target=GLM-4.7-Copy"
+```
+
+**Response:**
+
+```json
+{
+  "status": "ok",
+  "message": "Model 'GLM-4.7' copied to 'GLM-4.7-Copy'",
+  "model": {
+    "model_name": "GLM-4.7-Copy",
+    "model_params": {
+      "api_base": "https://api.z.ai/api/coding/paas/v4",
+      "api_key": "****"
+    },
+    "editable": true,
+    "source": "added"
+  }
+}
+```
+
+### Copy Behavior
+
+- The copied model is always saved to `config_added.yaml` (editable)
+- Source model can come from either `config_default.yaml` or `config_added.yaml`
+- All settings are copied except metadata fields (`editable`, `source`, `_inherited_from`)
+- The new model name must not already exist
+- API keys are masked in the response
+
+### Use Cases
+
+1. **Quick duplication**: Create a new model based on an existing one
+2. **Configuration experiments**: Copy a model, modify settings, test without affecting original
+3. **Per-environment models**: Copy production model to staging with different parameters
 
 ## Response Parsers
 

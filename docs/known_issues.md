@@ -4,24 +4,7 @@ This document tracks known issues, limitations, and workarounds for yaLLMproxy.
 
 ## Major Issues
 
-### 1. Admin UI v2 endpoint references a missing file
-
-**Location:** `src/api/routes/config.py`, `static/admin/`
-
-**Severity:** Major (Feature gap)
-
-**Description:** `/admin_2/` serves `admin_2.html`, but `static/admin/admin_2.html` is not present, so the endpoint returns 404.
-
-**Workaround:** Use `/admin/`, which serves `admin_new.html`.
-
-**Files Involved:**
-- `static/admin/admin_2.html` (missing)
-- `static/admin/admin_new.html` (exists)
-- `docs/api.md` (documents `/admin_2/`)
-
----
-
-### 2. Middleware stubs are exported but empty
+### 1. Middleware stubs are exported but empty
 
 **Location:** `src/middleware/`
 

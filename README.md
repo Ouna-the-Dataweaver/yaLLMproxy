@@ -11,6 +11,8 @@ Yet Another LLM Proxy - A lightweight, modular LLM proxy with OpenAI-compatible 
 - **Runtime Registration**: Register new backends without restarting the proxy
 - **Environment Variable Support**: Configure via environment variables in YAML files
 - **Streaming Support**: Transparent handling of streaming responses with SSE error detection
+- **Model Inheritance**: Create derived models with configuration overrides (e.g., `GLM-4.7:Cursor` extends `GLM-4.7`)
+- **Model Copying**: Duplicate existing models via API for easy configuration reuse
 
 ## Installation
 

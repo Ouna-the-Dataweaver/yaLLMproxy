@@ -107,6 +107,45 @@ async def delete_model(model_name: str) -> dict:
     raise HTTPException(status_code=500, detail=f"Failed to delete model '{model_name}'")
 
 
+async def copy_model(source: str, target: str) -> dict:
+    """Copy an existing model to a new model with a different name.
+    
+    POST /admin/models/copy?source={source}&target={target}
+    
+    Query params:
+        source: The name of the model to copy.
+        target: The name for the new copied model.
+    
+    Returns:
+        The newly created model entry (with sensitive data masked).
+    
+    Note:
+        The copied model is always saved to config_added.yaml (editable).
+        Source model can come from either default or added config.
+    """
+    if not source or not source.strip():
+        raise HTTPException(status_code=400, detail="'source' query parameter is required")
+    if not target or not target.strip():
+        raise HTTPException(status_code=400, detail="'target' query parameter is required")
+    
+    source = source.strip()
+    target = target.strip()
+    
+    try:
+        new_model = CONFIG_STORE.copy_model(source, target)
+        logger.info(f"Model '{source}' copied to '{target}'")
+        return {
+            "status": "ok",
+            "message": f"Model '{source}' copied to '{target}'",
+            "model": _mask_sensitive_data(new_model),
+        }
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error(f"Failed to copy model: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 async def serve_admin_ui():
     """Serve the admin UI frontend.
     
@@ -122,26 +161,6 @@ async def serve_admin_ui():
         raise HTTPException(
             status_code=404,
             detail="Admin UI not found. Please ensure the static/admin directory exists with admin_new.html"
-        )
-    
-    return FileResponse(index_path)
-
-
-async def serve_admin_ui_v2():
-    """Serve the admin UI v2 frontend.
-    
-    GET /admin_2/
-    
-    Returns:
-        The admin HTML page.
-    """
-    static_dir = Path(__file__).parent.parent.parent.parent / "static" / "admin"
-    index_path = static_dir / "admin_2.html"
-    
-    if not index_path.exists():
-        raise HTTPException(
-            status_code=404,
-            detail="Admin UI v2 not found. Please ensure the static/admin directory exists with admin_2.html"
         )
     
     return FileResponse(index_path)

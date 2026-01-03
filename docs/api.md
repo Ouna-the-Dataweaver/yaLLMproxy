@@ -187,11 +187,9 @@ Remove a model added at runtime. Only works for runtime-added models, not for mo
 
 ```http
 GET /admin/
-GET /admin_2/
 ```
 
-Serve the admin web UI. `/admin/` serves `admin_new.html`. `/admin_2/` expects
-`static/admin/admin_2.html` and will return 404 if that file is not present.
+Serve the admin web UI. `/admin/` serves `admin_new.html`.
 
 ---
 
