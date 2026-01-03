@@ -31,6 +31,17 @@ const Icons = {
         <polyline points="3 6 5 6 21 6"/>
         <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
     </svg>`,
+    copy: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+    </svg>`,
+    fork: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="18" cy="5" r="3"/>
+        <circle cx="6" cy="12" r="3"/>
+        <circle cx="18" cy="19" r="3"/>
+        <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/>
+        <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+    </svg>`,
     lock: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
         <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
@@ -135,6 +146,7 @@ function renderModelCards(models) {
         const safeModelName = escapeHtml(model.model_name);
         const source = model.source || (editable ? 'added' : 'default');
         const sourceLabel = source === 'added' ? 'Added' : 'Default';
+        const inheritedFrom = model._inherited_from;
 
         let badges = '';
         if (apiType === 'openai') {
@@ -145,7 +157,12 @@ function renderModelCards(models) {
         if (supportsReasoning) {
             badges += `<span class="badge badge-reasoning">${Icons.reasoning}Reasoning</span>`;
         }
-        
+
+        // Add inherited/derived badge
+        if (inheritedFrom) {
+            badges += `<span class="badge badge-derived" title="Inherits from ${escapeHtml(inheritedFrom)}">${Icons.fork}Derived</span>`;
+        }
+
         // Add editable/locked badge
         if (editable) {
             badges += `<span class="badge badge-editable">${sourceLabel}</span>`;
@@ -162,6 +179,11 @@ function renderModelCards(models) {
             details.push({ label: 'API Key', value: params.api_key });
         }
         details.push({ label: 'Timeout', value: `${params.request_timeout || 'Default'}s` });
+
+        // Show inherited from info if applicable
+        if (inheritedFrom) {
+            details.push({ label: 'Inherits From', value: inheritedFrom });
+        }
 
         // Build action buttons with disabled state for non-editable models
         const editDisabled = !editable ? 'btn-disabled tooltip' : '';
@@ -188,6 +210,13 @@ function renderModelCards(models) {
                     </div>
                 </div>
                 <div class="model-actions">
+                    <button class="btn btn-secondary btn-icon"
+                            type="button"
+                            data-action="copy"
+                            data-model="${safeModelName}"
+                            title="Copy model">
+                        ${Icons.copy}
+                    </button>
                     <button class="btn btn-secondary btn-icon ${editDisabled}"
                             type="button"
                             data-action="edit"
@@ -356,6 +385,146 @@ async function deleteModel(modelName, skipConfirm = false) {
     }
 }
 
+async function copyModel(sourceName, targetName) {
+    try {
+        const response = await fetch(`${API_BASE}/models/copy?source=${encodeURIComponent(sourceName)}&target=${encodeURIComponent(targetName)}`, {
+            method: 'POST'
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Failed to copy model');
+        }
+
+        const result = await response.json();
+        showNotification(`Model "${sourceName}" copied to "${targetName}"`, 'success');
+        closeCopyModal();
+        await loadModels();
+    } catch (error) {
+        console.error('Error copying model:', error);
+        throw error;
+    }
+}
+
+function openCopyModal(modelName) {
+    document.getElementById('copySourceModel').value = modelName;
+    document.getElementById('copySourceName').textContent = modelName;
+    document.getElementById('copyTargetName').value = '';
+
+    // Focus target input
+    setTimeout(() => {
+        document.getElementById('copyTargetName').focus();
+    }, 100);
+
+    document.getElementById('copyModal').classList.add('active');
+}
+
+function closeCopyModal() {
+    document.getElementById('copyModal').classList.remove('active');
+}
+
+function openExtendModal(modelName) {
+    fetchModels().then(payload => {
+        const models = [...(payload?.default || []), ...(payload?.added || [])];
+        const model = models.find(m => m.model_name === modelName);
+        if (!model) {
+            showNotification('Model not found', 'error');
+            return;
+        }
+
+        document.getElementById('extendSourceModel').value = modelName;
+        document.getElementById('extendSourceName').textContent = modelName;
+
+        // Pre-fill with source model values
+        const params = model.model_params || {};
+        document.getElementById('extendModelName').value = '';
+        document.getElementById('extendApiBase').value = params.api_base || '';
+        document.getElementById('extendApiKey').value = '';
+
+        // Focus model name input
+        setTimeout(() => {
+            document.getElementById('extendModelName').focus();
+        }, 100);
+
+        document.getElementById('extendModal').classList.add('active');
+    });
+}
+
+function closeExtendModal() {
+    document.getElementById('extendModal').classList.remove('active');
+}
+
+async function saveCopiedModel(event) {
+    event.preventDefault();
+
+    const sourceName = document.getElementById('copySourceModel').value;
+    const targetName = document.getElementById('copyTargetName').value.trim();
+
+    if (!sourceName || !targetName) {
+        showNotification('Please fill in all required fields', 'error');
+        return;
+    }
+
+    try {
+        await copyModel(sourceName, targetName);
+    } catch (error) {
+        showNotification(error.message || 'Failed to copy model', 'error');
+    }
+}
+
+async function saveDerivedModel(event) {
+    event.preventDefault();
+
+    const sourceName = document.getElementById('extendSourceModel').value;
+    const targetName = document.getElementById('extendModelName').value.trim();
+    const apiBase = document.getElementById('extendApiBase').value.trim();
+    const apiKey = document.getElementById('extendApiKey').value;
+
+    if (!sourceName || !targetName) {
+        showNotification('Please fill in all required fields', 'error');
+        return;
+    }
+
+    try {
+        // First copy the model
+        const copyResponse = await fetch(`${API_BASE}/models/copy?source=${encodeURIComponent(sourceName)}&target=${encodeURIComponent(targetName)}`, {
+            method: 'POST'
+        });
+
+        if (!copyResponse.ok) {
+            const error = await copyResponse.json();
+            throw new Error(error.detail || 'Failed to copy model');
+        }
+
+        const copyResult = await copyResponse.json();
+        const copiedModel = copyResult.model;
+
+        // If user provided overrides, update the copied model
+        if (apiBase || apiKey) {
+            const updateData = {
+                model_name: targetName,
+                model_params: {}
+            };
+
+            if (apiBase) {
+                updateData.model_params.api_base = apiBase;
+            }
+            if (apiKey) {
+                updateData.model_params.api_key = apiKey;
+            }
+
+            await upsertModel(updateData);
+        }
+
+        showNotification(`Derived model "${targetName}" created from "${sourceName}"`, 'success');
+        closeExtendModal();
+        await loadModels();
+    } catch (error) {
+        console.error('Error creating derived model:', error);
+        showNotification(error.message || 'Failed to create derived model', 'error');
+    }
+}
+
 function openAddModal() {
     document.getElementById('modalTitle').innerHTML = `
         ${Icons.openai}
@@ -429,6 +598,8 @@ function showNotification(message, type = 'success') {
 document.addEventListener('keydown', function(e) {
     if (e.key === 'Escape') {
         closeModal();
+        closeCopyModal();
+        closeExtendModal();
     }
 });
 
@@ -458,6 +629,8 @@ function handleModelListClick(event) {
         deleteModel(target.dataset.model || '');
     } else if (action === 'add-model') {
         openAddModal();
+    } else if (action === 'copy') {
+        openCopyModal(target.dataset.model || '');
     } else if (action === 'retry-load') {
         loadModels();
     }
@@ -476,6 +649,30 @@ function initAdminUi() {
 
     document.querySelectorAll('[data-action="close-modal"]').forEach((button) => {
         button.addEventListener('click', closeModal);
+    });
+
+    // Copy modal handlers
+    document.querySelectorAll('[data-action="close-copy-modal"]').forEach((button) => {
+        button.addEventListener('click', closeCopyModal);
+    });
+    document.getElementById('copyModelForm').addEventListener('submit', saveCopiedModel);
+
+    // Extend modal handlers
+    document.querySelectorAll('[data-action="close-extend-modal"]').forEach((button) => {
+        button.addEventListener('click', closeExtendModal);
+    });
+    document.getElementById('extendModelForm').addEventListener('submit', saveDerivedModel);
+
+    // Close modals when clicking outside
+    document.getElementById('copyModal').addEventListener('click', function(e) {
+        if (e.target === this) {
+            closeCopyModal();
+        }
+    });
+    document.getElementById('extendModal').addEventListener('click', function(e) {
+        if (e.target === this) {
+            closeExtendModal();
+        }
     });
 
     ['defaultModelList', 'addedModelList'].forEach((id) => {

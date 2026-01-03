@@ -438,3 +438,37 @@
     justify-content: flex-start;
   }
 }
+
+/* Copy/Extend Modal Styles */
+.copy-source-info {
+  background: var(--surface-strong);
+  border: 1px solid var(--border);
+  padding: 14px 16px;
+  margin-bottom: 18px;
+  border-radius: 0;
+}
+
+.copy-source-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-muted);
+  margin-bottom: 4px;
+}
+
+.copy-source-name {
+  font-family: 'Space Mono', monospace;
+  font-size: 0.95rem;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.badge-inherited {
+  background: rgba(139, 92, 246, 0.15);
+  color: #7c3aed;
+}
+
+.badge-derived {
+  background: rgba(59, 130, 246, 0.15);
+  color: #2563eb;
+}

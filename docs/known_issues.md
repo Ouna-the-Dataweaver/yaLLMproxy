@@ -16,6 +16,39 @@ This document tracks known issues, limitations, and workarounds for yaLLMproxy.
 
 ---
 
+### 2. Model inheritance is static, not dynamic
+
+**Location:** `src/config_store.py`
+
+**Severity:** Major (Feature gap)
+
+**Description:** Model inheritance (`extends` field) is resolved statically at config load time. Changes to base models do not automatically propagate to derived models.
+
+**Example:**
+```yaml
+# Initial config
+- model_name: base-model
+  model_params:
+    api_base: https://api.example.com/v1
+    timeout: 120
+
+- model_name: derived-model
+  extends: base-model
+```
+
+When `base-model` is updated to `timeout: 300`, `derived-model` still has `timeout: 120`.
+
+**Impact:**
+- Derived models don't reflect updates to base models
+- Modifying a base model requires also updating all derived models manually
+- Runtime configuration changes via API don't trigger inheritance re-resolution
+
+**Workaround:** When modifying a base model, also update all derived models that extend it.
+
+**Tests:** See `tests/test_model_inheritance.py::TestDynamicInheritance` for expected behavior tests that currently fail.
+
+---
+
 ### 3. SSE decoder can grow its buffer without bounds
 
 **Location:** `src/parsers/response_pipeline.py` (SSEDecoder)
@@ -136,6 +169,8 @@ Response parsers are disabled globally by default (`proxy_settings.parsers.enabl
 5. Support for more API types beyond OpenAI
 6. Configuration validation schema
 7. Hot-reload of configuration without restart
+8. **Dynamic model inheritance** - Changes to base models should propagate to derived models # TODO
+9. **Cascading deletes** - Deleting a base model should handle or warn about derived models # TODO
 
 ### Known Limitations
 
