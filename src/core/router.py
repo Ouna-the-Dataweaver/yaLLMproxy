@@ -507,7 +507,7 @@ async def _streaming_request(
         connect=timeout, read=None, write=timeout, pool=timeout
     )
     client = httpx.AsyncClient(timeout=stream_timeout, http2=http2)
-    try:
+    try:  # TODO: use context manager 'with httpx.AsyncClient'
         request = client.build_request("POST", url, headers=headers, content=body)
 
         logger.debug(f"Sending streaming request to {url}")
