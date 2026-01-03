@@ -585,3 +585,181 @@ class TestRouterWithInheritedModels:
         assert derived_backend.parameters["temperature"].allow_override is False
         # top_p should be inherited
         assert derived_backend.parameters["top_p"].default == 0.95
+
+
+class TestDynamicInheritance:
+    """Tests for dynamic inheritance behavior.
+
+    These tests verify that changes to base models are reflected in derived models.
+    Currently, inheritance is resolved statically at config load time.
+
+    Note: These tests have mixed results because get_runtime_config() re-resolves
+    inheritance on each call, so SOME dynamic behavior works, but the underlying
+    issue is that 'extends' relationships are not preserved after resolution.
+    """
+
+    def test_updates_to_base_model_propagate_to_derived(self, tmp_path: Path) -> None:
+        """Test that updating a base model updates derived models.
+
+        This test verifies dynamic inheritance: when a base model's configuration
+        is changed, derived models that extend it should automatically reflect
+        those changes.
+
+        CURRENT BEHAVIOR: This test PASSES because get_runtime_config() re-resolves
+        inheritance on each call. However, this is not true dynamic inheritance
+        because the 'extends' field is removed after resolution.
+
+        EXPECTED BEHAVIOR: The test should work, but the underlying issue is that
+        the 'extends' field is not preserved, making true dynamic inheritance
+        impossible (changes only propagate until next config load).
+        """
+        default_path = tmp_path / "config_default.yaml"
+        added_path = tmp_path / "config_added.yaml"
+
+        # Initial config with base and derived model
+        _write_yaml(
+            default_path,
+            {
+                "model_list": [
+                    {
+                        "model_name": "base-model",
+                        "model_params": {
+                            "api_base": "http://base.local/v1",
+                            "api_key": "base-key",
+                            "request_timeout": 120,
+                        },
+                    }
+                ]
+            },
+        )
+        _write_yaml(
+            added_path,
+            {
+                "model_list": [
+                    {
+                        "model_name": "derived-model",
+                        "extends": "base-model",
+                    }
+                ]
+            },
+        )
+
+        store = ConfigStore(default_path=str(default_path), added_path=str(added_path))
+
+        # Initial load - derived model should inherit timeout from base
+        initial_config = store.get_runtime_config()
+        derived = next(m for m in initial_config["model_list"] if m["model_name"] == "derived-model")
+        initial_timeout = derived["model_params"]["request_timeout"]
+        assert initial_timeout == 120, "Derived model should inherit initial timeout from base"
+
+        # Verify 'extends' is removed after resolution (this is the static behavior)
+        assert "extends" not in derived, (
+            "After resolution, 'extends' field should be removed. "
+            "This means no true dynamic inheritance is possible."
+        )
+
+        # Update the base model to have a different timeout
+        base_entry = {
+            "model_name": "base-model",
+            "model_params": {
+                "api_base": "http://base.local/v1",
+                "api_key": "base-key",
+                "request_timeout": 300,  # Changed from 120 to 300
+            },
+        }
+        store.upsert_default_model(base_entry, None)
+
+        # Reload to pick up changes
+        store.reload()
+
+        # Get the updated config
+        updated_config = store.get_runtime_config()
+
+        # Find the derived model after base update
+        derived_after = next(
+            (m for m in updated_config["model_list"] if m["model_name"] == "derived-model"),
+            None
+        )
+        assert derived_after is not None, "Derived model should still exist"
+        updated_timeout = derived_after["model_params"]["request_timeout"]
+
+        # This passes because get_runtime_config() re-resolves each time
+        # But the underlying issue is that 'extends' is NOT preserved
+        assert updated_timeout == 300, (
+            f"Expected timeout=300, got {updated_timeout}"
+        )
+
+    def test_base_model_deletion_affects_derived(self, tmp_path: Path) -> None:
+        """Test that deleting a base model affects derived models.
+
+        CURRENT BEHAVIOR: This test FAILS. When base model is deleted,
+        the derived model with 'extends' cannot be resolved and the error
+        is logged, but the unresolved model persists in the config.
+
+        EXPECTED BEHAVIOR: Deleting a base model should cause derived models to
+        either also be deleted or fail validation gracefully.
+        """
+        default_path = tmp_path / "config_default.yaml"
+        added_path = tmp_path / "config_added.yaml"
+
+        _write_yaml(
+            default_path,
+            {
+                "model_list": [
+                    {
+                        "model_name": "base-model",
+                        "model_params": {
+                            "api_base": "http://base.local/v1",
+                            "api_key": "base-key",
+                        },
+                    }
+                ]
+            },
+        )
+        _write_yaml(
+            added_path,
+            {
+                "model_list": [
+                    {
+                        "model_name": "derived-model",
+                        "extends": "base-model",
+                    }
+                ]
+            },
+        )
+
+        store = ConfigStore(default_path=str(default_path), added_path=str(added_path))
+
+        # Verify initial state - derived model should exist with inherited values
+        initial_config = store.get_runtime_config()
+        derived = next(
+            (m for m in initial_config["model_list"] if m["model_name"] == "derived-model"),
+            None
+        )
+        assert derived is not None, "Derived model should exist initially"
+        assert derived["model_params"]["api_base"] == "http://base.local/v1"
+
+        # Delete the base model from default config
+        default_config = store.get_default_raw()
+        default_config["model_list"] = [
+            m for m in default_config.get("model_list", []) if m.get("model_name") != "base-model"
+        ]
+        store.save_default(default_config)
+
+        # Reload to pick up changes
+        store.reload()
+
+        # Check if derived model still exists and what values it has
+        updated_config = store.get_runtime_config()
+        derived = next(
+            (m for m in updated_config["model_list"] if m["model_name"] == "derived-model"),
+            None
+        )
+
+        # This FAILS: derived model still exists (unresolved) when base is deleted
+        # The error message in the logs shows "base model not found" but derived is not removed
+        assert derived is None, (
+            "Derived model should be deleted when base model is deleted. "
+            "Currently derived models persist even when base is removed, "
+            "and 'extends' field remains in the unresolved config."
+        )

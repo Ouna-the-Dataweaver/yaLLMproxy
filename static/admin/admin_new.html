@@ -176,6 +176,94 @@
         </div>
     </div>
 
+    <div id="copyModal" class="modal-overlay">
+        <div class="modal">
+            <div class="modal-header">
+                <h2 class="modal-title" id="copyModalTitle">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                    </svg>
+                    Copy Model
+                </h2>
+                <button class="modal-close" type="button" data-action="close-copy-modal">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18"/>
+                        <line x1="6" y1="6" x2="18" y2="18"/>
+                    </svg>
+                </button>
+            </div>
+            <form id="copyModelForm">
+                <div class="modal-body">
+                    <input type="hidden" id="copySourceModel" value="">
+                    <div class="copy-source-info">
+                        <p class="copy-source-label">Copying from:</p>
+                        <p class="copy-source-name" id="copySourceName">-</p>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="copyTargetName">New Model Name <span class="required">*</span></label>
+                        <input type="text" id="copyTargetName" class="form-input" required placeholder="e.g., gpt-4o-custom">
+                        <p class="form-hint">The copied model will be saved to Added Models</p>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-action="close-copy-modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Copy Model</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="extendModal" class="modal-overlay">
+        <div class="modal">
+            <div class="modal-header">
+                <h2 class="modal-title" id="extendModalTitle">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="18" cy="5" r="3"/>
+                        <circle cx="6" cy="12" r="3"/>
+                        <circle cx="18" cy="19" r="3"/>
+                        <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/>
+                        <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+                    </svg>
+                    Create Derived Model
+                </h2>
+                <button class="modal-close" type="button" data-action="close-extend-modal">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18"/>
+                        <line x1="6" y1="6" x2="18" y2="18"/>
+                    </svg>
+                </button>
+            </div>
+            <form id="extendModelForm">
+                <div class="modal-body">
+                    <input type="hidden" id="extendSourceModel" value="">
+                    <div class="copy-source-info">
+                        <p class="copy-source-label">Inheriting from:</p>
+                        <p class="copy-source-name" id="extendSourceName">-</p>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="extendModelName">New Model Name <span class="required">*</span></label>
+                        <input type="text" id="extendModelName" class="form-input" required placeholder="e.g., gpt-4o-custom">
+                        <p class="form-hint">The derived model will inherit all settings from the source</p>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="extendApiBase">API Base URL</label>
+                        <input type="text" id="extendApiBase" class="form-input" placeholder="Leave empty to inherit from source">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="extendApiKey">API Key</label>
+                        <input type="password" id="extendApiKey" class="form-input" placeholder="Leave empty to inherit from source" autocomplete="new-password">
+                        <p class="form-hint">Use ${ENV_VAR} to reference environment variables</p>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-action="close-extend-modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Create Derived Model</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <div id="notification" class="notification">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
