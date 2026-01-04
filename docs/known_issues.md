@@ -169,8 +169,9 @@ Response parsers are disabled globally by default (`proxy_settings.parsers.enabl
 5. Support for more API types beyond OpenAI
 6. Configuration validation schema
 7. ~~Hot-reload of configuration without restart~~ ✅ DONE - `POST /admin/config/reload`
-8. **Dynamic model inheritance** - Changes to base models should propagate to derived models # TODO
-9. **Cascading deletes** - Deleting a base model should handle or warn about derived models # TODO
+8. **Model Tree Structure** - Maintain a tree structure for model inheritance to enable dynamic propagation, cascading deletes, and better admin UI. See [model_tree.md](model_tree.md) for detailed design. # TODO
+9. ~~Dynamic model inheritance~~ - Covered by Model Tree Structure feature above
+10. ~~Cascading deletes~~ - Covered by Model Tree Structure feature above
 
 ### Known Limitations
 
