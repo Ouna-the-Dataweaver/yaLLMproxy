@@ -406,6 +406,26 @@ async function copyModel(sourceName, targetName) {
     }
 }
 
+async function reloadConfig() {
+    try {
+        const response = await fetch(`${API_BASE}/config/reload`, {
+            method: 'POST'
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Failed to reload config');
+        }
+
+        const result = await response.json();
+        showNotification(`Configuration reloaded (${result.models_count} models)`, 'success');
+        await loadModels();
+    } catch (error) {
+        console.error('Error reloading config:', error);
+        showNotification(error.message || 'Failed to reload config', 'error');
+    }
+}
+
 function openCopyModal(modelName) {
     document.getElementById('copySourceModel').value = modelName;
     document.getElementById('copySourceName').textContent = modelName;
@@ -645,6 +665,11 @@ function initAdminUi() {
     const addButton = document.getElementById('addModelBtn');
     if (addButton) {
         addButton.addEventListener('click', openAddModal);
+    }
+
+    const reloadButton = document.getElementById('reloadConfigBtn');
+    if (reloadButton) {
+        reloadButton.addEventListener('click', reloadConfig);
     }
 
     document.querySelectorAll('[data-action="close-modal"]').forEach((button) => {
