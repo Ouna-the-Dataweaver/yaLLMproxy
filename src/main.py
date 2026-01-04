@@ -155,6 +155,7 @@ app.post("/admin/models")(register_model)
 # Config management routes for admin UI
 app.get("/admin/config")(config_routes.get_full_config)
 app.put("/admin/config")(config_routes.update_config)
+app.post("/admin/config/reload")(config_routes.reload_config)
 app.get("/admin/models")(config_routes.get_models_list)
 app.delete("/admin/models/{model_name}")(config_routes.delete_model)
 app.post("/admin/models/copy")(config_routes.copy_model)

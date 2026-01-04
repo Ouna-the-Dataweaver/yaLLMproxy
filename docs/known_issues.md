@@ -168,7 +168,7 @@ Response parsers are disabled globally by default (`proxy_settings.parsers.enabl
 4. Add metrics/monitoring dashboard
 5. Support for more API types beyond OpenAI
 6. Configuration validation schema
-7. Hot-reload of configuration without restart
+7. ~~Hot-reload of configuration without restart~~ ✅ DONE - `POST /admin/config/reload`
 8. **Dynamic model inheritance** - Changes to base models should propagate to derived models # TODO
 9. **Cascading deletes** - Deleting a base model should handle or warn about derived models # TODO
 
@@ -176,8 +176,7 @@ Response parsers are disabled globally by default (`proxy_settings.parsers.enabl
 
 - No persistent storage for usage statistics (in-memory only)
 - No request authentication or rate limiting
-- No request caching
-- No support for WebSocket connections
+- No support for WebSocket connections (not a priority - almost never used anywhere)
 - Limited error recovery in streaming responses
 
 ---

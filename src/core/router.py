@@ -165,6 +165,34 @@ class ProxyRouter:
                 return True
             return False
 
+    async def reload_config(self, new_config: dict) -> None:
+        """Reload router with new configuration atomically.
+
+        Re-parses backends, fallbacks, and response parsers from the config.
+        This method is safe to call while requests are being processed.
+
+        Args:
+            new_config: The new configuration dictionary.
+        """
+        async with self._lock:
+            self.backends = self._parse_backends(new_config.get("model_list", []))
+            self.response_parsers = build_response_parser_pipeline(new_config)
+            self.response_parser_overrides = build_response_parser_overrides(new_config)
+            router_cfg = new_config.get("router_settings") or {}
+            self.fallbacks = self._parse_fallbacks(router_cfg.get("fallbacks", []))
+
+            proxy_settings = new_config.get("proxy_settings") or {}
+            logging_cfg = proxy_settings.get("logging") or {}
+            self.log_parsed_response = _parse_bool(logging_cfg.get("log_parsed_response"))
+            log_parsed_stream_raw = logging_cfg.get("log_parsed_stream")
+            if log_parsed_stream_raw is None:
+                self.log_parsed_stream = self.log_parsed_response
+            else:
+                self.log_parsed_stream = _parse_bool(log_parsed_stream_raw)
+
+            router_cfg = new_config.get("router_settings") or {}
+            self.num_retries = max(1, int(router_cfg.get("num_retries", 1)))
+
     def _select_response_parsers(self, backend_name: str):
         if backend_name in self.response_parser_overrides:
             return self.response_parser_overrides[backend_name]

@@ -50,6 +50,41 @@ async def update_config(new_config: dict) -> dict:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+async def reload_config() -> dict:
+    """Reload configuration from disk without restarting.
+    
+    POST /admin/config/reload
+    
+    This endpoint will:
+    1. Reload config files from disk
+    2. Re-parse all models and backends
+    3. Update the router's runtime state
+    
+    Returns:
+        Status message with reload details.
+    """
+    try:
+        # Reload config store from disk
+        CONFIG_STORE.reload()
+
+        # Get the new merged config
+        new_config = CONFIG_STORE.get_runtime_config()
+
+        # Update router with new config
+        router = get_router()
+        await router.reload_config(new_config)
+
+        logger.info("Configuration reloaded successfully")
+        return {
+            "status": "ok",
+            "message": "Configuration reloaded successfully",
+            "models_count": len(router.backends),
+        }
+    except Exception as exc:
+        logger.error(f"Failed to reload config: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 async def get_models_list() -> dict:
     """Get detailed list of all registered models.
     

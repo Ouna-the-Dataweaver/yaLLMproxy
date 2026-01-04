@@ -175,10 +175,29 @@ yaLLMproxy/
 | Command | Description |
 |---------|-------------|
 | `task run` | Start the proxy |
-| `task run:reload` | Start with autoreload |
+| `task run:reload` | Start with autoreload (development) |
 | `task test` | Run tests |
 | `task forwarder` | Run TCP forwarder |
 | `uv run pytest tests/` | Run tests directly |
+
+## Runtime Management
+
+### Hot Reload Configuration
+
+You can reload the proxy configuration without restarting by calling the admin API:
+
+```bash
+curl -X POST http://localhost:7979/admin/config/reload
+```
+
+Or use the **Reload** button in the admin UI (`/admin/`).
+
+This will:
+1. Reload `config_default.yaml` and `config_added.yaml` from disk
+2. Re-parse all models and backends
+3. Update the router's runtime state atomically
+
+Useful for applying config changes without interrupting active requests.
 
 ## License
 
