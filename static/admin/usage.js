@@ -192,6 +192,40 @@ const renderHistorical = (historical) => {
             `;
         }
     }
+
+    // Render stop reason breakdown
+    const stopReasons = historical.stop_reasons || [];
+    renderStopReasons(stopReasons);
+};
+
+const renderStopReasons = (stopReasons) => {
+    const grid = document.getElementById('stop-reasons-grid');
+    if (!grid) return;
+
+    if (!stopReasons || stopReasons.length === 0) {
+        grid.innerHTML = '<p style="color: var(--ink-muted);">No stop reason data available</p>';
+        return;
+    }
+
+    const badgeClass = {
+        'stop': 'badge-success',
+        'tool_calls': 'badge-tool-call',
+        'length': 'badge-warning',
+        'content_filter': 'badge-error',
+        'function_call': 'badge-tool-call'
+    };
+
+    grid.innerHTML = stopReasons.map(item => `
+        <div class="stat-card">
+            <div class="stat-label">
+                <span class="badge ${badgeClass[item.reason] || 'badge-neutral'}">
+                    ${escapeHtml(item.reason || 'unknown')}
+                </span>
+            </div>
+            <div class="stat-value">${formatNumber(item.count)}</div>
+            <div class="stat-sublabel">${item.percentage}%</div>
+        </div>
+    `).join('');
 };
 
 // Simple HTML escape to prevent XSS

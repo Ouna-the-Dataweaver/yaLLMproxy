@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>yaLLM Proxy | Request Logs</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@500;600;700&family=Hanken+Grotesk:wght@400;500;600&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/admin/theme.css">
+    <link rel="stylesheet" href="/static/admin/ui.css">
+    <link rel="stylesheet" href="/static/admin/usage.css">
+    <style>
+        /* Logs page specific styles */
+        .logs-container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 24px;
+        }
+
+        .logs-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+        }
+
+        .logs-header h1 {
+            font-size: 28px;
+            font-weight: 600;
+        }
+
+        .filters-panel {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-subtle);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 24px;
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+            gap: 16px;
+        }
+
+        .filter-group {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .filter-group label {
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--ink-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .filter-group select,
+        .filter-group input[type="text"],
+        .filter-group input[type="datetime-local"] {
+            padding: 10px 12px;
+            border: 1px solid var(--border-subtle);
+            border-radius: 8px;
+            background: var(--bg-primary);
+            color: var(--ink-primary);
+            font-size: 14px;
+            font-family: inherit;
+        }
+
+        .filter-group select:focus,
+        .filter-group input:focus {
+            outline: none;
+            border-color: var(--accent-primary);
+            box-shadow: 0 0 0 3px var(--accent-primary-muted);
+        }
+
+        .filter-actions {
+            display: flex;
+            align-items: flex-end;
+            gap: 12px;
+        }
+
+        .logs-table-container {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-subtle);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+
+        .logs-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .logs-table th {
+            text-align: left;
+            padding: 14px 16px;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--ink-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            background: var(--bg-tertiary);
+            border-bottom: 1px solid var(--border-subtle);
+        }
+
+        .logs-table td {
+            padding: 14px 16px;
+            border-bottom: 1px solid var(--border-subtle);
+            font-size: 14px;
+        }
+
+        .logs-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        .logs-table tr:hover td {
+            background: var(--bg-hover);
+        }
+
+        .logs-table .clickable {
+            cursor: pointer;
+            color: var(--accent-primary);
+        }
+
+        .logs-table .clickable:hover {
+            text-decoration: underline;
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 4px 10px;
+            border-radius: 9999px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        .badge-success {
+            background: var(--success-bg);
+            color: var(--success-ink);
+        }
+
+        .badge-error {
+            background: var(--error-bg);
+            color: var(--error-ink);
+        }
+
+        .badge-warning {
+            background: var(--warning-bg);
+            color: var(--warning-ink);
+        }
+
+        .badge-neutral {
+            background: var(--neutral-bg);
+            color: var(--neutral-ink);
+        }
+
+        .badge-tool-call {
+            background: var(--accent-primary-muted);
+            color: var(--accent-primary);
+        }
+
+        .pagination {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 20px;
+            border-top: 1px solid var(--border-subtle);
+        }
+
+        .pagination-info {
+            font-size: 14px;
+            color: var(--ink-muted);
+        }
+
+        .pagination-buttons {
+            display: flex;
+            gap: 8px;
+        }
+
+        .pagination-btn {
+            padding: 8px 16px;
+            border: 1px solid var(--border-subtle);
+            border-radius: 8px;
+            background: var(--bg-primary);
+            color: var(--ink-primary);
+            font-size: 14px;
+            cursor: pointer;
+        }
+
+        .pagination-btn:hover:not(:disabled) {
+            background: var(--bg-hover);
+        }
+
+        .pagination-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .detail-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+
+        .detail-modal.hidden {
+            display: none;
+        }
+
+        .detail-content {
+            background: var(--bg-secondary);
+            border-radius: 16px;
+            width: 90%;
+            max-width: 1000px;
+            max-height: 90vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .detail-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 20px 24px;
+            border-bottom: 1px solid var(--border-subtle);
+        }
+
+        .detail-header h2 {
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        .detail-close {
+            background: none;
+            border: none;
+            font-size: 24px;
+            cursor: pointer;
+            color: var(--ink-muted);
+            padding: 4px 8px;
+        }
+
+        .detail-close:hover {
+            color: var(--ink-primary);
+        }
+
+        .detail-body {
+            padding: 24px;
+            overflow-y: auto;
+            flex: 1;
+        }
+
+        .detail-section {
+            margin-bottom: 24px;
+        }
+
+        .detail-section h3 {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--ink-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 12px;
+        }
+
+        .detail-section .content {
+            background: var(--bg-tertiary);
+            border-radius: 8px;
+            padding: 16px;
+            font-family: "Space Mono", monospace;
+            font-size: 13px;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        .stat-item {
+            background: var(--bg-tertiary);
+            border-radius: 8px;
+            padding: 12px;
+        }
+
+        .stat-item .label {
+            font-size: 11px;
+            font-weight: 500;
+            color: var(--ink-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .stat-item .value {
+            font-size: 20px;
+            font-weight: 600;
+            margin-top: 4px;
+        }
+
+        .loading {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 60px;
+            color: var(--ink-muted);
+        }
+
+        .loading.hidden {
+            display: none;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px;
+            color: var(--ink-muted);
+        }
+
+        .empty-state h3 {
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--ink-primary);
+            margin-bottom: 8px;
+        }
+
+        .tool-call-icon {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .tool-call-icon svg {
+            width: 14px;
+            height: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="page">
+        <header class="top-bar">
+            <div class="brand">
+                <div class="brand-mark">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21.21 15.89A10 10 0 1 1 8 2.83"/>
+                        <path d="M22 12A10 10 0 0 0 12 2v10z"/>
+                    </svg>
+                </div>
+                <div class="brand-text">
+                    <h1>yaLLM Proxy</h1>
+                    <p>Request Logs</p>
+                </div>
+            </div>
+            <div class="top-actions">
+                <a href="/usage" class="btn btn-secondary">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="18" y1="20" x2="18" y2="10"/>
+                        <line x1="12" y1="20" x2="12" y2="4"/>
+                        <line x1="6" y1="20" x2="6" y2="14"/>
+                    </svg>
+                    Usage
+                </a>
+                <a href="/admin" class="btn btn-secondary">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/>
+                        <rect x="2" y="14" width="20" height="8" rx="2" ry="2"/>
+                        <line x1="6" y1="6" x2="6.01" y2="6"/>
+                        <line x1="6" y1="18" x2="6.01" y2="18"/>
+                    </svg>
+                    Models
+                </a>
+                <button class="btn btn-secondary theme-toggle" type="button" title="Toggle dark mode">
+                    <svg class="sun-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="5"/>
+                        <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
+                    </svg>
+                    <svg class="moon-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+                    </svg>
+                </button>
+            </div>
+        </header>
+
+        <div class="logs-container">
+            <div class="logs-header">
+                <h1>Request Logs</h1>
+            </div>
+
+            <div class="filters-panel">
+                <div class="filter-group">
+                    <label for="filterModel">Model</label>
+                    <input type="text" id="filterModel" placeholder="Filter by model...">
+                </div>
+                <div class="filter-group">
+                    <label for="filterOutcome">Outcome</label>
+                    <select id="filterOutcome">
+                        <option value="">All</option>
+                        <option value="success">Success</option>
+                        <option value="error">Error</option>
+                        <option value="cancelled">Cancelled</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label for="filterStopReason">Stop Reason</label>
+                    <select id="filterStopReason">
+                        <option value="">All</option>
+                        <option value="stop">stop</option>
+                        <option value="tool_calls">tool_calls</option>
+                        <option value="length">length</option>
+                        <option value="content_filter">content_filter</option>
+                        <option value="function_call">function_call</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label for="filterToolCall">Tool Calls</label>
+                    <select id="filterToolCall">
+                        <option value="">All</option>
+                        <option value="true">Yes</option>
+                        <option value="false">No</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label for="filterStartDate">From</label>
+                    <input type="datetime-local" id="filterStartDate">
+                </div>
+                <div class="filter-group">
+                    <label for="filterEndDate">To</label>
+                    <input type="datetime-local" id="filterEndDate">
+                </div>
+                <div class="filter-group">
+                    <label for="filterSearch">Search</label>
+                    <input type="text" id="filterSearch" placeholder="Search in body...">
+                </div>
+                <div class="filter-actions">
+                    <button class="btn btn-primary" id="applyFilters">Apply Filters</button>
+                    <button class="btn btn-secondary" id="clearFilters">Clear</button>
+                </div>
+            </div>
+
+            <div class="logs-table-container">
+                <div id="loading" class="loading">
+                    <div class="spinner"></div>
+                    <span>Loading logs...</span>
+                </div>
+                <div id="emptyState" class="empty-state hidden">
+                    <h3>No logs found</h3>
+                    <p>Try adjusting your filters or check back later.</p>
+                </div>
+                <table class="logs-table hidden" id="logsTable">
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Model</th>
+                            <th>Outcome</th>
+                            <th>Stop Reason</th>
+                            <th>Tool Calls</th>
+                            <th>Duration</th>
+                            <th>Tokens</th>
+                        </tr>
+                    </thead>
+                    <tbody id="logsBody">
+                    </tbody>
+                </table>
+                <div class="pagination hidden" id="pagination">
+                    <div class="pagination-info" id="paginationInfo"></div>
+                    <div class="pagination-buttons">
+                        <button class="pagination-btn" id="prevPage">Previous</button>
+                        <button class="pagination-btn" id="nextPage">Next</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Detail Modal -->
+    <div class="detail-modal hidden" id="detailModal">
+        <div class="detail-content">
+            <div class="detail-header">
+                <h2 id="detailTitle">Request Log Details</h2>
+                <button class="detail-close" id="closeModal">&times;</button>
+            </div>
+            <div class="detail-body" id="detailBody">
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/admin/theme.js"></script>
+    <script src="/static/admin/logs.js"></script>
+</body>
+</html>

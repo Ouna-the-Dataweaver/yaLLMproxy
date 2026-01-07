@@ -28,7 +28,7 @@ except ImportError:
 from .config_store import CONFIG_STORE
 from .core import ProxyRouter
 from .core.registry import set_router
-from .api.routes import chat_completions, list_models, register_model, responses, config as config_routes, usage
+from .api.routes import chat_completions, list_models, register_model, responses, config as config_routes, usage, logs
 
 # Load configuration
 config = CONFIG_STORE.get_runtime_config()
@@ -203,6 +203,10 @@ app.get("/admin/")(config_routes.serve_admin_ui)
 app.get("/usage")(usage.usage_page)
 app.get("/api/usage")(usage.get_usage)
 app.get("/api/usage/page")(usage.usage_page)
+
+# Logs viewer route
+app.get("/logs")(logs.logs_page)
+app.include_router(logs.router, prefix="/api")
 
 # Conditionally register responses endpoint
 if enable_responses_endpoint:

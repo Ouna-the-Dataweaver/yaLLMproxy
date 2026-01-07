@@ -674,15 +674,32 @@ async def _streaming_request(
 
     async def iterator():
         nonlocal stream_exhausted
+        # Track final chunk data for stop_reason extraction
+        last_chunk_data: Optional[dict[str, Any]] = None
         try:
             chunk_count = 0
-            
+
             # First yield the buffered chunks
             for chunk in buffered_chunks:
                 chunk_count += 1
+                # Parse the chunk to extract delta for accumulation
+                if request_log:
+                    try:
+                        chunk_data = json.loads(chunk.decode("utf-8"))
+                        last_chunk_data = chunk_data
+                        # Extract delta for response accumulation
+                        choices = chunk_data.get("choices") if isinstance(chunk_data, dict) else None
+                        if choices and isinstance(choices, list):
+                            for choice in choices:
+                                if isinstance(choice, dict):
+                                    delta = choice.get("delta")
+                                    if isinstance(delta, dict):
+                                        request_log.record_stream_delta(delta, chunk_count)
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        pass
                 for out_chunk in _process_chunk(chunk):
                     yield out_chunk
-            
+
             # Then continue with the rest of the stream
             if not stream_exhausted:
                 while True:
@@ -696,15 +713,59 @@ async def _streaming_request(
                         chunk_count += 1
                         if chunk_count % 10 == 0:
                             logger.debug(f"Streamed {chunk_count} chunks from {url}")
+
+                        # Parse the chunk to extract delta for accumulation
+                        if request_log:
+                            try:
+                                chunk_data = json.loads(chunk.decode("utf-8"))
+                                last_chunk_data = chunk_data
+                                # Extract delta for response accumulation
+                                choices = chunk_data.get("choices") if isinstance(chunk_data, dict) else None
+                                if choices and isinstance(choices, list):
+                                    for choice in choices:
+                                        if isinstance(choice, dict):
+                                            delta = choice.get("delta")
+                                            if isinstance(delta, dict):
+                                                request_log.record_stream_delta(delta, chunk_count)
+                            except (json.JSONDecodeError, UnicodeDecodeError):
+                                pass
+
                         if request_log:
                             request_log.record_stream_chunk(chunk)
                         for out_chunk in _process_chunk(chunk):
                             yield out_chunk
+
+            # Finalize stream parser and get any final events
             if stream_parser:
                 for out_chunk in stream_parser.finish():
+                    # Parse final events to extract stop_reason
+                    if request_log and last_chunk_data is None:
+                        try:
+                            event_data = json.loads(out_chunk.decode("utf-8"))
+                            if isinstance(event_data, dict):
+                                last_chunk_data = event_data
+                        except (json.JSONDecodeError, UnicodeDecodeError):
+                            pass
                     if request_log:
                         request_log.record_parsed_stream_chunk(out_chunk)
                     yield out_chunk
+
+            # Extract stop_reason from the final chunk
+            if request_log and last_chunk_data:
+                try:
+                    choices = last_chunk_data.get("choices") if isinstance(last_chunk_data, dict) else None
+                    if choices and isinstance(choices, list) and len(choices) > 0:
+                        choice = choices[0]
+                        if isinstance(choice, dict):
+                            finish_reason = choice.get("finish_reason")
+                            if finish_reason and isinstance(finish_reason, str):
+                                request_log.record_stop_reason(finish_reason)
+                                # Also mark as tool call if the reason indicates tool usage
+                                if finish_reason in ("tool_calls", "function_call"):
+                                    request_log.mark_as_tool_call()
+                except (KeyError, TypeError, IndexError):
+                    pass
+
         except asyncio.CancelledError as cancel_exc:
             logger.info(f"Streaming request to {url} cancelled by client")
             if request_log and not request_log.finalized:

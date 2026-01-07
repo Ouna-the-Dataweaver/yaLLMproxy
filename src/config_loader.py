@@ -123,7 +123,9 @@ def load_config(
 
 
 def _substitute_env_vars(
-    obj: Any, env_values: Mapping[str, str] | None = None
+    obj: Any,
+    env_values: Mapping[str, str] | None = None,
+    warn_on_missing: bool = True,
 ) -> Any:
     """Recursively substitute environment variables in configuration values.
 
@@ -133,6 +135,8 @@ def _substitute_env_vars(
 
     Args:
         obj: The configuration object (dict, list, or string).
+        env_values: Optional map of env values to use for substitution.
+        warn_on_missing: If False, missing variables are left as placeholders without warnings.
 
     Returns:
         The object with environment variables substituted.
@@ -145,9 +149,15 @@ def _substitute_env_vars(
     env_values = env_values or {}
 
     if isinstance(obj, dict):
-        return {k: _substitute_env_vars(v, env_values) for k, v in obj.items()}
+        return {
+            k: _substitute_env_vars(v, env_values, warn_on_missing)
+            for k, v in obj.items()
+        }
     if isinstance(obj, list):
-        return [_substitute_env_vars(item, env_values) for item in obj]
+        return [
+            _substitute_env_vars(item, env_values, warn_on_missing)
+            for item in obj
+        ]
     if isinstance(obj, str):
         # Replace ${VAR_NAME} or $VAR_NAME with environment variable value
         pattern = re.compile(r"\$\{([^}]+)\}|\$([A-Za-z_][A-Za-z0-9_]*)")
@@ -158,11 +168,12 @@ def _substitute_env_vars(
             if value is None:
                 value = os.getenv(var_name)
             if value is None:
-                logger.warning(
-                    f"CONFIG ERROR: Environment variable '${var_name}' is not set! "
-                    f"Check your .env file or export it in your shell. "
-                    f"The literal placeholder will be used (request will likely fail)."
-                )
+                if warn_on_missing:
+                    logger.warning(
+                        f"CONFIG ERROR: Environment variable '${var_name}' is not set! "
+                        f"Check your .env file or export it in your shell. "
+                        f"The literal placeholder will be used (request will likely fail)."
+                    )
                 return match.group(0)  # Return original placeholder
             return value
 
