@@ -1,6 +1,11 @@
 """Logging module for the proxy."""
 
-from .recorder import RequestLogRecorder, log_error_event
+from .recorder import (
+    RequestLogRecorder,
+    log_error_event,
+    set_db_logging_enabled,
+    is_db_logging_enabled,
+)
 from .setup import logger, setup_logging
 
 # Database logger integration (optional, may not be available if database module not initialized)
@@ -16,6 +21,8 @@ __all__ = [
     "setup_logging",
     "RequestLogRecorder",
     "log_error_event",
+    "set_db_logging_enabled",
+    "is_db_logging_enabled",
 ]
 
 if _db_logger_available:

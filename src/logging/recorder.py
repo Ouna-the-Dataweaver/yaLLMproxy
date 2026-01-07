@@ -17,6 +17,28 @@ except ImportError:
 
 logger = logging.getLogger("yallmp-proxy")
 
+# Flag to disable database logging (useful during testing)
+_DB_LOGGING_ENABLED = True
+
+
+def set_db_logging_enabled(enabled: bool) -> None:
+    """Enable or disable database logging globally.
+
+    Args:
+        enabled: True to enable database logging, False to disable.
+    """
+    global _DB_LOGGING_ENABLED
+    _DB_LOGGING_ENABLED = enabled
+
+
+def is_db_logging_enabled() -> bool:
+    """Check if database logging is enabled.
+
+    Returns:
+        True if database logging is enabled, False otherwise.
+    """
+    return _DB_LOGGING_ENABLED
+
 REQUEST_LOG_DIR = Path(__file__).resolve().parent.parent.parent.joinpath("logs").joinpath("requests")
 ERROR_LOG_DIR = Path(__file__).resolve().parent.parent.parent.joinpath("logs").joinpath("errors")
 _PENDING_LOG_TASKS: set[asyncio.Task] = set()
@@ -94,8 +116,8 @@ def log_error_event(
         # No event loop, write synchronously
         error_path.write_text(content, encoding="utf-8")
 
-    # Also log to database if available
-    if get_db_logger is not None:
+    # Also log to database if available and enabled
+    if _DB_LOGGING_ENABLED and get_db_logger is not None:
         try:
             db_logger = get_db_logger()
             db_logger.log_error(
@@ -155,10 +177,10 @@ class RequestLogRecorder:
         REQUEST_LOG_DIR.mkdir(parents=True, exist_ok=True)
         self._append_text(f"log_start={self._started}\n")
 
-        # Initialize database logger (if available)
+        # Initialize database logger (if available and enabled)
         self._db_logger: Optional[Any] = None
         self._db_log_id: Optional[str] = None
-        if get_db_logger is not None:
+        if _DB_LOGGING_ENABLED and get_db_logger is not None:
             try:
                 self._db_logger = get_db_logger()
             except Exception as e:
