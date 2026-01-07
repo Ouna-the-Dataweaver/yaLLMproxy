@@ -9,6 +9,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
+# Import database logger for integration
+try:
+    from ..database.logger import get_db_logger
+except ImportError:
+    get_db_logger = None  # type: ignore
+
 logger = logging.getLogger("yallmp-proxy")
 
 REQUEST_LOG_DIR = Path(__file__).resolve().parent.parent.parent.joinpath("logs").joinpath("requests")
@@ -76,17 +82,34 @@ def log_error_event(
     # Write async if possible, sync otherwise
     try:
         loop = asyncio.get_running_loop()
-        
+
         async def _write_error_log():
             def _write():
                 error_path.write_text(content, encoding="utf-8")
             await asyncio.to_thread(_write)
-        
+
         task = loop.create_task(_write_error_log())
         _register_background_task(task)
     except RuntimeError:
         # No event loop, write synchronously
         error_path.write_text(content, encoding="utf-8")
+
+    # Also log to database if available
+    if get_db_logger is not None:
+        try:
+            db_logger = get_db_logger()
+            db_logger.log_error(
+                model_name=model_name,
+                error_type=error_type,
+                error_message=error_message,
+                backend_name=backend_name,
+                http_status=http_status,
+                request_path=request_path,
+                request_log_id=None,  # Will be linked if available
+                extra_context=extra_context,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to log error to database: {e}")
 
 
 class RequestLogRecorder:
@@ -131,6 +154,15 @@ class RequestLogRecorder:
         self._parsed_initialized = False
         REQUEST_LOG_DIR.mkdir(parents=True, exist_ok=True)
         self._append_text(f"log_start={self._started}\n")
+
+        # Initialize database logger (if available)
+        self._db_logger: Optional[Any] = None
+        self._db_log_id: Optional[str] = None
+        if get_db_logger is not None:
+            try:
+                self._db_logger = get_db_logger()
+            except Exception as e:
+                logger.debug(f"Database logger not available: {e}")
 
     def _append_text(self, text: str) -> None:
         self._buffer.extend(text.encode("utf-8"))
@@ -321,6 +353,44 @@ class RequestLogRecorder:
         self._finalized = True
         finished = datetime.utcnow().isoformat() + "Z"
         self._append_text(f"=== FINAL STATUS: {outcome} at {finished} ===\n")
+
+        # Calculate duration
+        try:
+            started_dt = datetime.fromisoformat(self._started.replace("Z", "+00:00"))
+            finished_dt = datetime.fromisoformat(finished.replace("Z", "+00:00"))
+            duration_ms = int((finished_dt - started_dt).total_seconds() * 1000)
+        except Exception:
+            duration_ms = None
+
+        # Save to database (if available)
+        if self._db_logger is not None:
+            try:
+                # Build backend attempts data from route
+                backend_attempts = None
+                if self._current_backend:
+                    backend_attempts = [{
+                        "backend": self._current_backend,
+                        "status": self._last_http_status,
+                    }]
+
+                # Log to database
+                self._db_log_id = self._db_logger.log_request(
+                    model_name=self.model_name,
+                    is_stream=self.is_stream,
+                    path=self.request_path,
+                    method=self._request_json.get("method") if self._request_json else None,
+                    query=self._request_json.get("query") if self._request_json else None,
+                    headers=self._request_json.get("headers") if self._request_json else None,
+                    body=self._request_json.get("body") if self._request_json else None,
+                    backend_attempts=backend_attempts,
+                    usage_stats=self._usage_stats,
+                    outcome=outcome,
+                    duration_ms=duration_ms,
+                    request_time=datetime.fromisoformat(self._started.replace("Z", "+00:00")),
+                )
+            except Exception as e:
+                logger.debug(f"Failed to save request to database: {e}")
+
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:

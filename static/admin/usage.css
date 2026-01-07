@@ -110,6 +110,99 @@
   font-size: 0.9rem;
 }
 
-.spinner {
-  border-radius: 50%;
+.history-section {
+  margin-top: 24px;
+}
+
+.history-section h3 {
+  font-family: 'Bricolage Grotesque', sans-serif;
+  font-size: 1rem;
+  margin-bottom: 12px;
+  color: var(--ink);
+}
+
+.table-container {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.data-table th,
+.data-table td {
+  padding: 12px 16px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+.data-table th {
+  background: var(--surface-strong);
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 0.7rem;
+  letter-spacing: 0.05em;
+  color: var(--ink-muted);
+}
+
+.data-table tr:last-child td {
+  border-bottom: none;
+}
+
+.data-table tbody tr:hover {
+  background: var(--surface);
+}
+
+.data-table td:nth-child(2),
+.data-table td:nth-child(3),
+.data-table td:nth-child(4) {
+  font-family: 'Space Mono', monospace;
+  text-align: right;
+}
+
+.usage-trends {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.trend-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.trend-time {
+  width: 140px;
+  font-size: 0.85rem;
+  color: var(--ink-muted);
+  flex-shrink: 0;
+}
+
+.trend-track {
+  flex: 1;
+  height: 24px;
+  background: var(--surface-strong);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  position: relative;
+}
+
+.trend-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent) 0%, var(--accent-hover) 100%);
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+.trend-count {
+  width: 80px;
+  text-align: right;
+  font-family: 'Space Mono', monospace;
+  font-size: 0.85rem;
 }

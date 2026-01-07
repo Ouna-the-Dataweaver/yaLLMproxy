@@ -7,6 +7,7 @@ Yet Another LLM Proxy - A lightweight, modular LLM proxy with OpenAI-compatible 
 - **Modular Architecture**: Clean separation of concepts with dedicated modules for routing, logging, API endpoints, and configuration
 - **Backend Failover**: Automatically routes to fallback backends when primary backends fail
 - **Request/Response Logging**: Detailed logs of all requests and responses for debugging
+- **Database Support**: SQLite (default) or PostgreSQL for persistent logging with JSONB columns
 - **OpenAI Compatibility**: Works with OpenAI-compatible clients and tools
 - **Runtime Registration**: Register new backends without restarting the proxy
 - **Environment Variable Support**: Configure via environment variables in YAML files
@@ -198,6 +199,60 @@ This will:
 3. Update the router's runtime state atomically
 
 Useful for applying config changes without interrupting active requests.
+
+## Database Configuration
+
+yaLLMproxy supports SQLite (default) and PostgreSQL databases for persistent logging.
+
+### SQLite (Default)
+
+SQLite is enabled by default with no additional configuration:
+
+```yaml
+database:
+  backend: sqlite
+  connection:
+    sqlite:
+      path: logs/yaLLM.db
+```
+
+### PostgreSQL
+
+To use PostgreSQL, update your configuration:
+
+```yaml
+database:
+  backend: postgres
+  connection:
+    postgres:
+      host: localhost
+      port: 5432
+      database: yallm_proxy
+      user: ${DB_USER}
+      password: ${DB_PASSWORD}
+```
+
+Add credentials to your `.env_added` file:
+
+```bash
+DB_USER=your_postgres_user
+DB_PASSWORD=your_postgres_password
+```
+
+### Database Tasks
+
+```bash
+task db:migrate    # Run database migrations
+task db:rollback   # Rollback last migration
+task db:current    # Show current revision
+task db:history    # Show migration history
+task clean         # Clear logs (preserves database)
+```
+
+### See Also
+
+- [Database Documentation](docs/database.md) - Detailed database guide
+- [Project Structure](docs/project-structure.md) - Module descriptions
 
 ## License
 

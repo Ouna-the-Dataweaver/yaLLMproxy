@@ -97,17 +97,83 @@
                 <div class="panel-header">
                     <div>
                         <h2 class="panel-title">Historical Usage (Database)</h2>
-                        <p class="panel-subtitle">Placeholder for long-term reporting.</p>
+                        <p class="panel-subtitle" id="historySubtitle">Long-term usage analytics from the database.</p>
                     </div>
                 </div>
-                <div class="history-placeholder">
+
+                <div id="history-error" class="history-placeholder" style="display: none;">
                     <h3 id="historyStatus">Not configured</h3>
                     <p id="historyMessage">Database logging is not configured yet.</p>
-                    <ul class="history-list">
-                        <li>Store per-request usage events in SQL</li>
-                        <li>Rollups for daily and monthly summaries</li>
-                        <li>Exports for dashboards and billing</li>
-                    </ul>
+                </div>
+
+                <div id="history-content" style="display: none;">
+                    <div class="stats-grid" id="total-stats-grid">
+                        <div class="stat-card">
+                            <div class="stat-label">Total Requests</div>
+                            <div class="stat-value" id="statTotalRequests">0</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">Successful</div>
+                            <div class="stat-value" id="statSuccessful">0</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">Failed</div>
+                            <div class="stat-value" id="statFailed">0</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">Success Rate</div>
+                            <div class="stat-value" id="statSuccessRate">0%</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-label">Avg Response</div>
+                            <div class="stat-value" id="statAvgDuration">0ms</div>
+                        </div>
+                    </div>
+
+                    <div class="history-section">
+                        <h3>Requests by Model</h3>
+                        <div class="table-container">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Model</th>
+                                        <th>Requests</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="requests-by-model">
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div class="history-section">
+                        <h3>Error Rates by Model</h3>
+                        <div class="table-container">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Model</th>
+                                        <th>Total</th>
+                                        <th>Errors</th>
+                                        <th>Error Rate</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="error-rates">
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div class="history-section">
+                        <h3>Usage Trends (Last 24 Hours)</h3>
+                        <div id="usage-trends">
+                        </div>
+                    </div>
+
+                    <div class="panel-note">
+                        <span>Data range:</span>
+                        <strong id="historyDateRange">--</strong>
+                    </div>
                 </div>
             </main>
         </div>
