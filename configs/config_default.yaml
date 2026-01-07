@@ -131,3 +131,23 @@ forwarder_settings:
   target:
     host: 127.0.0.1
     port: 7979
+
+# Database settings for request logging and metrics
+database:
+  # Database backend: sqlite or postgres
+  backend: sqlite
+  # Connection settings
+  connection:
+    # SQLite-specific
+    sqlite:
+      path: logs/yaLLM.db
+    # PostgreSQL-specific
+    postgres:
+      host: localhost
+      port: 5432
+      database: yallm_proxy
+      user: ${DB_USER}
+      password: ${DB_PASSWORD}
+  # Pool settings
+  pool_size: 5
+  max_overflow: 10

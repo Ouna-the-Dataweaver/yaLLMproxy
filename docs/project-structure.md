@@ -61,6 +61,21 @@ yaLLMproxy/
 │       ├── chat.py                # Chat schema types
 │       └── model.py               # Model schema types
 │
+│
+├── database/                      # Database support (SQLite/PostgreSQL)
+│   ├── __init__.py                # Database module exports
+│   ├── base.py                    # Base database class & connection management
+│   ├── sqlite.py                  # SQLite database implementation
+│   ├── postgres.py                # PostgreSQL database implementation
+│   ├── factory.py                 # Database factory for creating instances
+│   ├── logger.py                  # Database logger for async logging
+│   ├── repository.py              # Repository classes for queries
+│   └── models/                    # SQLAlchemy models
+│       ├── __init__.py            # Model exports
+│       ├── base.py                # Base declarative model
+│       ├── request_log.py         # Request logs table (JSONB)
+│       └── error_log.py           # Error logs table (JSONB)
+│
 ├── static/                        # Static files for admin UI
 │   └── admin/
 │       ├── admin_new.html         # Admin UI (v2)
@@ -154,6 +169,24 @@ yaLLMproxy/
 | `recorder.py` | RequestLogRecorder for detailed request/response logging |
 | `logger.py` | Logger utilities |
 
+### Database
+
+| Module | Purpose |
+|--------|---------|
+| `base.py` | BaseDatabase abstract class, connection management |
+| `sqlite.py` | SQLite implementation with file-based storage |
+| `postgres.py` | PostgreSQL implementation with connection pooling |
+| `factory.py` | Database factory for creating interchangeable instances |
+| `logger.py` | DatabaseLogRecorder for async request/error logging |
+| `repository.py` | UsageRepository for querying usage statistics |
+
+### Database Models
+
+| Module | Purpose |
+|--------|---------|
+| `request_log.py` | RequestLog model with JSONB columns |
+| `error_log.py` | ErrorLog model with JSONB columns |
+
 ### Middleware & Parsers
 
 | Module | Purpose |
@@ -222,3 +255,7 @@ Incoming Request
 | `ConfigStore` | `config_store.py` | Config management with persistence |
 | `RequestLogRecorder` | `logging/recorder.py` | Detailed request/response logging |
 | `ResponsePipeline` | `parsers/response_pipeline.py` | Response parsing chain |
+| `SQLiteDatabase` | `database/sqlite.py` | SQLite database implementation |
+| `PostgreSQLDatabase` | `database/postgres.py` | PostgreSQL database implementation |
+| `DatabaseLogRecorder` | `database/logger.py` | Async database logging |
+| `UsageRepository` | `database/repository.py` | Usage statistics queries |

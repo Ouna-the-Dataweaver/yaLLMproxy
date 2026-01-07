@@ -83,14 +83,122 @@ const renderRealtime = (realtime, generatedAt) => {
 };
 
 const renderHistorical = (historical) => {
+    const errorEl = document.getElementById('history-error');
+    const contentEl = document.getElementById('history-content');
     const statusEl = document.getElementById('historyStatus');
     const messageEl = document.getElementById('historyMessage');
-    if (statusEl) {
-        statusEl.textContent = historical?.enabled ? 'Enabled' : 'Not configured';
+    const subtitleEl = document.getElementById('historySubtitle');
+
+    if (!historical?.enabled) {
+        // Show error/placeholder state
+        if (errorEl) errorEl.style.display = 'block';
+        if (contentEl) contentEl.style.display = 'none';
+        if (statusEl) {
+            statusEl.textContent = historical?.status === 'error' ? 'Error' : 'Not configured';
+        }
+        if (messageEl) {
+            messageEl.textContent = historical?.message || 'Database logging is not configured yet.';
+        }
+        if (subtitleEl) {
+            subtitleEl.textContent = historical?.status === 'error'
+                ? 'Failed to load historical data from database.'
+                : 'Long-term usage analytics from the database.';
+        }
+        return;
     }
-    if (messageEl) {
-        messageEl.textContent = historical?.message || 'Database logging is not configured yet.';
+
+    // Show content state
+    if (errorEl) errorEl.style.display = 'none';
+    if (contentEl) contentEl.style.display = 'block';
+    if (subtitleEl) {
+        subtitleEl.textContent = `Data provider: ${historical.provider || 'database'}`;
     }
+
+    // Render total stats
+    const total = historical.total_stats || {};
+    setText('statTotalRequests', formatNumber(total.total_requests));
+    setText('statSuccessful', formatNumber(total.successful_requests));
+    setText('statFailed', formatNumber(total.failed_requests));
+    setText('statSuccessRate', `${total.success_rate || 0}%`);
+    setText('statAvgDuration', total.avg_duration_ms ? `${Math.round(total.avg_duration_ms)}ms` : '--');
+
+    // Render date range
+    if (total.start_time && total.end_time) {
+        const start = new Date(total.start_time);
+        const end = new Date(total.end_time);
+        setText('historyDateRange', `${formatTime(start)} - ${formatTime(end)}`);
+    }
+
+    // Render requests by model table
+    const requestsByModel = historical.requests_by_model || [];
+    const requestsBody = document.getElementById('requests-by-model');
+    if (requestsBody) {
+        if (requestsByModel.length === 0) {
+            requestsBody.innerHTML = '<tr><td colspan="2" style="text-align: center; color: var(--ink-muted);">No data available</td></tr>';
+        } else {
+            requestsBody.innerHTML = requestsByModel.map(item => `
+                <tr>
+                    <td>${escapeHtml(item.model_name || 'Unknown')}</td>
+                    <td>${formatNumber(item.count)}</td>
+                </tr>
+            `).join('');
+        }
+    }
+
+    // Render error rates table
+    const errorRates = historical.error_rates || [];
+    const errorRatesBody = document.getElementById('error-rates');
+    if (errorRatesBody) {
+        if (errorRates.length === 0) {
+            errorRatesBody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--ink-muted);">No data available</td></tr>';
+        } else {
+            errorRatesBody.innerHTML = errorRates.map(item => `
+                <tr>
+                    <td>${escapeHtml(item.model_name || 'Unknown')}</td>
+                    <td>${formatNumber(item.total_requests)}</td>
+                    <td>${formatNumber(item.error_count)}</td>
+                    <td>${item.error_rate || 0}%</td>
+                </tr>
+            `).join('');
+        }
+    }
+
+    // Render usage trends
+    const trends = historical.usage_trends || [];
+    const trendsEl = document.getElementById('usage-trends');
+    if (trendsEl) {
+        if (trends.length === 0) {
+            trendsEl.innerHTML = '<p style="color: var(--ink-muted);">No trend data available</p>';
+        } else {
+            const maxCount = Math.max(...trends.map(t => t.count || 0), 1);
+            trendsEl.innerHTML = `
+                <div class="usage-trends">
+                    ${trends.map(item => {
+                        const timestamp = item.timestamp ? new Date(item.timestamp) : null;
+                        const timeStr = timestamp ? formatTime(timestamp) : '--';
+                        const count = item.count || 0;
+                        const width = maxCount > 0 ? (count / maxCount) * 100 : 0;
+                        return `
+                            <div class="trend-bar">
+                                <span class="trend-time">${timeStr}</span>
+                                <div class="trend-track">
+                                    <div class="trend-fill" style="width: ${width}%"></div>
+                                </div>
+                                <span class="trend-count">${formatNumber(count)}</span>
+                            </div>
+                        `;
+                    }).join('')}
+                </div>
+            `;
+        }
+    }
+};
+
+// Simple HTML escape to prevent XSS
+const escapeHtml = (text) => {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
 };
 
 const showContent = () => {

@@ -15,6 +15,15 @@ from .logging import setup_logging
 # Initialize logging BEFORE importing config_store
 logger = setup_logging()
 
+# Import database module (after logging is set up)
+try:
+    from .database.factory import get_database, reset_database_instance
+    from .database.logger import _PENDING_DB_TASKS
+    DATABASE_AVAILABLE = True
+except ImportError:
+    DATABASE_AVAILABLE = False
+    logger.debug("Database module not available")
+
 # Now import config store (it will log config paths during initialization)
 from .config_store import CONFIG_STORE
 from .core import ProxyRouter
@@ -132,19 +141,48 @@ async def startup_event():
     logger.info(f"Available backends: {list(router.backends.keys())}")
     for name, backend in router.backends.items():
         logger.info(f"  - {name}: {backend.base_url}")
+
+    # Initialize database if available
+    if DATABASE_AVAILABLE:
+        try:
+            db_config = config.get("database")
+            if db_config:
+                logger.info("Initializing database...")
+                db = get_database(db_config)
+                db.initialize()
+                logger.info(f"Database initialized: {db.backend_name}")
+            else:
+                logger.info("Database not configured (skipping initialization)")
+        except Exception as e:
+            logger.warning(f"Failed to initialize database: {e}")
+    else:
+        logger.debug("Database module not available")
+
     logger.info("yaLLMp Proxy server ready to handle requests")
 
 
 async def shutdown_event():
     """Handle application shutdown."""
     from .logging.recorder import _PENDING_LOG_TASKS
-    
-    if not _PENDING_LOG_TASKS:
-        return
-    logger.info("Waiting for %d pending log flush tasks", len(_PENDING_LOG_TASKS))
-    pending = list(_PENDING_LOG_TASKS)
-    await asyncio.gather(*pending, return_exceptions=True)
-    logger.info("All log flush tasks completed")
+
+    # Wait for pending log tasks first
+    if _PENDING_LOG_TASKS:
+        logger.info("Waiting for %d pending log flush tasks", len(_PENDING_LOG_TASKS))
+        pending = list(_PENDING_LOG_TASKS)
+        await asyncio.gather(*pending, return_exceptions=True)
+        logger.info("All log flush tasks completed")
+
+    # Close database connection if available
+    if DATABASE_AVAILABLE:
+        try:
+            from .database.factory import get_database
+            db = get_database()
+            if db.is_initialized:
+                logger.info("Closing database connection...")
+                db.close()
+                logger.info("Database connection closed")
+        except Exception as e:
+            logger.warning(f"Error closing database connection: {e}")
 
 
 # Register routes
