@@ -10,3 +10,4 @@ This file contains rules and guidelines for working with this repository.
 7. `task run` to run proxy, `task run:reload` to run proxy with autoreload for autoreloading app on changes, task forwarder to run forwarder. 
 8. By default `forwarder` in not needed; by default it's using different .venv(.venv_fwd).
 9. Ask user if they want to update `README.md` and `docs/` files to reflect changes after work is done. 
+10. For big tasks, write unit tests as you go and run them in the process, instead of doing everything at once and then testing everything at once. 
