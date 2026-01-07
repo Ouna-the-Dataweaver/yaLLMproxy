@@ -51,7 +51,13 @@ tasks:
   clean:
     desc: Clear all logs (deletes all files in logs directory except database)
     cmds:
-      - cmd: cmd /c if exist "{{.TASKFILE_DIR}}\logs\yaLLM.db" move "{{.TASKFILE_DIR}}\logs\yaLLM.db" "{{.TASKFILE_DIR}}\logs\yaLLM.db.bak" && rmdir /s /q "{{.TASKFILE_DIR}}\logs" && mkdir "{{.TASKFILE_DIR}}\logs" && if exist "{{.TASKFILE_DIR}}\logs\yaLLM.db.bak" move "{{.TASKFILE_DIR}}\logs\yaLLM.db.bak" "{{.TASKFILE_DIR}}\logs\yaLLM.db"
+      - cmd: cmd /c if exist "{{.TASKFILE_DIR}}\logs\yaLLM.db" move "{{.TASKFILE_DIR}}\logs\yaLLM.db" "{{.TASKFILE_DIR}}\logs\yaLLM.db.bak"
+        platforms: [windows]
+      - cmd: cmd /c if exist "{{.TASKFILE_DIR}}\logs" rmdir /s /q "{{.TASKFILE_DIR}}\logs"
+        platforms: [windows]
+      - cmd: cmd /c if not exist "{{.TASKFILE_DIR}}\logs" mkdir "{{.TASKFILE_DIR}}\logs"
+        platforms: [windows]
+      - cmd: cmd /c if exist "{{.TASKFILE_DIR}}\logs\yaLLM.db.bak" move "{{.TASKFILE_DIR}}\logs\yaLLM.db.bak" "{{.TASKFILE_DIR}}\logs\yaLLM.db"
         platforms: [windows]
       - cmd: bash -c 'if [ -f "{{.TASKFILE_DIR}}/logs/yaLLM.db" ]; then mv "{{.TASKFILE_DIR}}/logs/yaLLM.db" "{{.TASKFILE_DIR}}/logs/yaLLM.db.bak"; fi && rm -rf "{{.TASKFILE_DIR}}/logs" && mkdir -p "{{.TASKFILE_DIR}}/logs" && if [ -f "{{.TASKFILE_DIR}}/logs/yaLLM.db.bak" ]; then mv "{{.TASKFILE_DIR}}/logs/yaLLM.db.bak" "{{.TASKFILE_DIR}}/logs/yaLLM.db"; fi'
         platforms: [linux, darwin]
