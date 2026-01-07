@@ -69,6 +69,10 @@ class DatabaseLogRecorder:
         outcome: str | None = None,
         duration_ms: int | None = None,
         request_time: datetime | None = None,
+        stop_reason: str | None = None,
+        full_response: str | None = None,
+        is_tool_call: bool = False,
+        conversation_turn: int | None = None,
     ) -> str:
         """Log a request event to the database.
 
@@ -88,6 +92,10 @@ class DatabaseLogRecorder:
             outcome: Request outcome.
             duration_ms: Request duration in milliseconds.
             request_time: Request timestamp.
+            stop_reason: Finish reason from the response (stop, tool_calls, length, etc.).
+            full_response: Concatenated complete response text.
+            is_tool_call: Whether this request resulted in tool calls.
+            conversation_turn: Turn number in agentic conversation sequence.
 
         Returns:
             The UUID of the created request log.
@@ -118,6 +126,11 @@ class DatabaseLogRecorder:
             usage_stats=usage_stats,
             outcome=outcome,
             duration_ms=duration_ms,
+            # Enhanced logging fields
+            stop_reason=stop_reason,
+            full_response=full_response,
+            is_tool_call=is_tool_call,
+            conversation_turn=conversation_turn,
         )
 
         # Capture the ID before starting async task

@@ -253,13 +253,21 @@ class ConfigStore:
         with self._lock:
             return copy.deepcopy(self._added_raw)
 
-    def get_default_resolved(self) -> dict[str, Any]:
+    def get_default_resolved(self, warn_on_missing: bool = True) -> dict[str, Any]:
         with self._lock:
-            return _substitute_env_vars(copy.deepcopy(self._default_raw), self._default_env)
+            return _substitute_env_vars(
+                copy.deepcopy(self._default_raw),
+                self._default_env,
+                warn_on_missing,
+            )
 
-    def get_added_resolved(self) -> dict[str, Any]:
+    def get_added_resolved(self, warn_on_missing: bool = True) -> dict[str, Any]:
         with self._lock:
-            return _substitute_env_vars(copy.deepcopy(self._added_raw), self._added_env)
+            return _substitute_env_vars(
+                copy.deepcopy(self._added_raw),
+                self._added_env,
+                warn_on_missing,
+            )
 
     def get_runtime_config(self) -> dict[str, Any]:
         default_cfg = self.get_default_resolved()
@@ -277,8 +285,8 @@ class ConfigStore:
         Returns:
             Tuple of (default_models, added_models) lists.
         """
-        default_cfg = self.get_default_resolved()
-        added_cfg = self.get_added_resolved()
+        default_cfg = self.get_default_resolved(warn_on_missing=False)
+        added_cfg = self.get_added_resolved(warn_on_missing=False)
         default_models = _mark_models(
             _ensure_list(default_cfg.get("model_list")), "default", editable=False
         )

@@ -125,6 +125,33 @@ class RequestLog(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         comment="Full request path including query"
     )
 
+    # Enhanced logging fields for stop_reason and agentic workflows
+    stop_reason = Column(
+        String(50),
+        nullable=True,
+        index=True,
+        comment="Finish reason from the response: stop, tool_calls, length, content_filter, etc."
+    )
+
+    full_response = Column(
+        Text,
+        nullable=True,
+        comment="Concatenated complete response text (especially for streaming)"
+    )
+
+    is_tool_call = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        comment="Whether this request resulted in tool/function calls"
+    )
+
+    conversation_turn = Column(
+        Integer,
+        nullable=True,
+        comment="Turn number in agentic conversation sequence"
+    )
+
     @property
     def duration_seconds(self) -> Optional[float]:
         """Get duration in seconds."""
@@ -166,6 +193,11 @@ class RequestLog(Base, UUIDPrimaryKeyMixin, TimestampMixin):
             "outcome": self.outcome,
             "duration_ms": self.duration_ms,
             "duration_seconds": self.duration_seconds,
+            "request_path": self.request_path,
+            "stop_reason": self.stop_reason,
+            "full_response": self.full_response,
+            "is_tool_call": self.is_tool_call,
+            "conversation_turn": self.conversation_turn,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 

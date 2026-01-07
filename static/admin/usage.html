@@ -27,6 +27,16 @@
                 </div>
             </div>
             <div class="top-actions">
+                <a href="/logs" class="btn btn-primary">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                        <polyline points="14 2 14 8 20 8"/>
+                        <line x1="16" y1="13" x2="8" y2="13"/>
+                        <line x1="16" y1="17" x2="8" y2="17"/>
+                        <polyline points="10 9 9 9 8 9"/>
+                    </svg>
+                    View Logs
+                </a>
                 <a href="/admin" class="btn btn-secondary">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
@@ -161,6 +171,14 @@
                                 <tbody id="error-rates">
                                 </tbody>
                             </table>
+                        </div>
+                    </div>
+
+                    <div class="history-section">
+                        <h3>Stop Reason Breakdown</h3>
+                        <p class="panel-subtitle">Distribution of how requests completed</p>
+                        <div id="stop-reasons-container">
+                            <div class="stats-grid" id="stop-reasons-grid"></div>
                         </div>
                     </div>
 

@@ -168,6 +168,15 @@ class RequestLogRecorder:
         self._error_logged = False
         self._request_json: Optional[dict[str, Any]] = None
         self._usage_stats: Optional[dict[str, Any]] = None
+
+        # Enhanced logging fields for stop_reason and agentic workflows
+        self._stop_reason: Optional[str] = None
+        self._accumulated_response_parts: list[str] = []
+        self._accumulated_tool_calls: list[dict[str, Any]] = []
+        self._accumulated_reasoning_content: Optional[str] = None
+        self._conversation_turn: Optional[int] = None
+        self._is_tool_call: bool = False
+
         self._log_parsed_response = bool(log_parsed_response)
         if log_parsed_stream is None:
             self._log_parsed_stream = self._log_parsed_response
@@ -369,6 +378,94 @@ class RequestLogRecorder:
         if usage:
             self._usage_stats = dict(usage)
 
+    def record_stop_reason(self, reason: Optional[str]) -> None:
+        """Record the stop reason from the response.
+
+        Args:
+            reason: The finish reason (stop, tool_calls, length, content_filter, etc.)
+        """
+        if self._finalized:
+            return
+        if reason:
+            self._stop_reason = reason
+            # Also mark as tool call if the reason indicates tool usage
+            if reason in ("tool_calls", "function_call"):
+                self._is_tool_call = True
+            self._append_text(f"stop_reason={reason}\n")
+
+    def record_stream_delta(
+        self,
+        delta: dict[str, Any],
+        chunk_index: int,
+    ) -> None:
+        """Record a streaming delta for response accumulation.
+
+        Accumulates content, tool calls, and reasoning content from stream chunks
+        to build the complete response.
+
+        Args:
+            delta: The delta object from a streaming chunk.
+            chunk_index: Index of this chunk for logging.
+        """
+        if self._finalized:
+            return
+
+        # Accumulate content
+        content = delta.get("content")
+        if isinstance(content, str) and content:
+            self._accumulated_response_parts.append(content)
+
+        # Accumulate tool calls
+        tool_calls = delta.get("tool_calls")
+        if isinstance(tool_calls, list):
+            for tc in tool_calls:
+                if isinstance(tc, dict):
+                    self._accumulated_tool_calls.append(tc)
+
+        # Accumulate reasoning content
+        reasoning = delta.get("reasoning_content")
+        if isinstance(reasoning, str) and reasoning:
+            if self._accumulated_reasoning_content is None:
+                self._accumulated_reasoning_content = ""
+            self._accumulated_reasoning_content += reasoning
+
+    def record_conversation_turn(self, turn: int) -> None:
+        """Record the conversation turn number for agentic workflows.
+
+        Args:
+            turn: The turn number in the conversation sequence.
+        """
+        if self._finalized:
+            return
+        self._conversation_turn = turn
+        self._append_text(f"conversation_turn={turn}\n")
+
+    def mark_as_tool_call(self) -> None:
+        """Mark this request as resulting in tool/function calls."""
+        if self._finalized:
+            return
+        self._is_tool_call = True
+        self._append_text("is_tool_call=true\n")
+
+    def _build_full_response(self) -> Optional[str]:
+        """Build the complete concatenated response from accumulated parts.
+
+        Returns:
+            The concatenated response text, or None if no content.
+        """
+        if not self._accumulated_response_parts:
+            return None
+
+        full_response = "".join(self._accumulated_response_parts)
+
+        # Include reasoning content if present
+        if self._accumulated_reasoning_content:
+            full_response = (
+                f"<think>{self._accumulated_reasoning_content}</think>\n{full_response}"
+            )
+
+        return full_response
+
     def finalize(self, outcome: str) -> None:
         if self._finalized:
             return
@@ -383,6 +480,9 @@ class RequestLogRecorder:
             duration_ms = int((finished_dt - started_dt).total_seconds() * 1000)
         except Exception:
             duration_ms = None
+
+        # Build the full concatenated response
+        full_response = self._build_full_response()
 
         # Save to database (if available)
         if self._db_logger is not None:
@@ -409,6 +509,11 @@ class RequestLogRecorder:
                     outcome=outcome,
                     duration_ms=duration_ms,
                     request_time=datetime.fromisoformat(self._started.replace("Z", "+00:00")),
+                    # Enhanced logging fields
+                    stop_reason=self._stop_reason,
+                    full_response=full_response,
+                    is_tool_call=self._is_tool_call,
+                    conversation_turn=self._conversation_turn,
                 )
             except Exception as e:
                 logger.debug(f"Failed to save request to database: {e}")

@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from threading import Lock
 from typing import Any
 
-# Import database repository for historical data
+# Import database repositories for historical data
 try:
     from .database.repository import get_usage_repository
 except ImportError:
     get_usage_repository = None  # type: ignore
+try:
+    from .database.logs_repository import get_logs_repository
+except ImportError:
+    get_logs_repository = None  # type: ignore
 
 
 class RequestTracker:
@@ -87,13 +91,45 @@ def build_usage_snapshot() -> dict[str, Any]:
     if get_usage_repository is not None:
         try:
             repository = get_usage_repository()
-            total_stats = repository.get_total_stats()
+            end_time = datetime.now(timezone.utc)
+            start_time = end_time - timedelta(days=1)
+            total_stats = repository.get_total_stats(
+                start_time=start_time,
+                end_time=end_time,
+            )
 
             # Get model breakdown
-            requests_by_model = repository.get_requests_per_model(limit=10)
-            error_rates = repository.get_error_rate_by_model()
-            avg_times = repository.get_average_response_time()
-            usage_trends = repository.get_usage_trends(interval="hour", limit=24)
+            requests_by_model = repository.get_requests_per_model(
+                start_time=start_time,
+                end_time=end_time,
+                limit=10,
+            )
+            error_rates = repository.get_error_rate_by_model(
+                start_time=start_time,
+                end_time=end_time,
+            )
+            avg_times = repository.get_average_response_time(
+                start_time=start_time,
+                end_time=end_time,
+            )
+            usage_trends = repository.get_usage_trends(
+                start_time=start_time,
+                end_time=end_time,
+                interval="hour",
+                limit=24,
+            )
+
+            # Get stop reason breakdown from logs repository
+            stop_reasons = []
+            if get_logs_repository is not None:
+                try:
+                    logs_repo = get_logs_repository()
+                    stop_reasons = logs_repo.get_stop_reason_counts(
+                        start_time=start_time,
+                        end_time=end_time,
+                    )
+                except Exception as logs_err:
+                    logger.debug(f"Failed to retrieve stop reason data: {logs_err}")
 
             result["historical"] = {
                 "enabled": True,
@@ -105,6 +141,7 @@ def build_usage_snapshot() -> dict[str, Any]:
                 "error_rates": error_rates,
                 "avg_response_times": avg_times,
                 "usage_trends": usage_trends,
+                "stop_reasons": stop_reasons,
             }
         except Exception as e:
             logger.debug(f"Failed to retrieve historical usage data: {e}")
