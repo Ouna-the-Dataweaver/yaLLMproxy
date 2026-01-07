@@ -90,3 +90,18 @@ tasks:
     desc: Show current heads
     cmds:
       - uv run alembic heads
+
+  db-clean:
+    desc: Clean request/error logs from database
+    cmds:
+      - uv run python scripts/db_clean.py
+
+  db-clean-dry-run:
+    desc: Preview what would be cleaned (dry run)
+    cmds:
+      - uv run python scripts/db_clean.py --dry-run
+
+  db-clean-old:
+    desc: Clean logs older than N days
+    cmds:
+      - uv run python scripts/db_clean.py --all --keep-days={{.KEEPS_DAYS | default "7"}}
