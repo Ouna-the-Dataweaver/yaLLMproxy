@@ -189,11 +189,12 @@
   border: 1px solid var(--border);
   overflow: hidden;
   position: relative;
+  border-radius: 0;
 }
 
 .trend-fill {
   height: 100%;
-  background: linear-gradient(90deg, var(--accent) 0%, var(--accent-hover) 100%);
+  background: var(--accent);
   transition: width 0.3s ease;
 }
 

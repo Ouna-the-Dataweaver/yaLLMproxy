@@ -23,7 +23,13 @@ let state = {
 const formatDate = (isoString) => {
     if (!isoString) return "--";
     const date = new Date(isoString);
-    return date.toLocaleString();
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    const seconds = String(date.getSeconds()).padStart(2, '0');
+    return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
 };
 
 const formatNumber = (value) => {
@@ -217,19 +223,19 @@ const showLogDetail = async (logId) => {
                 </div>
                 <div class="stat-item">
                     <div class="label">Outcome</div>
-                    <div class="value">${getOutcomeBadge(log.outcome)}</div>
+                    <div class="value">${escapeHtml(log.outcome || "Unknown")}</div>
                 </div>
                 <div class="stat-item">
                     <div class="label">Stop Reason</div>
-                    <div class="value">${getStopReasonBadge(log.stop_reason)}</div>
+                    <div class="value">${escapeHtml(log.stop_reason || "--")}</div>
                 </div>
                 <div class="stat-item">
                     <div class="label">Duration</div>
-                    <div class="value">${getDuration(log.duration_ms)}</div>
+                    <div class="value">${escapeHtml(getDuration(log.duration_ms))}</div>
                 </div>
                 <div class="stat-item">
                     <div class="label">Tokens</div>
-                    <div class="value">${getTokens(log.usage_stats)}</div>
+                    <div class="value">${escapeHtml(getTokens(log.usage_stats))}</div>
                 </div>
                 <div class="stat-item">
                     <div class="label">Tool Calls</div>

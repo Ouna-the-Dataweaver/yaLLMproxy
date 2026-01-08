@@ -1,7 +1,7 @@
 """SSE (Server-Sent Events) stream utilities and error detection."""
 
 import json
-from typing import Optional
+from typing import Any, Optional
 
 
 # Max bytes to buffer when checking for streaming errors before committing to client
@@ -58,3 +58,45 @@ def detect_sse_stream_error(data: bytes) -> Optional[str]:
     
     return None
 
+
+class SSEJSONDecoder:
+    """Incremental SSE decoder that extracts JSON payloads from data events."""
+
+    def __init__(self) -> None:
+        self._buffer = ""
+
+    def feed(self, chunk: bytes) -> list[dict[str, Any]]:
+        if not chunk:
+            return []
+        text = chunk.decode("utf-8", errors="replace")
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        self._buffer += text
+
+        payloads: list[dict[str, Any]] = []
+        while True:
+            sep_index = self._buffer.find("\n\n")
+            if sep_index == -1:
+                break
+            raw_event = self._buffer[:sep_index]
+            self._buffer = self._buffer[sep_index + 2:]
+            if not raw_event.strip():
+                continue
+
+            data_lines: list[str] = []
+            for line in raw_event.split("\n"):
+                if line.startswith("data:"):
+                    data_lines.append(line[5:].lstrip())
+            if not data_lines:
+                continue
+            data = "\n".join(data_lines)
+            if data.strip() == "[DONE]":
+                continue
+
+            try:
+                parsed = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                payloads.append(parsed)
+
+        return payloads
