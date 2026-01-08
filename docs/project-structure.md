@@ -78,7 +78,7 @@ yaLLMproxy/
 │
 ├── static/                        # Static files for admin UI
 │   └── admin/
-│       ├── admin_new.html         # Admin UI (v2)
+│       ├── admin.html             # Admin UI
 │       ├── admin.css              # Admin UI styles
 │       ├── admin.js               # Admin UI JavaScript
 │       ├── theme.css              # Theme styles

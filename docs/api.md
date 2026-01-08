@@ -189,7 +189,7 @@ Remove a model added at runtime. Only works for runtime-added models, not for mo
 GET /admin/
 ```
 
-Serve the admin web UI. `/admin/` serves `admin_new.html`.
+Serve the admin web UI. `/admin/` serves `admin.html`.
 
 ---
 

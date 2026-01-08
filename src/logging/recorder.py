@@ -389,7 +389,8 @@ class RequestLogRecorder:
         if reason:
             self._stop_reason = reason
             # Also mark as tool call if the reason indicates tool usage
-            if reason in ("tool_calls", "function_call"):
+            # Different providers use different naming conventions
+            if reason in ("tool_calls", "function_call", "tool_use"):
                 self._is_tool_call = True
             self._append_text(f"stop_reason={reason}\n")
 

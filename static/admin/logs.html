@@ -204,11 +204,12 @@
             left: 0;
             right: 0;
             bottom: 0;
-            background: rgba(0, 0, 0, 0.5);
+            background: rgba(30, 27, 22, 0.4);
             display: flex;
             align-items: center;
             justify-content: center;
             z-index: 1000;
+            backdrop-filter: blur(3px);
         }
 
         .detail-modal.hidden {
@@ -216,14 +217,16 @@
         }
 
         .detail-content {
-            background: var(--bg-secondary);
-            border-radius: 16px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 0;
             width: 90%;
             max-width: 1000px;
             max-height: 90vh;
             overflow: hidden;
             display: flex;
             flex-direction: column;
+            box-shadow: var(--shadow);
         }
 
         .detail-header {
@@ -231,7 +234,9 @@
             justify-content: space-between;
             align-items: center;
             padding: 20px 24px;
-            border-bottom: 1px solid var(--border-subtle);
+            border-bottom: 1px solid var(--border);
+            background: var(--surface-strong);
+            border-radius: 0;
         }
 
         .detail-header h2 {
@@ -256,6 +261,7 @@
             padding: 24px;
             overflow-y: auto;
             flex: 1;
+            background: var(--surface);
         }
 
         .detail-section {
@@ -272,14 +278,15 @@
         }
 
         .detail-section .content {
-            background: var(--bg-tertiary);
-            border-radius: 8px;
+            background: var(--surface-strong);
+            border-radius: 0;
             padding: 16px;
             font-family: "Space Mono", monospace;
             font-size: 13px;
             overflow-x: auto;
             white-space: pre-wrap;
             word-break: break-word;
+            border: 1px solid var(--border);
         }
 
         .stats-grid {
@@ -290,9 +297,10 @@
         }
 
         .stat-item {
-            background: var(--bg-tertiary);
-            border-radius: 8px;
+            background: var(--surface-strong);
+            border-radius: 0;
             padding: 12px;
+            border: 1px solid var(--border);
         }
 
         .stat-item .label {
@@ -304,9 +312,10 @@
         }
 
         .stat-item .value {
-            font-size: 20px;
+            font-size: 14px;
             font-weight: 600;
             margin-top: 4px;
+            word-break: break-word;
         }
 
         .loading {
@@ -325,6 +334,16 @@
             text-align: center;
             padding: 60px;
             color: var(--ink-muted);
+            background: var(--bg-secondary);
+            min-height: 200px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .empty-state.hidden {
+            display: none;
         }
 
         .empty-state h3 {

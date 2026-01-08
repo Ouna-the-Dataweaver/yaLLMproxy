@@ -190,12 +190,12 @@ async def serve_admin_ui():
         The admin HTML page.
     """
     static_dir = Path(__file__).parent.parent.parent.parent / "static" / "admin"
-    index_path = static_dir / "admin_new.html"
+    index_path = static_dir / "admin.html"
     
     if not index_path.exists():
         raise HTTPException(
             status_code=404,
-            detail="Admin UI not found. Please ensure the static/admin directory exists with admin_new.html"
+            detail="Admin UI not found. Please ensure the static/admin directory exists with admin.html"
         )
     
     return FileResponse(index_path)

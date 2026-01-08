@@ -19,8 +19,8 @@ model_list:
       request_timeout: 540
       parameters:
         temperature:
-          default: 1.0
-          allow_override: false  # Always force t=1.0 for this model
+          default: 0.9
+          allow_override: false  # Always force t=0.9 for this model
         top_p:
           default: 0.95
           allow_override: false
