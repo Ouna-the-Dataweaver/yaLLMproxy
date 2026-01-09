@@ -40,7 +40,7 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
-addopts = "-v --tb=short"
+addopts = "-q --tb=short"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src"]

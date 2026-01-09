@@ -446,7 +446,13 @@ class ReasoningSwapParser(ResponseParser):
     name = "swap_reasoning_content"
 
     def __init__(self, config: Mapping[str, Any]) -> None:
-        mode_raw = str(config.get("mode") or "reasoning_to_content").strip().lower()
+        # Load template-derived config if template_path is provided
+        template_config = self._load_template_config(config)
+
+        # Merge configs: manual config takes precedence over template-derived
+        effective_config = {**template_config, **{k: v for k, v in config.items() if v is not None}}
+
+        mode_raw = str(effective_config.get("mode") or "reasoning_to_content").strip().lower()
         mode_aliases = {
             "to_content": "reasoning_to_content",
             "reasoning_to_content": "reasoning_to_content",
@@ -457,10 +463,10 @@ class ReasoningSwapParser(ResponseParser):
             "auto": "auto",
         }
         self.mode = mode_aliases.get(mode_raw, "reasoning_to_content")
-        self.think_tag = str(config.get("think_tag") or "think")
-        self.include_newline = _parse_bool(config.get("include_newline", True))
-        think_open_cfg = config.get("think_open") or {}
-        think_close_cfg = config.get("think_close") or {}
+        self.think_tag = str(effective_config.get("think_tag") or "think")
+        self.include_newline = _parse_bool(effective_config.get("include_newline", True))
+        think_open_cfg = effective_config.get("think_open") or {}
+        think_close_cfg = effective_config.get("think_close") or {}
         if isinstance(think_open_cfg, str):
             self.think_open_prefix = think_open_cfg
             self.think_open_suffix = ""
@@ -479,6 +485,40 @@ class ReasoningSwapParser(ResponseParser):
         else:
             self.think_close_prefix = ""
             self.think_close_suffix = ""
+
+    def _load_template_config(self, config: Mapping[str, Any]) -> dict[str, Any]:
+        """Load configuration from template file if template_path is specified."""
+        template_path = config.get("template_path")
+        if not template_path:
+            return {}
+
+        think_tag = config.get("think_tag") or "think"
+        try:
+            from src.parsers.template_analyzer import load_template_config
+            template_config = load_template_config(template_path, think_tag=think_tag)
+            logger.info(
+                "Loaded swap_reasoning_content config from template: %s "
+                "(think_tag=%s, include_newline=%s)",
+                template_path,
+                template_config.get("think_tag"),
+                template_config.get("include_newline"),
+            )
+            return template_config
+        except FileNotFoundError:
+            logger.warning(
+                "Template file not found for swap_reasoning_content parser: %s. "
+                "Falling back to default configuration.",
+                template_path,
+            )
+            return {}
+        except Exception as e:
+            logger.warning(
+                "Failed to load template for swap_reasoning_content parser: %s. "
+                "Error: %s. Falling back to default configuration.",
+                template_path,
+                e,
+            )
+            return {}
 
     def _think_open(self) -> str:
         return f"{self.think_open_prefix}<{self.think_tag}>{self.think_open_suffix}"

@@ -376,7 +376,64 @@ class RequestLogRecorder:
         if self._finalized:
             return
         if usage:
-            self._usage_stats = dict(usage)
+            self._usage_stats = self.normalize_usage_stats(usage)
+
+    @staticmethod
+    def normalize_usage_stats(usage: dict[str, Any]) -> dict[str, Any]:
+        """Normalize usage statistics to a provider-agnostic format.
+
+        Extracts and standardizes token metrics from different LLM providers.
+        Handles variations in field names and nested structures.
+
+        Args:
+            usage: Raw usage statistics from the LLM provider response.
+
+        Returns:
+            Normalized usage object with standard fields:
+            - prompt_tokens: Input tokens
+            - completion_tokens: Output tokens
+            - total_tokens: Total tokens (or computed sum)
+            - prompt_tokens_details: Normalized input details
+            - completion_tokens_details: Normalized output details
+        """
+        if not usage:
+            return {}
+
+        # Extract core token counts with fallback handling
+        prompt_tokens = usage.get("prompt_tokens") or 0
+        completion_tokens = usage.get("completion_tokens") or 0
+        total_tokens = usage.get("total_tokens") or (prompt_tokens + completion_tokens)
+
+        # Normalize prompt tokens details
+        prompt_details = usage.get("prompt_tokens_details") or {}
+        cached_tokens = prompt_details.get("cached_tokens") or usage.get("cached_tokens") or 0
+
+        # Normalize completion tokens details
+        completion_details = usage.get("completion_tokens_details") or {}
+        reasoning_tokens = completion_details.get("reasoning_tokens") or 0
+
+        # Build normalized structure
+        normalized = {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+        }
+
+        # Add details if any are present
+        if cached_tokens > 0:
+            normalized["prompt_tokens_details"] = {"cached_tokens": cached_tokens}
+
+        if reasoning_tokens > 0:
+            normalized["completion_tokens_details"] = {"reasoning_tokens": reasoning_tokens}
+
+        # Preserve any additional provider-specific fields
+        for key, value in usage.items():
+            if key not in ("prompt_tokens", "completion_tokens", "total_tokens",
+                          "prompt_tokens_details", "completion_tokens_details"):
+                if key not in normalized:
+                    normalized[key] = value
+
+        return normalized
 
     def record_stop_reason(self, reason: Optional[str]) -> None:
         """Record the stop reason from the response.
