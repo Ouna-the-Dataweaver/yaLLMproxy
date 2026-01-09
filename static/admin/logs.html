@@ -363,6 +363,61 @@
             width: 14px;
             height: 14px;
         }
+
+        /* Token badges and stats */
+        .token-cell {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .token-badges {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            cursor: help;
+        }
+
+        .token-stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        .token-stat-item {
+            background: var(--surface-strong);
+            padding: 12px;
+            border: 1px solid var(--border);
+        }
+
+        .token-stat-item .label {
+            font-size: 11px;
+            font-weight: 500;
+            color: var(--ink-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .token-stat-item .value {
+            font-size: 16px;
+            font-weight: 600;
+            margin-top: 4px;
+            word-break: break-word;
+        }
+
+        .highlight-cached {
+            color: var(--success-ink);
+        }
+
+        .highlight-reasoning {
+            color: var(--accent-primary);
+        }
+
+        .badge-primary {
+            background: var(--accent-primary-muted);
+            color: var(--accent-primary);
+        }
     </style>
 </head>
 <body>

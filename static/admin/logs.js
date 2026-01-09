@@ -77,12 +77,42 @@ const getDuration = (durationMs) => {
 };
 
 const getTokens = (usageStats) => {
-    if (!usageStats) return "--";
-    const total = usageStats.total_tokens;
-    if (total) return formatNumber(total);
+    if (!usageStats) return { total: '--', input: '--', output: '--' };
+
     const prompt = usageStats.prompt_tokens || 0;
     const completion = usageStats.completion_tokens || 0;
-    return `${formatNumber(prompt)} + ${formatNumber(completion)}`;
+    const total = usageStats.total_tokens || (prompt + completion);
+
+    // Extract details from nested objects
+    const cached = usageStats.prompt_tokens_details?.cached_tokens || 0;
+    const reasoning = usageStats.completion_tokens_details?.reasoning_tokens || 0;
+
+    return {
+        total: formatNumber(total),
+        input: formatNumber(prompt),
+        output: formatNumber(completion),
+        cached: cached > 0 ? formatNumber(cached) : null,
+        reasoning: reasoning > 0 ? formatNumber(reasoning) : null
+    };
+};
+
+const getTokenBadges = (tokens) => {
+    if (!tokens || tokens.total === '--') {
+        return '<span class="badge badge-neutral">--</span>';
+    }
+
+    let tooltip = '';
+    if (tokens.cached) tooltip += `Cached: ${tokens.cached}\n`;
+    if (tokens.reasoning) tooltip += `Reasoning: ${tokens.reasoning}\n`;
+
+    const badgeHtml = `
+        <div class="token-badges" title="${tooltip.trim()}">
+            <span class="badge badge-neutral" title="Input tokens">${tokens.input}</span>
+            <span class="badge badge-primary" title="Output tokens">${tokens.output}</span>
+        </div>
+    `;
+
+    return badgeHtml;
 };
 
 const buildQueryParams = () => {
@@ -170,7 +200,7 @@ const renderLogs = () => {
             <td>${getStopReasonBadge(log.stop_reason)}</td>
             <td>${getToolCallIndicator(log.is_tool_call)}</td>
             <td>${getDuration(log.duration_ms)}</td>
-            <td>${getTokens(log.usage_stats)}</td>
+            <td>${getTokenBadges(getTokens(log.usage_stats))}</td>
         </tr>
     `).join("");
 
@@ -214,7 +244,35 @@ const showLogDetail = async (logId) => {
         const log = await response.json();
         title.textContent = `Request Log - ${formatDate(log.request_time)}`;
 
-        // Stats grid
+        // Stats grid with enhanced token breakdown
+        const tokens = getTokens(log.usage_stats);
+        const tokenStatsHtml = `
+            <div class="token-stats-grid">
+                <div class="token-stat-item">
+                    <div class="label">Total Tokens</div>
+                    <div class="value">${escapeHtml(tokens.total)}</div>
+                </div>
+                <div class="token-stat-item">
+                    <div class="label">Input Tokens</div>
+                    <div class="value">${escapeHtml(tokens.input)}</div>
+                </div>
+                <div class="token-stat-item">
+                    <div class="label">Output Tokens</div>
+                    <div class="value">${escapeHtml(tokens.output)}</div>
+                </div>
+                ${tokens.cached ? `
+                <div class="token-stat-item">
+                    <div class="label">Cached Tokens</div>
+                    <div class="value highlight-cached">${escapeHtml(tokens.cached)}</div>
+                </div>` : ''}
+                ${tokens.reasoning ? `
+                <div class="token-stat-item">
+                    <div class="label">Reasoning Tokens</div>
+                    <div class="value highlight-reasoning">${escapeHtml(tokens.reasoning)}</div>
+                </div>` : ''}
+            </div>
+        `;
+
         const statsHtml = `
             <div class="stats-grid">
                 <div class="stat-item">
@@ -232,10 +290,6 @@ const showLogDetail = async (logId) => {
                 <div class="stat-item">
                     <div class="label">Duration</div>
                     <div class="value">${escapeHtml(getDuration(log.duration_ms))}</div>
-                </div>
-                <div class="stat-item">
-                    <div class="label">Tokens</div>
-                    <div class="value">${escapeHtml(getTokens(log.usage_stats))}</div>
                 </div>
                 <div class="stat-item">
                     <div class="label">Tool Calls</div>
@@ -304,7 +358,7 @@ const showLogDetail = async (logId) => {
             `;
         }
 
-        body.innerHTML = statsHtml + requestSection + responseSection + chunksSection + usageSection + errorsSection + linkedErrorsSection;
+        body.innerHTML = tokenStatsHtml + statsHtml + requestSection + responseSection + chunksSection + usageSection + errorsSection + linkedErrorsSection;
     } catch (error) {
         console.error("Failed to fetch log details:", error);
         body.innerHTML = `<p style="color: var(--error-ink)">Error loading log details: ${escapeHtml(error.message)}</p>`;
