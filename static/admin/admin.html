@@ -29,12 +29,12 @@
             </div>
             <div class="top-actions">
                 <div class="count-pill">
-                    <span>Default</span>
-                    <strong id="defaultCount">0</strong>
+                    <span>Protected</span>
+                    <strong id="protectedCount">0</strong>
                 </div>
                 <div class="count-pill">
-                    <span>Added</span>
-                    <strong id="addedCount">0</strong>
+                    <span>Unprotected</span>
+                    <strong id="unprotectedCount">0</strong>
                 </div>
                 <button class="btn btn-secondary theme-toggle" type="button" title="Toggle dark mode">
                     <svg class="sun-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -81,12 +81,12 @@
 
         <section class="highlight-strip">
             <div class="highlight">
-                <span>Default Config</span>
-                <strong>Loaded from config_default.yaml.</strong>
+                <span>Protected Models</span>
+                <strong>Require admin password to edit.</strong>
             </div>
             <div class="highlight">
-                <span>Added Models</span>
-                <strong>Persisted in config_added.yaml.</strong>
+                <span>Config</span>
+                <strong>Loaded from config.yaml.</strong>
             </div>
             <div class="highlight">
                 <span>Hint</span>
@@ -97,14 +97,14 @@
         <main class="panel">
             <div class="panel-header">
                 <div>
-                    <h2 class="panel-title">Default Config Models</h2>
-                    <p class="panel-subtitle">Loaded from disk and locked by design.</p>
+                    <h2 class="panel-title">Model Tree</h2>
+                    <p class="panel-subtitle">Inheritance map of base models and their derived children.</p>
                 </div>
             </div>
-            <div id="defaultModelList" class="model-list">
+            <div id="modelTree" class="tree-view">
                 <div class="loading">
                     <div class="spinner"></div>
-                    <span>Loading default models...</span>
+                    <span>Loading model tree...</span>
                 </div>
             </div>
         </main>
@@ -112,14 +112,29 @@
         <main class="panel">
             <div class="panel-header">
                 <div>
-                    <h2 class="panel-title">Added Models</h2>
-                    <p class="panel-subtitle">Registered via admin UI or API calls.</p>
+                    <h2 class="panel-title">Protected Models</h2>
+                    <p class="panel-subtitle">Locked unless admin password is provided.</p>
                 </div>
             </div>
-            <div id="addedModelList" class="model-list">
+            <div id="protectedModelList" class="model-list">
                 <div class="loading">
                     <div class="spinner"></div>
-                    <span>Loading added models...</span>
+                    <span>Loading protected models...</span>
+                </div>
+            </div>
+        </main>
+
+        <main class="panel">
+            <div class="panel-header">
+                <div>
+                    <h2 class="panel-title">Unprotected Models</h2>
+                    <p class="panel-subtitle">Editable without an admin password.</p>
+                </div>
+            </div>
+            <div id="unprotectedModelList" class="model-list">
+                <div class="loading">
+                    <div class="spinner"></div>
+                    <span>Loading unprotected models...</span>
                 </div>
             </div>
         </main>
@@ -220,7 +235,7 @@
                     <div class="form-group">
                         <label class="form-label" for="copyTargetName">New Model Name <span class="required">*</span></label>
                         <input type="text" id="copyTargetName" class="form-input" required placeholder="e.g., gpt-4o-custom">
-                        <p class="form-hint">The copied model will be saved to Added Models</p>
+                        <p class="form-hint">The copied model will be saved to config.yaml</p>
                     </div>
                 </div>
                 <div class="modal-footer">

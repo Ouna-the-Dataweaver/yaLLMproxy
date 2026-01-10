@@ -9,10 +9,9 @@ import yaml
 from fastapi.testclient import TestClient
 
 
-def _load_proxy_with_config(default_path: Path, added_path: Path):
-    """Load the proxy module with specific config files."""
-    os.environ["YALLMP_CONFIG_DEFAULT"] = str(default_path)
-    os.environ["YALLMP_CONFIG_ADDED"] = str(added_path)
+def _load_proxy_with_config(config_path: Path):
+    """Load the proxy module with specific config file."""
+    os.environ["YALLMP_CONFIG"] = str(config_path)
     module_name = f"proxy_test_{uuid.uuid4().hex}"
     
     # Import from src package instead of proxy.py
@@ -26,8 +25,7 @@ def _load_proxy_with_config(default_path: Path, added_path: Path):
     assert spec.loader is not None
     spec.loader.exec_module(module)
     
-    module._test_config_default = default_path
-    module._test_config_added = added_path
+    module._test_config = config_path
     # Return the app and router from the module
     return module
 
@@ -39,6 +37,7 @@ def proxy_module(tmp_path):
         "model_list": [
             {
                 "model_name": "alpha",
+                "protected": True,
                 "model_params": {
                     "model": "openai/gpt-4o-mini",
                     "api_base": "http://alpha.local/v1",
@@ -47,6 +46,7 @@ def proxy_module(tmp_path):
             },
             {
                 "model_name": "beta",
+                "protected": False,
                 "model_params": {
                     "model": "openai/gpt-4o-mini",
                     "api_base": "http://beta.local/v1",
@@ -60,11 +60,9 @@ def proxy_module(tmp_path):
             "enable_responses_endpoint": False,
         },
     }
-    default_path = tmp_path / "config_default.yaml"
-    added_path = tmp_path / "config_added.yaml"
-    default_path.write_text(yaml.safe_dump(config), encoding="utf-8")
-    added_path.write_text(yaml.safe_dump({"model_list": []}), encoding="utf-8")
-    return _load_proxy_with_config(default_path, added_path)
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+    return _load_proxy_with_config(config_path)
 
 
 def test_models_endpoint_lists_configured_backends(proxy_module):
@@ -104,47 +102,39 @@ def test_admin_register_adds_model_and_lists_it(proxy_module):
         model_ids = {entry["id"] for entry in models["data"]}
         assert "gamma" in model_ids
 
-    added_cfg = yaml.safe_load(proxy_module._test_config_added.read_text(encoding="utf-8"))
-    added_names = {entry.get("model_name") for entry in added_cfg.get("model_list", [])}
-    assert "gamma" in added_names
+    cfg = yaml.safe_load(proxy_module._test_config.read_text(encoding="utf-8"))
+    names = {entry.get("model_name") for entry in cfg.get("model_list", [])}
+    assert "gamma" in names
 
 
-def test_admin_register_replaces_added_model(proxy_module):
-    """Test that registering an existing added model replaces it."""
-    new_model = {
-        "model_name": "gamma",
-        "api_base": "http://gamma.local/v1",
-        "api_key": "gamma-key",
-    }
+def test_admin_register_replaces_unprotected_model(proxy_module):
+    """Test that registering an existing unprotected model replaces it."""
     updated_model = {
-        "model_name": "gamma",
-        "api_base": "http://gamma-new.local/v1",
-        "api_key": "gamma-new-key",
+        "model_name": "beta",
+        "api_base": "http://beta-new.local/v1",
+        "api_key": "beta-new-key",
     }
 
     with TestClient(proxy_module.app) as client:
-        register_resp = client.post("/admin/models", json=new_model)
-        assert register_resp.status_code == 200
-
         replace_resp = client.post("/admin/models", json=updated_model)
         assert replace_resp.status_code == 200
         register_body = replace_resp.json()
         assert register_body["status"] == "ok"
-        assert register_body["model"] == "gamma"
+        assert register_body["model"] == "beta"
         assert register_body["replaced"] is True
 
 
-def test_admin_register_rejects_default_name(proxy_module):
-    """Test that added models cannot override default config names."""
-    new_model = {
+def test_admin_register_rejects_protected_without_password(proxy_module):
+    """Test that protected models require a password to modify."""
+    update_model = {
         "model_name": "alpha",
         "api_base": "http://alpha-new.local/v1",
         "api_key": "alpha-new-key",
     }
 
     with TestClient(proxy_module.app) as client:
-        register_resp = client.post("/admin/models", json=new_model)
-        assert register_resp.status_code == 409
+        register_resp = client.post("/admin/models", json=update_model)
+        assert register_resp.status_code == 403
 
 
 def test_chat_completions_requires_model_parameter(proxy_module):

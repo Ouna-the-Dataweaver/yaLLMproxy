@@ -105,8 +105,8 @@ class LogsRepository:
         with self._database.session() as sess:
             result = sess.execute(query)
             logs = [row[0] for row in result.fetchall()]
-            # Convert to dicts while session is still open
-            logs_dicts = [log.to_dict() for log in logs]
+            # Convert to dicts while session is still open, excluding large fields
+            logs_dicts = [self._log_to_summary_dict(log) for log in logs]
 
         return {
             "logs": logs_dicts,
@@ -114,6 +114,37 @@ class LogsRepository:
             "limit": limit,
             "offset": offset,
             "has_more": offset + len(logs) < total_count,
+        }
+
+    def _log_to_summary_dict(self, log: RequestLog) -> dict[str, Any]:
+        """Convert a RequestLog to a dictionary for the list endpoint.
+
+        Excludes large fields like full_response and stream_chunks to improve performance.
+        """
+        return {
+            "id": str(log.id),
+            "request_time": log.request_time.isoformat() if log.request_time else None,
+            "model_name": log.model_name,
+            "is_stream": log.is_stream,
+            "path": log.path,
+            "method": log.method,
+            "query": log.query,
+            "headers": log.headers,
+            # Skip large field: body
+            "route": log.route,
+            "backend_attempts": log.backend_attempts,
+            # Skip large fields: stream_chunks, errors, usage_stats
+            "errors": log.errors,
+            "usage_stats": log.usage_stats,
+            "outcome": log.outcome,
+            "duration_ms": log.duration_ms,
+            "duration_seconds": log.duration_seconds,
+            "request_path": log.request_path,
+            "stop_reason": log.stop_reason,
+            # Skip large field: full_response
+            "is_tool_call": log.is_tool_call,
+            "conversation_turn": log.conversation_turn,
+            "created_at": log.created_at.isoformat() if log.created_at else None,
         }
 
     def get_log_by_id(self, log_id: UUID) -> Optional[dict[str, Any]]:

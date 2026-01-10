@@ -16,32 +16,26 @@ def _write_yaml(path: Path, data: dict) -> None:
     path.write_text(yaml.safe_dump(data), encoding="utf-8")
 
 
-def test_runtime_config_merges_and_marks_editable(tmp_path: Path) -> None:
-    default_path = tmp_path / "config_default.yaml"
-    added_path = tmp_path / "config_added.yaml"
+def test_runtime_config_marks_editable_from_protected(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
     _write_yaml(
-        default_path,
+        config_path,
         {
             "model_list": [
                 {
                     "model_name": "alpha",
+                    "protected": True,
                     "model_params": {"api_base": "http://alpha", "api_key": "a"},
-                }
-            ]
-        },
-    )
-    _write_yaml(
-        added_path,
-        {
-            "model_list": [
+                },
                 {
                     "model_name": "beta",
+                    "protected": False,
                     "model_params": {"api_base": "http://beta", "api_key": "b"},
-                }
+                },
             ]
         },
     )
-    store = ConfigStore(default_path=str(default_path), added_path=str(added_path))
+    store = ConfigStore(config_path=str(config_path))
     runtime = store.get_runtime_config()
     models = runtime.get("model_list", [])
     assert len(models) == 2
@@ -50,24 +44,23 @@ def test_runtime_config_merges_and_marks_editable(tmp_path: Path) -> None:
     assert editable_by_name["beta"] is True
 
 
-def test_upsert_added_model_persists(tmp_path: Path) -> None:
-    default_path = tmp_path / "config_default.yaml"
-    added_path = tmp_path / "config_added.yaml"
-    _write_yaml(default_path, {"model_list": []})
-    _write_yaml(added_path, {"model_list": []})
-    store = ConfigStore(default_path=str(default_path), added_path=str(added_path))
+def test_upsert_model_persists(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    _write_yaml(config_path, {"model_list": []})
+    store = ConfigStore(config_path=str(config_path))
 
     model_entry = {
         "model_name": "gamma",
+        "protected": False,
         "model_params": {"api_base": "http://gamma", "api_key": "g"},
     }
-    replaced = store.upsert_added_model(model_entry, None)
+    replaced = store.upsert_model(model_entry, None)
     assert replaced is False
 
-    data = yaml.safe_load(added_path.read_text(encoding="utf-8"))
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert data["model_list"][0]["model_name"] == "gamma"
 
-    replaced = store.upsert_added_model(model_entry, None)
+    replaced = store.upsert_model(model_entry, None)
     assert replaced is True
 
 
@@ -76,14 +69,14 @@ class TestCopyModel:
 
     def test_copy_model_creates_new_entry(self, tmp_path: Path) -> None:
         """Test that copy_model creates a new model entry."""
-        default_path = tmp_path / "config_default.yaml"
-        added_path = tmp_path / "config_added.yaml"
+        config_path = tmp_path / "config.yaml"
         _write_yaml(
-            default_path,
+            config_path,
             {
                 "model_list": [
                     {
                         "model_name": "source-model",
+                        "protected": True,
                         "model_params": {
                             "api_base": "http://source.local",
                             "api_key": "source-key",
@@ -92,9 +85,8 @@ class TestCopyModel:
                 ]
             },
         )
-        _write_yaml(added_path, {"model_list": []})
 
-        store = ConfigStore(default_path=str(default_path), added_path=str(added_path))
+        store = ConfigStore(config_path=str(config_path))
         new_model = store.copy_model("source-model", "copied-model")
 
         assert new_model["model_name"] == "copied-model"
@@ -102,51 +94,25 @@ class TestCopyModel:
         assert new_model["model_params"]["api_key"] == "source-key"
 
         # Verify it was persisted
-        data = yaml.safe_load(added_path.read_text(encoding="utf-8"))
-        assert len(data["model_list"]) == 1
-        assert data["model_list"][0]["model_name"] == "copied-model"
-
-    def test_copy_model_from_added_config(self, tmp_path: Path) -> None:
-        """Test copying a model from the added config."""
-        default_path = tmp_path / "config_default.yaml"
-        added_path = tmp_path / "config_added.yaml"
-        _write_yaml(default_path, {"model_list": []})
-        _write_yaml(
-            added_path,
-            {
-                "model_list": [
-                    {
-                        "model_name": "added-model",
-                        "model_params": {"api_base": "http://added.local"},
-                    }
-                ]
-            },
-        )
-
-        store = ConfigStore(default_path=str(default_path), added_path=str(added_path))
-        new_model = store.copy_model("added-model", "copied-model")
-
-        assert new_model["model_name"] == "copied-model"
-        assert new_model["model_params"]["api_base"] == "http://added.local"
+        data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        assert len(data["model_list"]) == 2
+        assert data["model_list"][1]["model_name"] == "copied-model"
 
     def test_copy_model_source_not_found_raises(self, tmp_path: Path) -> None:
         """Test appropriate error when source model not found."""
-        default_path = tmp_path / "config_default.yaml"
-        added_path = tmp_path / "config_added.yaml"
-        _write_yaml(default_path, {"model_list": []})
-        _write_yaml(added_path, {"model_list": []})
+        config_path = tmp_path / "config.yaml"
+        _write_yaml(config_path, {"model_list": []})
 
-        store = ConfigStore(default_path=str(default_path), added_path=str(added_path))
+        store = ConfigStore(config_path=str(config_path))
 
         with pytest.raises(ValueError, match="not found"):
             store.copy_model("nonexistent", "new-model")
 
     def test_copy_model_target_exists_raises(self, tmp_path: Path) -> None:
         """Test error when target model name already exists."""
-        default_path = tmp_path / "config_default.yaml"
-        added_path = tmp_path / "config_added.yaml"
+        config_path = tmp_path / "config.yaml"
         _write_yaml(
-            default_path,
+            config_path,
             {
                 "model_list": [
                     {
@@ -160,19 +126,17 @@ class TestCopyModel:
                 ]
             },
         )
-        _write_yaml(added_path, {"model_list": []})
 
-        store = ConfigStore(default_path=str(default_path), added_path=str(added_path))
+        store = ConfigStore(config_path=str(config_path))
 
         with pytest.raises(ValueError, match="already exists"):
             store.copy_model("source-model", "existing-model")
 
     def test_copy_model_preserves_all_settings(self, tmp_path: Path) -> None:
         """Test that all settings are preserved during copy."""
-        default_path = tmp_path / "config_default.yaml"
-        added_path = tmp_path / "config_added.yaml"
+        config_path = tmp_path / "config.yaml"
         _write_yaml(
-            default_path,
+            config_path,
             {
                 "model_list": [
                     {
@@ -194,9 +158,8 @@ class TestCopyModel:
                 ]
             },
         )
-        _write_yaml(added_path, {"model_list": []})
 
-        store = ConfigStore(default_path=str(default_path), added_path=str(added_path))
+        store = ConfigStore(config_path=str(config_path))
         new_model = store.copy_model("full-model", "copied-full")
 
         assert new_model["model_name"] == "copied-full"
@@ -209,10 +172,9 @@ class TestCopyModel:
 
     def test_copy_model_removes_metadata_fields(self, tmp_path: Path) -> None:
         """Test that metadata fields are not copied."""
-        default_path = tmp_path / "config_default.yaml"
-        added_path = tmp_path / "config_added.yaml"
+        config_path = tmp_path / "config.yaml"
         _write_yaml(
-            default_path,
+            config_path,
             {
                 "model_list": [
                     {
@@ -225,9 +187,8 @@ class TestCopyModel:
                 ]
             },
         )
-        _write_yaml(added_path, {"model_list": []})
 
-        store = ConfigStore(default_path=str(default_path), added_path=str(added_path))
+        store = ConfigStore(config_path=str(config_path))
         new_model = store.copy_model("source", "copied")
 
         assert "editable" not in new_model
@@ -236,43 +197,32 @@ class TestCopyModel:
 
     def test_find_model_returns_model(self, tmp_path: Path) -> None:
         """Test that find_model returns the model entry."""
-        default_path = tmp_path / "config_default.yaml"
-        added_path = tmp_path / "config_added.yaml"
+        config_path = tmp_path / "config.yaml"
         _write_yaml(
-            default_path,
+            config_path,
             {
                 "model_list": [
                     {
-                        "model_name": "default-model",
-                        "model_params": {"api_base": "http://default.local"},
-                    }
-                ]
-            },
-        )
-        _write_yaml(
-            added_path,
-            {
-                "model_list": [
+                        "model_name": "first-model",
+                        "model_params": {"api_base": "http://first.local"},
+                    },
                     {
-                        "model_name": "added-model",
-                        "model_params": {"api_base": "http://added.local"},
-                    }
+                        "model_name": "second-model",
+                        "model_params": {"api_base": "http://second.local"},
+                    },
                 ]
             },
         )
 
-        store = ConfigStore(default_path=str(default_path), added_path=str(added_path))
+        store = ConfigStore(config_path=str(config_path))
 
-        # Find from default
-        model = store.find_model("default-model")
+        model = store.find_model("first-model")
         assert model is not None
-        assert model["model_name"] == "default-model"
+        assert model["model_name"] == "first-model"
 
-        # Find from added
-        model = store.find_model("added-model")
+        model = store.find_model("second-model")
         assert model is not None
-        assert model["model_name"] == "added-model"
+        assert model["model_name"] == "second-model"
 
-        # Not found
         model = store.find_model("nonexistent")
         assert model is None

@@ -159,7 +159,7 @@ def main() -> int:
     parser.add_argument(
         "template",
         nargs="?",
-        default="template_example.jinja",
+        default="configs/jinja_templates/template_example.jinja",
         help="Path to the Jinja template.",
     )
     parser.add_argument(

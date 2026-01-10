@@ -45,7 +45,7 @@ def get_database_url() -> str:
     """
     # Try to load from config file
     try:
-        cfg = load_config("configs/config_default.yaml")
+        cfg = load_config("configs/config.yaml")
         db_config = cfg.get("database", {})
 
         backend = db_config.get("backend", "sqlite").lower()

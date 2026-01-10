@@ -2,12 +2,14 @@
 
 import asyncio
 import base64
+import copy
 import json
 import logging
 import os
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Mapping, Optional
+from typing import Any, Collection, Mapping, Optional
 
 # Import database logger for integration
 try:
@@ -19,6 +21,206 @@ logger = logging.getLogger("yallmp-proxy")
 
 # Flag to disable database logging (useful during testing)
 _DB_LOGGING_ENABLED = True
+
+
+@dataclass(frozen=True)
+class DbLogTarget:
+    """Database logging target for a request."""
+
+    instance_key: str = "default"
+    config: Optional[dict[str, Any]] = None
+    enabled: bool = True
+
+
+_DEFAULT_TEST_HEADER = "x-yallmp-test"
+_DEFAULT_TEST_MODEL_NAMES = {"unknown"}
+_DEFAULT_TEST_MODEL_PREFIXES = ("unknown/",)
+_TESTING_INSTANCE_KEY = "testing"
+_TESTING_DETECTION_KEYS = {
+    "enabled",
+    "header",
+    "headers",
+    "model_prefixes",
+    "model_names",
+    "treat_unknown_models_as_test",
+}
+
+
+def _parse_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _normalize_str_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    text = str(value).strip()
+    return [text] if text else []
+
+
+def _truthy_header_value(value: Any) -> bool:
+    if value is None:
+        return False
+    return _parse_bool(str(value), default=False)
+
+
+def _deep_merge_dicts(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    """Deep merge two dictionaries with override values taking precedence."""
+    merged = copy.deepcopy(base)
+    for key, value in override.items():
+        if (
+            key in merged
+            and isinstance(merged[key], dict)
+            and isinstance(value, dict)
+        ):
+            merged[key] = _deep_merge_dicts(merged[key], value)
+        else:
+            merged[key] = copy.deepcopy(value)
+    return merged
+
+
+def _derive_test_sqlite_path(path: str) -> str:
+    if path == ":memory:":
+        return path
+    suffix = Path(path).suffix
+    if suffix:
+        return str(Path(path).with_name(f"{Path(path).stem}.test{suffix}"))
+    return f"{path}.test"
+
+
+def _resolve_base_db_config(db_config: Optional[dict[str, Any]]) -> dict[str, Any]:
+    if db_config is not None:
+        return db_config
+    try:
+        from ..database.factory import get_database
+
+        db_instance = get_database()
+        if getattr(db_instance, "config", None):
+            return db_instance.config
+    except Exception:
+        pass
+    return {
+        "backend": "sqlite",
+        "connection": {"sqlite": {"path": "logs/yaLLM.db"}},
+        "pool_size": 5,
+        "max_overflow": 10,
+    }
+
+
+def _extract_testing_overrides(testing_cfg: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in testing_cfg.items()
+        if key not in _TESTING_DETECTION_KEYS
+    }
+
+
+def _build_test_db_config(
+    base_config: dict[str, Any],
+    testing_cfg: dict[str, Any],
+) -> Optional[dict[str, Any]]:
+    overrides = _extract_testing_overrides(testing_cfg)
+    base_backend = str(base_config.get("backend", "sqlite")).lower()
+
+    if base_backend in {"postgres", "postgresql"} and not overrides:
+        return None
+
+    merged = _deep_merge_dicts({k: v for k, v in base_config.items() if k != "testing"}, overrides)
+    backend = str(merged.get("backend", base_backend)).lower()
+
+    if backend == "sqlite":
+        connection = merged.get("connection") or {}
+        sqlite_cfg = connection.get("sqlite") or {}
+        override_path = (
+            overrides.get("connection", {})
+            .get("sqlite", {})
+            .get("path")
+        )
+        if not override_path:
+            base_path = (
+                base_config.get("connection", {})
+                .get("sqlite", {})
+                .get("path", "logs/yaLLM.db")
+            )
+            sqlite_cfg["path"] = _derive_test_sqlite_path(str(base_path))
+        connection["sqlite"] = sqlite_cfg
+        merged["connection"] = connection
+
+    return merged
+
+
+def _is_test_request(
+    model_name: str,
+    headers: Optional[Mapping[str, str]],
+    known_models: Optional[Collection[str]],
+    testing_cfg: dict[str, Any],
+) -> bool:
+    header_names = _normalize_str_list(
+        testing_cfg.get("headers") or testing_cfg.get("header") or _DEFAULT_TEST_HEADER
+    )
+    if headers and header_names:
+        normalized = {str(k).lower(): v for k, v in headers.items()}
+        for header_name in header_names:
+            if _truthy_header_value(normalized.get(header_name.lower())):
+                return True
+
+    model_names = _normalize_str_list(
+        testing_cfg.get("model_names", _DEFAULT_TEST_MODEL_NAMES)
+    )
+    model_prefixes = _normalize_str_list(
+        testing_cfg.get("model_prefixes", _DEFAULT_TEST_MODEL_PREFIXES)
+    )
+
+    model_lower = (model_name or "").strip().lower()
+    if model_lower:
+        if model_names:
+            name_set = {name.lower() for name in model_names}
+            if model_lower in name_set:
+                return True
+        for prefix in model_prefixes:
+            if model_lower.startswith(prefix.lower()):
+                return True
+
+    treat_unknown = _parse_bool(
+        testing_cfg.get("treat_unknown_models_as_test", True), default=True
+    )
+    if treat_unknown:
+        if not model_lower:
+            return True
+        if known_models is not None and model_name not in known_models:
+            return True
+
+    return False
+
+
+def resolve_db_log_target(
+    model_name: str,
+    headers: Optional[Mapping[str, str]] = None,
+    known_models: Optional[Collection[str]] = None,
+    db_config: Optional[dict[str, Any]] = None,
+) -> DbLogTarget:
+    """Determine which database logger should receive a request."""
+    if not _DB_LOGGING_ENABLED or get_db_logger is None:
+        return DbLogTarget(enabled=False)
+    base_config = _resolve_base_db_config(db_config)
+    testing_cfg = base_config.get("testing") or {}
+    testing_enabled = _parse_bool(testing_cfg.get("enabled", True), default=True)
+    if not testing_enabled:
+        return DbLogTarget()
+
+    if not _is_test_request(model_name, headers, known_models, testing_cfg):
+        return DbLogTarget()
+
+    test_config = _build_test_db_config(base_config, testing_cfg)
+    if test_config is None:
+        return DbLogTarget(instance_key=_TESTING_INSTANCE_KEY, enabled=False)
+
+    return DbLogTarget(instance_key=_TESTING_INSTANCE_KEY, config=test_config, enabled=True)
 
 
 def set_db_logging_enabled(enabled: bool) -> None:
@@ -63,6 +265,7 @@ def log_error_event(
     request_path: Optional[str] = None,
     request_log_path: Optional[Path] = None,
     extra_context: Optional[dict[str, Any]] = None,
+    db_log_target: Optional[DbLogTarget] = None,
 ) -> None:
     """
     Log an error event to the errors subdirectory for easy error tracking.
@@ -117,9 +320,13 @@ def log_error_event(
         error_path.write_text(content, encoding="utf-8")
 
     # Also log to database if available and enabled
-    if _DB_LOGGING_ENABLED and get_db_logger is not None:
+    target = db_log_target or DbLogTarget()
+    if _DB_LOGGING_ENABLED and target.enabled and get_db_logger is not None:
         try:
-            db_logger = get_db_logger()
+            db_logger = get_db_logger(
+                instance_key=target.instance_key,
+                config=target.config,
+            )
             db_logger.log_error(
                 model_name=model_name,
                 error_type=error_type,
@@ -144,6 +351,7 @@ class RequestLogRecorder:
         path: str,
         log_parsed_response: bool = False,
         log_parsed_stream: Optional[bool] = None,
+        db_log_target: Optional[DbLogTarget] = None,
     ) -> None:
         safe_model = self._safe_fragment(model_name or "unknown")
         timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
@@ -189,9 +397,13 @@ class RequestLogRecorder:
         # Initialize database logger (if available and enabled)
         self._db_logger: Optional[Any] = None
         self._db_log_id: Optional[str] = None
-        if _DB_LOGGING_ENABLED and get_db_logger is not None:
+        self._db_log_target = db_log_target or DbLogTarget()
+        if _DB_LOGGING_ENABLED and self._db_log_target.enabled and get_db_logger is not None:
             try:
-                self._db_logger = get_db_logger()
+                self._db_logger = get_db_logger(
+                    instance_key=self._db_log_target.instance_key,
+                    config=self._db_log_target.config,
+                )
             except Exception as e:
                 logger.debug(f"Database logger not available: {e}")
 
@@ -369,6 +581,7 @@ class RequestLogRecorder:
                 http_status=self._last_http_status,
                 request_path=self.request_path,
                 request_log_path=self.log_path,
+                db_log_target=self._db_log_target,
             )
 
     def record_usage_stats(self, usage: dict[str, Any]) -> None:

@@ -65,7 +65,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Print config values for run scripts")
     parser.add_argument(
         "--config",
-        help="Path to config_default.yaml (default: YALLMP_CONFIG_DEFAULT or configs/config_default.yaml)",
+        help="Path to config.yaml (default: YALLMP_CONFIG or configs/config.yaml)",
     )
     args = parser.parse_args()
 

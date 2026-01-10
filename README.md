@@ -28,8 +28,8 @@ Yet Another LLM Proxy - A lightweight, modular LLM proxy with OpenAI-compatible 
 # Install dependencies
 uv sync
 
-# Configure your API keys in configs/.env_default
-# Edit configs/config_default.yaml to add your models
+# Configure your API keys in configs/.env
+# Edit configs/config.yaml to add your models
 
 # Run the proxy
 uv run python -m src.main
@@ -63,6 +63,7 @@ curl http://localhost:7979/v1/models
 ```yaml
 model_list:
   - model_name: my-model           # Display name for the model
+    protected: true                # Requires admin password to edit/delete
     model_params:
       api_base: https://api.example.com/v1  # Backend URL
       api_key: sk-xxx              # API key (use env vars for security)
@@ -116,6 +117,8 @@ forwarder_settings:
     port: 7979                     # Proxy port
 ```
 
+Protected models require `YALLMP_ADMIN_PASSWORD` in `configs/.env` for edits/deletes via admin APIs.
+
 Per-model parser overrides can be added to individual entries in `model_list`.
 When present, they replace the global `proxy_settings.parsers` config for that model.
 If `enabled` is omitted, per-model parsers default to enabled (set `enabled: false`
@@ -125,7 +128,7 @@ To help align formatting with a Jinja chat template, you can inspect a template
 and print suggested `think_open`/`think_close` prefixes and suffixes:
 
 ```bash
-uv run python scripts/inspect_template.py template_example.jinja
+uv run python scripts/inspect_template.py configs/jinja_templates/template_example.jinja
 ```
 
 Copy the suggested values into your `swap_reasoning_content` config. If you set
@@ -150,7 +153,7 @@ model_list:
 
 The TCP forwarder is optional but useful when you need a separate inbound port or a separate process for the inbound traffic (e.g. you have a VPN which you must use for API access, but it breaks inbound traffic(or WSL shenanigans), in that case you can whitelist the forwarder executable/process, or run forwader in windows, and keep proxy running under VPN/in WSL etc.):
 
-It reads `forwarder_settings` from `configs/config_default.yaml`. You can override with
+It reads `forwarder_settings` from `configs/config.yaml`. You can override with
 `FORWARD_LISTEN_HOST`, `FORWARD_LISTEN_PORT`, `FORWARD_TARGET_HOST`,
 `FORWARD_TARGET_PORT` at runtime.
 
@@ -194,7 +197,7 @@ curl -X POST http://localhost:7979/admin/config/reload
 Or use the **Reload** button in the admin UI (`/admin/`).
 
 This will:
-1. Reload `config_default.yaml` and `config_added.yaml` from disk
+1. Reload `config.yaml` from disk
 2. Re-parse all models and backends
 3. Update the router's runtime state atomically
 
@@ -232,7 +235,7 @@ database:
       password: ${DB_PASSWORD}
 ```
 
-Add credentials to your `.env_added` file:
+Add credentials to your `.env` file:
 
 ```bash
 DB_USER=your_postgres_user

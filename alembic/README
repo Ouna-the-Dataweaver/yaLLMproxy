@@ -26,4 +26,4 @@ uv run alembic current
 
 ## Configuration
 
-The migration environment is configured in `env.py` and reads database settings from `configs/config_default.yaml`.
+The migration environment is configured in `env.py` and reads database settings from `configs/config.yaml`.

@@ -107,7 +107,9 @@ Register or replace a backend at runtime without restarting the proxy.
   "target_model": "gpt-4",
   "request_timeout": 60,
   "supports_reasoning": true,
-  "fallbacks": ["backup-model"]
+  "extends": "base-model",
+  "fallbacks": ["backup-model"],
+  "protected": false
 }
 ```
 
@@ -115,10 +117,15 @@ Register or replace a backend at runtime without restarting the proxy.
 
 ```json
 {
-  "success": true,
-  "message": "Model 'my-model' registered successfully"
+  "status": "ok",
+  "model": "my-model",
+  "replaced": false,
+  "fallbacks": ["backup-model"],
+  "protected": false
 }
 ```
+
+**Protected models:** If the model is protected (or you are modifying a protected model), include the admin password via `x-admin-password` header or `admin_password` in the request body/query.
 
 ### Get Full Configuration
 
@@ -126,7 +133,7 @@ Register or replace a backend at runtime without restarting the proxy.
 GET /admin/config
 ```
 
-Returns the full runtime configuration (models, settings).
+Returns the full runtime configuration (models, settings). API keys are removed from the response.
 
 **Response:**
 
@@ -146,24 +153,89 @@ PUT /admin/config
 
 Update runtime configuration. Body format same as GET response.
 
+Protected models require the admin password via `x-admin-password` header (or `admin_password` in the request body/query).
+
 ### List Models
 
 ```http
 GET /admin/models
 ```
 
-List all registered models with their source (default/added) and editability.
+List all registered models, grouped by protection status. API keys are removed from the response.
 
 **Response:**
 
 ```json
-[
-  {
-    "model_name": "gpt-4",
-    "source": "default",
-    "editable": false
+{
+  "protected": [
+    {"model_name": "gpt-4", "protected": true, "editable": false}
+  ],
+  "unprotected": [
+    {"model_name": "gpt-4-mini", "protected": false, "editable": true}
+  ]
+}
+```
+
+### Model Tree
+
+```http
+GET /admin/models/tree
+```
+
+Returns the full inheritance tree (parents/children). API keys are removed from the response.
+
+**Response:**
+
+```json
+{
+  "roots": ["base-model"],
+  "nodes": {
+    "base-model": {
+      "config": {"model_name": "base-model", "model_params": {...}},
+      "parent": null,
+      "children": ["derived-model"],
+      "protected": true,
+      "editable": false
+    }
   }
-]
+}
+```
+
+### Model Ancestry
+
+```http
+GET /admin/models/{model_name}/ancestry
+```
+
+Returns the inheritance chain for a model.
+
+**Response:**
+
+```json
+{
+  "model": "derived-model",
+  "chain": ["derived-model", "base-model"],
+  "inheritance_depth": 2
+}
+```
+
+### Model Dependents
+
+```http
+GET /admin/models/{model_name}/dependents
+```
+
+Returns direct children and all descendants of a model.
+
+**Response:**
+
+```json
+{
+  "model": "base-model",
+  "direct_children": ["derived-model"],
+  "all_descendants": ["derived-model"],
+  "descendant_count": 1
+}
 ```
 
 ### Delete Runtime Model
@@ -172,16 +244,37 @@ List all registered models with their source (default/added) and editability.
 DELETE /admin/models/{model_name}
 ```
 
-Remove a model added at runtime. Only works for runtime-added models, not for models loaded from `config_default.yaml`. To remove config-loaded models, edit `config_default.yaml` and restart the proxy.
+Remove a model from config/runtime. Protected models require the admin password.
+
+Use `?cascade=true` to delete dependents.
 
 **Response:**
 
 ```json
 {
-  "success": true,
-  "message": "Model 'my-model' deleted successfully"
+  "status": "ok",
+  "message": "Deleted 2 model(s)",
+  "deleted": ["base-model", "derived-model"]
 }
 ```
+
+If dependents exist and `cascade` is not set:
+
+```json
+{
+  "error": "Cannot delete model with existing dependents",
+  "dependents": ["derived-model"],
+  "hint": "Set cascade=true to delete dependents, or update them to use a different parent"
+}
+```
+
+### Copy Model
+
+```http
+POST /admin/models/copy?source={source}&target={target}
+```
+
+Copy an existing model to a new model name. Protected source models require the admin password.
 
 ### Serve Admin UI
 

@@ -1,16 +1,18 @@
 """Admin endpoints for runtime model registration."""
 
+import hmac
 import json
 import logging
 from typing import Any, Optional
 
 from fastapi import HTTPException, Request
 
-from ...config_store import CONFIG_STORE
+from ...config_store import CONFIG_STORE, _normalize_protected
 from ...core import Backend, extract_api_type, extract_target_model
 from ...core.registry import get_router
 
 logger = logging.getLogger("yallmp-proxy")
+ADMIN_PASSWORD_HEADER = "x-admin-password"
 
 
 def _normalize_timeout(value: Any) -> Optional[float]:
@@ -32,6 +34,40 @@ def _normalize_fallbacks(value: Any) -> Optional[list[str]]:
     if isinstance(value, str):
         return [value]
     raise ValueError("fallbacks must be a string or list of strings")
+
+
+def _extract_admin_password(request: Request, payload: dict[str, Any]) -> str | None:
+    header = request.headers.get(ADMIN_PASSWORD_HEADER)
+    if header and header.strip():
+        return header.strip()
+    query = request.query_params.get("admin_password")
+    if query and query.strip():
+        return query.strip()
+    value = payload.get("admin_password")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def _require_admin_password(request: Request, payload: dict[str, Any], detail: str) -> None:
+    expected = CONFIG_STORE.get_admin_password()
+    if not expected:
+        raise HTTPException(
+            status_code=403,
+            detail="Admin password is not configured in .env",
+        )
+    provided = _extract_admin_password(request, payload)
+    if not provided or not hmac.compare_digest(provided, expected):
+        raise HTTPException(status_code=403, detail=detail)
+
+
+def _payload_has_api_key(payload: dict[str, Any]) -> bool:
+    if "api_key" in payload:
+        return True
+    params = payload.get("model_params")
+    if isinstance(params, dict) and "api_key" in params:
+        return True
+    return False
 
 
 def _backend_from_runtime_payload(
@@ -97,15 +133,6 @@ def _backend_from_runtime_payload(
     return backend, fallbacks, model_entry
 
 
-def _normalize_config_scope(value: Any) -> str:
-    if value is None:
-        return "added"
-    scope = str(value).strip().lower()
-    if scope in {"added", "default"}:
-        return scope
-    raise ValueError("config_scope must be 'added' or 'default'")
-
-
 def _build_model_entry(
     payload: dict[str, Any],
     model_name: str,
@@ -119,7 +146,7 @@ def _build_model_entry(
     params = dict(payload.get("model_params") or {})
     if not params:
         params = dict(payload)
-        for key in ("model_name", "name", "fallbacks", "config_scope"):
+        for key in ("model_name", "name", "fallbacks", "protected", "admin_password"):
             params.pop(key, None)
 
     if "api_base" not in params and "base_url" in params:
@@ -150,6 +177,8 @@ def _build_model_entry(
         "model_name": model_name,
         "model_params": params,
     }
+    if "extends" in payload:
+        entry["extends"] = payload.get("extends")
     for key in ("parameters", "parsers"):
         if key in payload:
             entry[key] = payload[key]
@@ -170,7 +199,7 @@ async def register_model(request: Request) -> dict:
         - api_type: Optional API type (default: "openai")
         - target_model: Optional target model name override
         - supports_reasoning: Optional bool for reasoning support
-    - config_scope: Optional target config ("added" or "default", default: "added")
+    - protected: Optional bool to mark the model as password-protected
     
     Returns:
         A dictionary with status, model name, and whether it was replaced.
@@ -183,39 +212,58 @@ async def register_model(request: Request) -> dict:
 
     try:
         backend, fallbacks, model_entry = _backend_from_runtime_payload(payload)
-        config_scope = _normalize_config_scope(payload.get("config_scope"))
     except ValueError as exc:
         logger.error("Failed to register model: %s", exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    default_models = CONFIG_STORE.get_default_raw().get("model_list", []) or []
-    added_models = CONFIG_STORE.get_added_raw().get("model_list", []) or []
-    default_names = {m.get("model_name") for m in default_models}
-    added_names = {m.get("model_name") for m in added_models}
-
-    if config_scope == "added" and backend.name in default_names:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"Model '{backend.name}' exists in config_default.yaml. "
-                "Use config_scope='default' or choose another name."
-            ),
+    existing_model = CONFIG_STORE.find_model(backend.name)
+    existing_protected = False
+    if existing_model:
+        existing_protected = _normalize_protected(
+            existing_model.get("protected"), default=True
         )
-    if config_scope == "default" and backend.name in added_names:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"Model '{backend.name}' exists in config_added.yaml. "
-                "Delete it first or choose another name."
-            ),
+
+    requested_protected_raw = payload.get("protected")
+    if requested_protected_raw is None:
+        effective_protected = existing_protected if existing_model else False
+    else:
+        effective_protected = _normalize_protected(
+            requested_protected_raw,
+            default=existing_protected if existing_model else False,
+        )
+
+    if existing_protected or effective_protected:
+        _require_admin_password(
+            request,
+            payload,
+            detail=f"Admin password required to modify protected model '{backend.name}'",
         )
 
     router = get_router()
-    backend.editable = config_scope == "added"
-    if config_scope == "default":
-        replaced = CONFIG_STORE.upsert_default_model(model_entry, fallbacks)
-    else:
-        replaced = CONFIG_STORE.upsert_added_model(model_entry, fallbacks)
+    backend.editable = not effective_protected
+
+    payload_has_key = _payload_has_api_key(payload)
+    if not payload_has_key and existing_model:
+        existing_params = existing_model.get("model_params") or {}
+        if "api_key" in existing_params:
+            model_entry.setdefault("model_params", {})["api_key"] = existing_params["api_key"]
+
+    if not payload_has_key:
+        existing_backend = router.backends.get(backend.name)
+        if existing_backend and existing_backend.api_key:
+            backend.api_key = existing_backend.api_key
+        else:
+            runtime_cfg = CONFIG_STORE.get_runtime_config()
+            for model in runtime_cfg.get("model_list", []):
+                if model.get("model_name") == backend.name:
+                    params = model.get("model_params") or {}
+                    api_key = params.get("api_key")
+                    if isinstance(api_key, str) and api_key:
+                        backend.api_key = api_key
+                    break
+
+    model_entry["protected"] = effective_protected
+    replaced = CONFIG_STORE.upsert_model(model_entry, fallbacks)
 
     await router.register_backend(backend, fallbacks)
     logger.info(
@@ -230,5 +278,5 @@ async def register_model(request: Request) -> dict:
         "model": backend.name,
         "replaced": replaced,
         "fallbacks": fallbacks or [],
-        "config_scope": config_scope,
+        "protected": effective_protected,
     }

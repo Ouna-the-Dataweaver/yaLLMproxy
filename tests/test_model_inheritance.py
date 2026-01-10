@@ -257,37 +257,31 @@ class TestConfigStoreInheritance:
 
     def test_runtime_config_resolves_inheritance(self, tmp_path: Path) -> None:
         """Test that get_runtime_config resolves inheritance."""
-        default_path = tmp_path / "config_default.yaml"
-        added_path = tmp_path / "config_added.yaml"
+        config_path = tmp_path / "config.yaml"
 
         _write_yaml(
-            default_path,
+            config_path,
             {
                 "model_list": [
                     {
                         "model_name": "base",
+                        "protected": True,
                         "model_params": {
                             "api_base": "http://base.local",
                             "api_key": "base-key",
                         },
-                    }
-                ]
-            },
-        )
-        _write_yaml(
-            added_path,
-            {
-                "model_list": [
+                    },
                     {
                         "model_name": "derived",
+                        "protected": False,
                         "extends": "base",
                         "model_params": {"api_key": "derived-key"},
-                    }
+                    },
                 ]
             },
         )
 
-        store = ConfigStore(default_path=str(default_path), added_path=str(added_path))
+        store = ConfigStore(config_path=str(config_path))
         runtime = store.get_runtime_config()
         models = runtime.get("model_list", [])
 
@@ -295,59 +289,53 @@ class TestConfigStoreInheritance:
         derived = next(m for m in models if m["model_name"] == "derived")
         assert derived["model_params"]["api_base"] == "http://base.local"
         assert derived["model_params"]["api_key"] == "derived-key"
-        assert derived.get("editable") is True  # From added config
+        assert derived.get("editable") is True  # protected=False
 
     def test_list_models_resolves_inheritance(self, tmp_path: Path) -> None:
         """Test that list_models resolves inheritance."""
-        default_path = tmp_path / "config_default.yaml"
-        added_path = tmp_path / "config_added.yaml"
+        config_path = tmp_path / "config.yaml"
 
         _write_yaml(
-            default_path,
+            config_path,
             {
                 "model_list": [
                     {
                         "model_name": "base",
+                        "protected": True,
                         "model_params": {"api_base": "http://base.local"},
-                    }
-                ]
-            },
-        )
-        _write_yaml(
-            added_path,
-            {
-                "model_list": [
+                    },
                     {
                         "model_name": "derived",
+                        "protected": False,
                         "extends": "base",
                         "model_params": {"extra": "value"},
-                    }
+                    },
                 ]
             },
         )
 
-        store = ConfigStore(default_path=str(default_path), added_path=str(added_path))
-        default_models, added_models = store.list_models()
+        store = ConfigStore(config_path=str(config_path))
+        protected_models, unprotected_models = store.list_models()
 
-        assert len(default_models) == 1
-        assert len(added_models) == 1
+        assert len(protected_models) == 1
+        assert len(unprotected_models) == 1
 
-        derived = added_models[0]
+        derived = unprotected_models[0]
         assert derived["model_name"] == "derived"
         assert derived["model_params"]["api_base"] == "http://base.local"
         assert derived["model_params"]["extra"] == "value"
 
-    def test_added_model_extends_default_model(self, tmp_path: Path) -> None:
-        """Test that added models can extend default models."""
-        default_path = tmp_path / "config_default.yaml"
-        added_path = tmp_path / "config_added.yaml"
+    def test_model_extends_base_model(self, tmp_path: Path) -> None:
+        """Test that models can extend other models."""
+        config_path = tmp_path / "config.yaml"
 
         _write_yaml(
-            default_path,
+            config_path,
             {
                 "model_list": [
                     {
                         "model_name": "GLM-4.7",
+                        "protected": True,
                         "model_params": {
                             "api_type": "openai",
                             "model": "GLM-4.7",
@@ -358,26 +346,20 @@ class TestConfigStoreInheritance:
                             "enabled": True,
                             "response": ["swap_reasoning_content"],
                         },
-                    }
-                ]
-            },
-        )
-        _write_yaml(
-            added_path,
-            {
-                "model_list": [
+                    },
                     {
                         "model_name": "GLM-4.7:Cursor",
+                        "protected": False,
                         "extends": "GLM-4.7",
                         "parsers": {
                             "response": ["parse_unparsed", "swap_reasoning_content"],
                         },
-                    }
+                    },
                 ]
             },
         )
 
-        store = ConfigStore(default_path=str(default_path), added_path=str(added_path))
+        store = ConfigStore(config_path=str(config_path))
         runtime = store.get_runtime_config()
         models = runtime.get("model_list", [])
 
@@ -391,36 +373,30 @@ class TestConfigStoreInheritance:
 
     def test_list_models_without_inheritance_resolution(self, tmp_path: Path) -> None:
         """Test that list_models can skip inheritance resolution."""
-        default_path = tmp_path / "config_default.yaml"
-        added_path = tmp_path / "config_added.yaml"
+        config_path = tmp_path / "config.yaml"
 
         _write_yaml(
-            default_path,
+            config_path,
             {
                 "model_list": [
                     {
                         "model_name": "base",
+                        "protected": True,
                         "model_params": {"api_base": "http://base.local"},
-                    }
-                ]
-            },
-        )
-        _write_yaml(
-            added_path,
-            {
-                "model_list": [
+                    },
                     {
                         "model_name": "derived",
+                        "protected": False,
                         "extends": "base",
-                    }
+                    },
                 ]
             },
         )
 
-        store = ConfigStore(default_path=str(default_path), added_path=str(added_path))
-        _, added_models = store.list_models(resolve_inheritance=False)
+        store = ConfigStore(config_path=str(config_path))
+        _, unprotected_models = store.list_models(resolve_inheritance=False)
 
-        derived = added_models[0]
+        derived = unprotected_models[0]
         # 'extends' should still be present since inheritance wasn't resolved
         assert derived.get("extends") == "base"
         # model_params should NOT have the inherited api_base
@@ -434,41 +410,35 @@ class TestRouterWithInheritedModels:
 
     def test_router_parses_inherited_model(self, tmp_path: Path) -> None:
         """Test that router correctly handles inherited models from config."""
-        default_path = tmp_path / "config_default.yaml"
-        added_path = tmp_path / "config_added.yaml"
+        config_path = tmp_path / "config.yaml"
 
         _write_yaml(
-            default_path,
+            config_path,
             {
                 "model_list": [
                     {
                         "model_name": "base-model",
+                        "protected": True,
                         "model_params": {
                             "api_type": "openai",
                             "api_base": "http://base.local/v1",
                             "api_key": "base-key",
                             "request_timeout": 120,
                         },
-                    }
-                ]
-            },
-        )
-        _write_yaml(
-            added_path,
-            {
-                "model_list": [
+                    },
                     {
                         "model_name": "derived-model",
+                        "protected": False,
                         "extends": "base-model",
                         "model_params": {
                             "api_key": "derived-key",
                         },
-                    }
+                    },
                 ]
             },
         )
 
-        store = ConfigStore(default_path=str(default_path), added_path=str(added_path))
+        store = ConfigStore(config_path=str(config_path))
         config = store.get_runtime_config()
 
         router = ProxyRouter(config)
@@ -485,15 +455,15 @@ class TestRouterWithInheritedModels:
 
     def test_router_with_inherited_parsers(self, tmp_path: Path) -> None:
         """Test that router correctly handles inherited parser configuration."""
-        default_path = tmp_path / "config_default.yaml"
-        added_path = tmp_path / "config_added.yaml"
+        config_path = tmp_path / "config.yaml"
 
         _write_yaml(
-            default_path,
+            config_path,
             {
                 "model_list": [
                     {
                         "model_name": "base-model",
+                        "protected": True,
                         "model_params": {
                             "api_base": "http://base.local/v1",
                             "api_key": "base-key",
@@ -505,26 +475,20 @@ class TestRouterWithInheritedModels:
                                 "mode": "reasoning_to_content",
                             },
                         },
-                    }
-                ]
-            },
-        )
-        _write_yaml(
-            added_path,
-            {
-                "model_list": [
+                    },
                     {
                         "model_name": "derived-model",
+                        "protected": False,
                         "extends": "base-model",
                         "parsers": {
                             "response": ["parse_unparsed", "swap_reasoning_content"],
                         },
-                    }
+                    },
                 ]
             },
         )
 
-        store = ConfigStore(default_path=str(default_path), added_path=str(added_path))
+        store = ConfigStore(config_path=str(config_path))
         config = store.get_runtime_config()
 
         router = ProxyRouter(config)
@@ -537,15 +501,15 @@ class TestRouterWithInheritedModels:
 
     def test_router_with_inherited_parameters(self, tmp_path: Path) -> None:
         """Test that router correctly handles inherited parameter overrides."""
-        default_path = tmp_path / "config_default.yaml"
-        added_path = tmp_path / "config_added.yaml"
+        config_path = tmp_path / "config.yaml"
 
         _write_yaml(
-            default_path,
+            config_path,
             {
                 "model_list": [
                     {
                         "model_name": "base-model",
+                        "protected": True,
                         "model_params": {
                             "api_base": "http://base.local/v1",
                             "api_key": "base-key",
@@ -554,26 +518,20 @@ class TestRouterWithInheritedModels:
                             "temperature": {"default": 1.0, "allow_override": False},
                             "top_p": {"default": 0.95, "allow_override": False},
                         },
-                    }
-                ]
-            },
-        )
-        _write_yaml(
-            added_path,
-            {
-                "model_list": [
+                    },
                     {
                         "model_name": "derived-model",
+                        "protected": False,
                         "extends": "base-model",
                         "parameters": {
                             "temperature": {"default": 0.7},  # Override temperature
                         },
-                    }
+                    },
                 ]
             },
         )
 
-        store = ConfigStore(default_path=str(default_path), added_path=str(added_path))
+        store = ConfigStore(config_path=str(config_path))
         config = store.get_runtime_config()
 
         router = ProxyRouter(config)
@@ -599,52 +557,33 @@ class TestDynamicInheritance:
     """
 
     def test_updates_to_base_model_propagate_to_derived(self, tmp_path: Path) -> None:
-        """Test that updating a base model updates derived models.
-
-        This test verifies dynamic inheritance: when a base model's configuration
-        is changed, derived models that extend it should automatically reflect
-        those changes.
-
-        CURRENT BEHAVIOR: This test PASSES because get_runtime_config() re-resolves
-        inheritance on each call. However, this is not true dynamic inheritance
-        because the 'extends' field is removed after resolution.
-
-        EXPECTED BEHAVIOR: The test should work, but the underlying issue is that
-        the 'extends' field is not preserved, making true dynamic inheritance
-        impossible (changes only propagate until next config load).
-        """
-        default_path = tmp_path / "config_default.yaml"
-        added_path = tmp_path / "config_added.yaml"
+        """Test that updating a base model updates derived models."""
+        config_path = tmp_path / "config.yaml"
 
         # Initial config with base and derived model
         _write_yaml(
-            default_path,
+            config_path,
             {
                 "model_list": [
                     {
                         "model_name": "base-model",
+                        "protected": True,
                         "model_params": {
                             "api_base": "http://base.local/v1",
                             "api_key": "base-key",
                             "request_timeout": 120,
                         },
-                    }
-                ]
-            },
-        )
-        _write_yaml(
-            added_path,
-            {
-                "model_list": [
+                    },
                     {
                         "model_name": "derived-model",
+                        "protected": False,
                         "extends": "base-model",
-                    }
+                    },
                 ]
             },
         )
 
-        store = ConfigStore(default_path=str(default_path), added_path=str(added_path))
+        store = ConfigStore(config_path=str(config_path))
 
         # Initial load - derived model should inherit timeout from base
         initial_config = store.get_runtime_config()
@@ -661,13 +600,14 @@ class TestDynamicInheritance:
         # Update the base model to have a different timeout
         base_entry = {
             "model_name": "base-model",
+            "protected": True,
             "model_params": {
                 "api_base": "http://base.local/v1",
                 "api_key": "base-key",
                 "request_timeout": 300,  # Changed from 120 to 300
             },
         }
-        store.upsert_default_model(base_entry, None)
+        store.upsert_model(base_entry, None)
 
         # Reload to pick up changes
         store.reload()
@@ -690,45 +630,31 @@ class TestDynamicInheritance:
         )
 
     def test_base_model_deletion_affects_derived(self, tmp_path: Path) -> None:
-        """Test that deleting a base model affects derived models.
-
-        CURRENT BEHAVIOR: This test FAILS. When base model is deleted,
-        the derived model with 'extends' cannot be resolved and the error
-        is logged, but the unresolved model persists in the config.
-
-        EXPECTED BEHAVIOR: Deleting a base model should cause derived models to
-        either also be deleted or fail validation gracefully.
-        """
-        default_path = tmp_path / "config_default.yaml"
-        added_path = tmp_path / "config_added.yaml"
+        """Test that deleting a base model affects derived models."""
+        config_path = tmp_path / "config.yaml"
 
         _write_yaml(
-            default_path,
+            config_path,
             {
                 "model_list": [
                     {
                         "model_name": "base-model",
+                        "protected": True,
                         "model_params": {
                             "api_base": "http://base.local/v1",
                             "api_key": "base-key",
                         },
-                    }
-                ]
-            },
-        )
-        _write_yaml(
-            added_path,
-            {
-                "model_list": [
+                    },
                     {
                         "model_name": "derived-model",
+                        "protected": False,
                         "extends": "base-model",
-                    }
+                    },
                 ]
             },
         )
 
-        store = ConfigStore(default_path=str(default_path), added_path=str(added_path))
+        store = ConfigStore(config_path=str(config_path))
 
         # Verify initial state - derived model should exist with inherited values
         initial_config = store.get_runtime_config()
@@ -739,12 +665,12 @@ class TestDynamicInheritance:
         assert derived is not None, "Derived model should exist initially"
         assert derived["model_params"]["api_base"] == "http://base.local/v1"
 
-        # Delete the base model from default config
-        default_config = store.get_default_raw()
-        default_config["model_list"] = [
-            m for m in default_config.get("model_list", []) if m.get("model_name") != "base-model"
+        # Delete the base model from config
+        config = store.get_raw()
+        config["model_list"] = [
+            m for m in config.get("model_list", []) if m.get("model_name") != "base-model"
         ]
-        store.save_default(default_config)
+        store.save(config)
 
         # Reload to pick up changes
         store.reload()
@@ -756,10 +682,6 @@ class TestDynamicInheritance:
             None
         )
 
-        # This FAILS: derived model still exists (unresolved) when base is deleted
-        # The error message in the logs shows "base model not found" but derived is not removed
-        assert derived is None, (
-            "Derived model should be deleted when base model is deleted. "
-            "Currently derived models persist even when base is removed, "
-            "and 'extends' field remains in the unresolved config."
-        )
+        # Derived model remains unresolved when base is deleted
+        assert derived is not None
+        assert derived.get("extends") == "base-model"
