@@ -12,7 +12,7 @@ The database module provides:
 
 ## Configuration
 
-Add database settings to your `configs/config_default.yaml`:
+Add database settings to your `configs/config.yaml`:
 
 ```yaml
 database:
@@ -40,7 +40,7 @@ database:
 
 ### Environment Variables
 
-For PostgreSQL, add these to your `.env_added` file:
+For PostgreSQL, add these to your `.env` file:
 
 ```bash
 DB_USER=your_postgres_user
@@ -125,7 +125,7 @@ task db:rollback
 
 ### SQLite to PostgreSQL
 
-1. Update `configs/config_default.yaml`:
+1. Update `configs/config.yaml`:
    ```yaml
    database:
      backend: postgres
@@ -138,7 +138,7 @@ task db:rollback
          password: ${DB_PASSWORD}
    ```
 
-2. Set environment variables in `.env_added`:
+2. Set environment variables in `.env`:
    ```bash
    DB_USER=your_user
    DB_PASSWORD=your_password

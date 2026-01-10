@@ -11,10 +11,9 @@ import yaml
 from fastapi.testclient import TestClient
 
 
-def _load_proxy_with_config(default_path: Path, added_path: Path):
-    """Load the proxy module with specific config files."""
-    os.environ["YALLMP_CONFIG_DEFAULT"] = str(default_path)
-    os.environ["YALLMP_CONFIG_ADDED"] = str(added_path)
+def _load_proxy_with_config(config_path: Path):
+    """Load the proxy module with a specific config file."""
+    os.environ["YALLMP_CONFIG"] = str(config_path)
     module_name = f"proxy_test_{uuid.uuid4().hex}"
     
     src_path = Path(__file__).resolve().parents[1] / "src"
@@ -26,8 +25,7 @@ def _load_proxy_with_config(default_path: Path, added_path: Path):
     assert spec.loader is not None
     spec.loader.exec_module(module)
     
-    module._test_config_default = default_path
-    module._test_config_added = added_path
+    module._test_config = config_path
     return module
 
 
@@ -38,6 +36,7 @@ def proxy_module(tmp_path):
         "model_list": [
             {
                 "model_name": "model-a",
+                "protected": True,
                 "model_params": {
                     "model": "openai/gpt-4o-mini",
                     "api_base": "http://model-a.local/v1",
@@ -46,6 +45,7 @@ def proxy_module(tmp_path):
             },
             {
                 "model_name": "model-b",
+                "protected": False,
                 "model_params": {
                     "model": "openai/gpt-4o-mini",
                     "api_base": "http://model-b.local/v1",
@@ -59,11 +59,9 @@ def proxy_module(tmp_path):
             "enable_responses_endpoint": False,
         },
     }
-    default_path = tmp_path / "config_default.yaml"
-    added_path = tmp_path / "config_added.yaml"
-    default_path.write_text(yaml.safe_dump(initial_config), encoding="utf-8")
-    added_path.write_text(yaml.safe_dump({"model_list": []}), encoding="utf-8")
-    return _load_proxy_with_config(default_path, added_path)
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(initial_config), encoding="utf-8")
+    return _load_proxy_with_config(config_path)
 
 
 class TestConfigReloadEndpoint:
@@ -94,6 +92,7 @@ class TestConfigReloadEndpoint:
             "model_list": [
                 {
                     "model_name": "new-model-1",
+                    "protected": False,
                     "model_params": {
                         "model": "openai/gpt-4o",
                         "api_base": "http://new-1.local/v1",
@@ -102,6 +101,7 @@ class TestConfigReloadEndpoint:
                 },
                 {
                     "model_name": "new-model-2",
+                    "protected": False,
                     "model_params": {
                         "model": "anthropic/claude-3-5-sonnet",
                         "api_base": "http://new-2.local/v1",
@@ -110,11 +110,11 @@ class TestConfigReloadEndpoint:
                 },
             ],
         }
-        new_config_path = tmp_path / "config_default.yaml"
+        new_config_path = tmp_path / "config.yaml"
         new_config_path.write_text(yaml.safe_dump(new_config), encoding="utf-8")
 
         # Replace the config file
-        proxy_module._test_config_default = new_config_path
+        proxy_module._test_config = new_config_path
 
         with TestClient(proxy_module.app) as client:
             # Verify initial state
@@ -135,45 +135,15 @@ class TestConfigReloadEndpoint:
             assert "new-model-1" in model_ids_after
             assert "new-model-2" in model_ids_after
 
-    def test_reload_preserves_added_models(self, proxy_module, tmp_path):
-        """Test that reloading preserves models from config_added.yaml."""
-        # Add a model to the added config
-        added_config = {
-            "model_list": [
-                {
-                    "model_name": "custom-model",
-                    "model_params": {
-                        "model": "custom/model",
-                        "api_base": "http://custom.local/v1",
-                        "api_key": "custom-key",
-                    },
-                },
-            ],
-        }
-        proxy_module._test_config_added.write_text(
-            yaml.safe_dump(added_config), encoding="utf-8"
-        )
-
-        with TestClient(proxy_module.app) as client:
-            # Reload config
-            response = client.post("/admin/config/reload")
-            assert response.status_code == 200
-
-            # Verify both default and added models are available
-            models = client.get("/v1/models").json()
-            model_ids = {entry["id"] for entry in models["data"]}
-            assert "model-a" in model_ids  # from default
-            assert "custom-model" in model_ids  # from added
-
     def test_reload_handles_empty_config(self, proxy_module, tmp_path):
         """Test that reloading with empty config works correctly."""
         # Create empty config
         empty_config = {
             "model_list": [],
         }
-        empty_config_path = tmp_path / "config_default.yaml"
+        empty_config_path = tmp_path / "config.yaml"
         empty_config_path.write_text(yaml.safe_dump(empty_config), encoding="utf-8")
-        proxy_module._test_config_default = empty_config_path
+        proxy_module._test_config = empty_config_path
 
         with TestClient(proxy_module.app) as client:
             response = client.post("/admin/config/reload")

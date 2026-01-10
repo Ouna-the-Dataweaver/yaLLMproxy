@@ -5,6 +5,8 @@ from .recorder import (
     log_error_event,
     set_db_logging_enabled,
     is_db_logging_enabled,
+    DbLogTarget,
+    resolve_db_log_target,
 )
 from .setup import logger, setup_logging
 
@@ -23,8 +25,9 @@ __all__ = [
     "log_error_event",
     "set_db_logging_enabled",
     "is_db_logging_enabled",
+    "DbLogTarget",
+    "resolve_db_log_target",
 ]
 
 if _db_logger_available:
     __all__.append("get_db_logger")
-

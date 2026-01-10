@@ -175,14 +175,11 @@ async def shutdown_event():
     # Close database connection if available
     if DATABASE_AVAILABLE:
         try:
-            from .database.factory import get_database
-            db = get_database()
-            if db.is_initialized:
-                logger.info("Closing database connection...")
-                db.close()
-                logger.info("Database connection closed")
+            from .database.factory import reset_database_instance
+            reset_database_instance()
+            logger.info("Database connections closed")
         except Exception as e:
-            logger.warning(f"Error closing database connection: {e}")
+            logger.warning(f"Error closing database connections: {e}")
 
 
 # Register routes
@@ -195,6 +192,9 @@ app.get("/admin/config")(config_routes.get_full_config)
 app.put("/admin/config")(config_routes.update_config)
 app.post("/admin/config/reload")(config_routes.reload_config)
 app.get("/admin/models")(config_routes.get_models_list)
+app.get("/admin/models/tree")(config_routes.get_models_tree)
+app.get("/admin/models/{model_name}/ancestry")(config_routes.get_model_ancestry)
+app.get("/admin/models/{model_name}/dependents")(config_routes.get_model_dependents)
 app.delete("/admin/models/{model_name}")(config_routes.delete_model)
 app.post("/admin/models/copy")(config_routes.copy_model)
 app.get("/admin/")(config_routes.serve_admin_ui)

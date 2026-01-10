@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from src.parsers.response_pipeline import ParserContext, ReasoningSwapParser
 
 PROJECT_ROOT = Path(__file__).parent.parent
-TEMPLATE_PATH = PROJECT_ROOT / "template_example.jinja"
+TEMPLATE_PATH = PROJECT_ROOT / "configs" / "jinja_templates" / "template_example.jinja"
 TRACE_DIR = PROJECT_ROOT / "logs" / "tests"
 TRACE_ENV = "YALLMP_TRACE_TESTS"
 

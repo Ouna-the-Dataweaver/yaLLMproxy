@@ -9,6 +9,114 @@
   gap: 18px;
 }
 
+.tree-view {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--surface-strong);
+  border: 1px solid var(--border);
+  padding: 12px;
+  box-shadow: var(--shadow-soft);
+}
+
+.tree-row {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 12px 10px calc(12px + (var(--depth) * 18px));
+  background: var(--surface);
+  border: 1px solid rgba(30, 27, 22, 0.08);
+}
+
+[data-theme="dark"] .tree-row {
+  border-color: rgba(230, 237, 243, 0.14);
+}
+
+.tree-row::before,
+.tree-row::after {
+  content: '';
+  position: absolute;
+  background: var(--border);
+  opacity: 0.35;
+}
+
+.tree-row::before {
+  left: calc(22px + ((var(--depth) - 1) * 18px));
+  top: 0;
+  bottom: 0;
+  width: 1px;
+}
+
+.tree-row::after {
+  left: calc(22px + ((var(--depth) - 1) * 18px));
+  top: 50%;
+  width: 12px;
+  height: 1px;
+}
+
+.tree-row[data-depth="0"]::before,
+.tree-row[data-depth="0"]::after {
+  display: none;
+}
+
+.tree-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-top: 4px;
+  background: var(--accent);
+  box-shadow: 0 0 0 4px rgba(15, 118, 110, 0.15);
+}
+
+.tree-content {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tree-name {
+  font-family: 'Bricolage Grotesque', sans-serif;
+  font-size: 1rem;
+}
+
+.tree-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.tree-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: 0;
+  font-size: 0.65rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  background: rgba(15, 118, 110, 0.12);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.tree-pill-locked {
+  background: rgba(107, 114, 128, 0.15);
+  color: #6b7280;
+}
+
+.tree-pill-derived {
+  background: rgba(59, 130, 246, 0.15);
+  color: #2563eb;
+}
+
+.tree-parent {
+  font-family: 'Space Mono', monospace;
+  font-size: 0.78rem;
+  color: var(--ink-muted);
+}
+
 .model-item {
   background: var(--surface-strong);
   border: 1px solid var(--border);

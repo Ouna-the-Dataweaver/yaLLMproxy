@@ -36,10 +36,15 @@ class DatabaseLogRecorder:
     asynchronously to avoid blocking the main request processing.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        config: Optional[dict[str, Any]] = None,
+        instance_key: str = "default",
+    ) -> None:
         """Initialize the database logger."""
-        self._database = get_database()
+        self._database = get_database(config, instance_key=instance_key)
         self._initialized = False
+        self._instance_key = instance_key or "default"
 
     def _ensure_initialized(self) -> None:
         """Ensure the database is initialized."""
@@ -259,17 +264,27 @@ class DatabaseLogRecorder:
         return error_id
 
 
-# Global database logger instance
+# Global database logger instances (keyed for multi-DB support)
 _db_logger: Optional[DatabaseLogRecorder] = None
+_db_loggers: dict[str, DatabaseLogRecorder] = {}
 
 
-def get_db_logger() -> DatabaseLogRecorder:
+def get_db_logger(
+    instance_key: str = "default",
+    config: Optional[dict[str, Any]] = None,
+) -> DatabaseLogRecorder:
     """Get the global database logger instance.
 
     Returns:
         The global DatabaseLogRecorder instance.
     """
     global _db_logger
-    if _db_logger is None:
-        _db_logger = DatabaseLogRecorder()
-    return _db_logger
+    global _db_loggers
+    key = instance_key or "default"
+    if key in _db_loggers:
+        return _db_loggers[key]
+    logger_instance = DatabaseLogRecorder(config=config, instance_key=key)
+    _db_loggers[key] = logger_instance
+    if key == "default":
+        _db_logger = logger_instance
+    return logger_instance

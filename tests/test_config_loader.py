@@ -80,8 +80,8 @@ class TestLoadConfig:
     def test_env_file_overrides_os_env(self, tmp_path):
         """Test that config-specific env files override os.environ values."""
         os.environ["TEST_API_KEY"] = "from-os"
-        config_path = tmp_path / "config_default.yaml"
-        env_path = tmp_path / ".env_default"
+        config_path = tmp_path / "config.yaml"
+        env_path = tmp_path / ".env"
         env_path.write_text("TEST_API_KEY=from-env\n", encoding="utf-8")
         config_data = {
             "model_list": [

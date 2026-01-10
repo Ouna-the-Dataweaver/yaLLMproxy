@@ -1,5 +1,6 @@
 model_list:
   - model_name: GLM-4.6-nano
+    protected: true
     model_params:
       api_type: openai
       model: z-ai/glm-4.6:thinking
@@ -9,6 +10,7 @@ model_list:
       request_timeout: 540
 
   - model_name: GLM-4.7
+    protected: true
     model_params:
       api_type: openai
       model: GLM-4.7
@@ -41,6 +43,7 @@ model_list:
       
 
   - model_name: MiniMax-M2.1
+    protected: true
     model_params:
       api_type: openai
       model: MiniMax-M2.1
@@ -59,6 +62,7 @@ model_list:
           allow_override: false
     
   - model_name: MiniMax-M2-nano
+    protected: true
     model_params:
       api_type: openai
       model: MiniMax-M2
@@ -68,6 +72,7 @@ model_list:
       request_timeout: 540
 
   - model_name: Kimi-K2-Thinking-nano
+    protected: true
     model_params:
       api_type: openai
       model: moonshotai/kimi-k2-thinking

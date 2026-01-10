@@ -10,25 +10,16 @@ from dotenv import dotenv_values
 
 logger = logging.getLogger("yallmp-proxy")
 
-# Default paths to config files (relative to project root)
-DEFAULT_CONFIG_PATH = "configs/config_default.yaml"
-ADDED_CONFIG_PATH = "configs/config_added.yaml"
+# Default path to config file (relative to project root)
+DEFAULT_CONFIG_PATH = "configs/config.yaml"
 
-# Environment variables to override config paths
-# Priority: YALLMP_CONFIG_DEFAULT (if set) > DEFAULT_CONFIG_PATH
-# YALLMP_CONFIG is retired - use YALLMP_CONFIG_DEFAULT instead
-default_path_override = os.getenv("YALLMP_CONFIG_DEFAULT")
-if default_path_override:
-    CONFIG_DEFAULT_PATH = default_path_override
+# Environment variable to override config path
+# Priority: YALLMP_CONFIG (if set) > DEFAULT_CONFIG_PATH
+config_path_override = os.getenv("YALLMP_CONFIG")
+if config_path_override:
+    CONFIG_PATH = config_path_override
 else:
-    CONFIG_DEFAULT_PATH = DEFAULT_CONFIG_PATH
-
-# Priority: YALLMP_CONFIG_ADDED (if set) > ADDED_CONFIG_PATH
-added_path_override = os.getenv("YALLMP_CONFIG_ADDED")
-if added_path_override:
-    CONFIG_ADDED_PATH = added_path_override
-else:
-    CONFIG_ADDED_PATH = ADDED_CONFIG_PATH
+    CONFIG_PATH = DEFAULT_CONFIG_PATH
 
 
 def resolve_config_path(path: str) -> Path:
@@ -66,8 +57,8 @@ def load_config(
     """Load configuration from a YAML file.
 
     Args:
-        path: Path to the config file. Defaults to YALLMP_CONFIG_DEFAULT,
-              or configs/config_default.yaml in the project root.
+        path: Path to the config file. Defaults to YALLMP_CONFIG,
+              or configs/config.yaml in the project root.
         env_path: Optional .env path override for env substitution.
         substitute_env: Whether to substitute environment variables in the config.
 
@@ -75,27 +66,19 @@ def load_config(
         Parsed configuration dictionary.
     """
     if path is None:
-        path = CONFIG_DEFAULT_PATH
+        path = CONFIG_PATH
 
     config_path = resolve_config_path(path)
 
     # Log which config paths are being used (now that logging is configured)
-    if default_path_override:
+    if config_path_override:
         logger.info(
-            f"Using override config path from YALLMP_CONFIG_DEFAULT: {CONFIG_DEFAULT_PATH}"
+            "Using override config path from YALLMP_CONFIG: %s", CONFIG_PATH
         )
     else:
         logger.info(
-            f"Using default config path: {CONFIG_DEFAULT_PATH} (set YALLMP_CONFIG_DEFAULT to override)"
-        )
-
-    if added_path_override:
-        logger.info(
-            f"Using override added config path from YALLMP_CONFIG_ADDED: {CONFIG_ADDED_PATH}"
-        )
-    else:
-        logger.info(
-            f"Using default added config path: {CONFIG_ADDED_PATH} (set YALLMP_CONFIG_ADDED to override)"
+            "Using default config path: %s (set YALLMP_CONFIG to override)",
+            CONFIG_PATH,
         )
 
     logger.info(f"Loading configuration from: {config_path}")

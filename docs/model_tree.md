@@ -6,6 +6,24 @@ This document describes a proposed feature to maintain a tree structure for mode
 
 Currently, model inheritance is resolved statically at config load time. Changes to base models do not automatically propagate to derived models, and deleting a base model can leave derived models in an inconsistent state. This proposal introduces a persistent tree structure that maintains the full inheritance hierarchy in memory, enabling dynamic behavior and better administrative visibility.
 
+## Implementation Status (2026-01-09)
+
+**Status:** Implemented (in-memory tree).
+
+What's live now:
+- `ModelTree`/`ModelNode` are maintained in-memory and rebuilt on config reloads and mutations.
+- Runtime config resolution uses the tree, preserving `extends` in raw config while resolving inheritance dynamically.
+- Admin API endpoints are available for tree/ancestry/dependents and cascade deletes.
+- Admin UI shows a Model Tree panel.
+
+Operational note:
+- Updating a base model updates derived models in the **resolved runtime config**, but the router requires `POST /admin/config/reload` to apply those changes to active backends.
+
+The current config model is **single-file** (`configs/config.yaml`) with per-model security:
+- `protected: true` means the model requires an admin password to edit/delete.
+- `protected: false` means the model can be edited without a password.
+- API keys are referenced via `${ENV_VAR}` in config and loaded from `configs/.env` (never returned by admin APIs).
+
 ## Problem Statement
 
 ### Current Limitations
@@ -13,14 +31,17 @@ Currently, model inheritance is resolved statically at config load time. Changes
 The existing inheritance system resolves model inheritance once during configuration loading:
 
 ```yaml
-# config_default.yaml
-- model_name: base-model
-  model_params:
-    api_base: https://api.example.com/v1
-    timeout: 120
+# config.yaml
+model_list:
+  - model_name: base-model
+    protected: true
+    model_params:
+      api_base: https://api.example.com/v1
+      timeout: 120
 
-- model_name: derived-model
-  extends: base-model
+  - model_name: derived-model
+    protected: false
+    extends: base-model
 ```
 
 When `base-model` is updated, `derived-model` retains the old values because inheritance was flattened at load time. This creates several operational challenges:
@@ -79,8 +100,8 @@ class ModelNode:
     config: dict[str, Any]                 # This model's direct configuration
     parent: Optional[str]                  # Parent model name or None for roots
     children: list[str]                   # List of child model names
-    source: str                            # "default" or "added"
-    editable: bool                        # Can be modified at runtime
+    protected: bool                       # Requires admin password to modify/delete
+    editable: bool                        # Derived from protected (not protected)
     inheritance_chain: list[str]          # Full ancestry: [self, parent, grandparent, ...]
     inherited_fields: dict[str, Any]      # Fields inherited from ancestors
     own_fields: dict[str, Any]            # Fields defined directly on this model
@@ -123,22 +144,22 @@ class ModelTree:
 
 ### Storage Integration
 
-The `ModelTree` integrates with the existing `ConfigStore` without disrupting current behavior:
+The `ModelTree` integrates with the current single-config `ConfigStore`:
 
 ```python
 class ConfigStore:
     def __init__(self, ...) -> None:
         # Existing storage
-        self._default_raw: dict[str, Any] = {}
-        self._added_raw: dict[str, Any] = {}
+        self._raw: dict[str, Any] = {}
+        self._env: dict[str, str] = {}
         
         # New tree storage
         self._model_tree: ModelTree = ModelTree()
     
     def reload(self) -> None:
-        # Existing behavior: reload raw configs
-        self._default_raw = load_config(...)
-        self._added_raw = load_config(...)
+        # Existing behavior: reload raw config + env
+        self._raw = load_config(...)
+        self._env = load_env_values(...)
         
         # New behavior: rebuild tree
         self._model_tree = ModelTree()
@@ -170,14 +191,14 @@ The tree structure enables new API endpoints for administrative operations:
             "config": {...},
             "parent": null,
             "children": ["derived-model-1", "derived-model-2"],
-            "source": "default",
+            "protected": true,
             "editable": false
         },
         "derived-model-1": {
             "config": {...},
             "parent": "base-model",
             "children": ["deep-derived-1"],
-            "source": "added",
+            "protected": false,
             "editable": true
         }
     }
@@ -200,8 +221,8 @@ The tree structure enables new API endpoints for administrative operations:
 
 # DELETE /admin/models/{name} - Delete with cascade control
 {
-    "cascade": false,  # Default: fail if children exist
-    "force": false     # If true, also delete descendants
+    "cascade": false,  # Default: fail if children exist (use ?cascade=true)
+    "admin_password": "..."  # Required when deleting protected models
 }
 
 # Response when deletion would orphan children:
@@ -227,11 +248,9 @@ derived_model = store.find_model("derived-model-1")
 
 This requires:
 
-1. **Recomputation on update**: When a model is modified, the tree recomputes inherited fields for all descendants.
-
-2. **Change detection**: Only propagate changes that actually affect inherited values.
-
-3. **Event system**: Notify the router when dependent models change, enabling hot-reload of affected backends.
+1. **Recomputation on update**: When a model is modified, the tree recomputes inherited fields for descendants on access.
+2. **Router refresh**: To update active backends, call `POST /admin/config/reload`.
+3. **Event system**: Optional future enhancement for automatic router updates.
 
 ## Implementation Approaches
 
@@ -256,9 +275,10 @@ The simplest approach maintains the tree entirely in memory, rebuilding it on co
 Extend the YAML config format to include tree metadata:
 
 ```yaml
-# config_added.yaml
+# config.yaml
 model_list:
   - model_name: derived-model
+    protected: false
     extends: base-model
     _inheritance_metadata:
       resolved_parent: base-model
@@ -442,7 +462,7 @@ store.get_model_tree()  # Returns tree structure
 
 ### Migration Considerations
 
-1. **Backward compatibility**: Existing configs must work without modification.
+1. **Backward compatibility**: Existing configs should continue to load; any tree metadata should be optional.
 
 2. **API stability**: New endpoints should be clearly marked as admin/admin-only.
 
@@ -452,31 +472,31 @@ store.get_model_tree()  # Returns tree structure
 
 ### Phase 1: Tree Structure (MVP)
 
-- [ ] Define `ModelNode` and `ModelTree` classes
-- [ ] Implement tree building from flat model list
-- [ ] Add basic queries: `get_node`, `get_children`, `get_ancestors`
-- [ ] Integrate tree building into `ConfigStore.reload()`
-- [ ] Add `get_model_tree()` method to `ConfigStore`
-- [ ] Add admin API endpoint `GET /admin/models/tree`
+- [x] Define `ModelNode` and `ModelTree` classes
+- [x] Implement tree building from flat model list
+- [x] Add basic queries: `get_node`, `get_children`, `get_ancestors`
+- [x] Integrate tree building into `ConfigStore.reload()`
+- [x] Add `get_model_tree()` method to `ConfigStore`
+- [x] Add admin API endpoint `GET /admin/models/tree`
 
 ### Phase 2: Dynamic Updates
 
-- [ ] Implement tree updates on model modifications
-- [ ] Add change propagation to descendants
-- [ ] Add `GET /admin/models/{name}/ancestry` endpoint
-- [ ] Add `GET /admin/models/{name}/dependents` endpoint
-- [ ] Update admin UI to show inheritance
+- [x] Implement tree updates on model modifications
+- [x] Add change propagation to descendants (resolved on access)
+- [x] Add `GET /admin/models/{name}/ancestry` endpoint
+- [x] Add `GET /admin/models/{name}/dependents` endpoint
+- [x] Update admin UI to show inheritance
 
 ### Phase 3: Safe Deletes
 
-- [ ] Implement delete with dependency checking
-- [ ] Add `DELETE /admin/models/{name}` with cascade support
-- [ ] Add conflict detection and helpful error messages
-- [ ] Add `cascade` option to API
+- [x] Implement delete with dependency checking
+- [x] Add `DELETE /admin/models/{name}` with cascade support
+- [x] Add conflict detection and helpful error messages
+- [x] Add `cascade` option to API
 
 ### Phase 4: Advanced Features
 
-- [ ] Lazy recomputation with caching
+- [x] Lazy recomputation with caching
 - [ ] Event system for router notifications
 - [ ] Tree persistence (optional)
 - [ ] Advanced queries (search, filter by inheritance)

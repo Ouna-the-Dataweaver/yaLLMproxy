@@ -10,7 +10,7 @@ from starlette.background import BackgroundTask, BackgroundTasks
 
 from ...core import normalize_request_model
 from ...core.registry import get_router
-from ...logging import RequestLogRecorder
+from ...logging import RequestLogRecorder, resolve_db_log_target
 from ...usage_metrics import USAGE_COUNTERS
 
 logger = logging.getLogger("yallmp-proxy")
@@ -45,6 +45,15 @@ async def handle_openai_request(request: Request) -> Response:
         A Response or StreamingResponse with the completion results.
     """
     logger.info(f"Handling {request.method} request to {request.url.path}")
+    router = get_router()
+    known_models = set(router.backends.keys())
+
+    def _db_log_target_for(model: str) -> Any:
+        return resolve_db_log_target(
+            model_name=model or "unknown",
+            headers=request.headers,
+            known_models=known_models,
+        )
     tracker = USAGE_COUNTERS.start_request()
     
     body = await request.body()
@@ -53,7 +62,12 @@ async def handle_openai_request(request: Request) -> Response:
         payload = json.loads(body or b"{}")
     except json.JSONDecodeError as exc:
         logger.error(f"Invalid JSON payload: {exc}")
-        request_log = RequestLogRecorder("unknown", False, request.url.path)
+        request_log = RequestLogRecorder(
+            "unknown",
+            False,
+            request.url.path,
+            db_log_target=_db_log_target_for("unknown"),
+        )
         request_log.record_request(request.method, request.url.query, request.headers, body)
         request_log.record_error(f"invalid json: {exc}")
         request_log.finalize("error")
@@ -71,7 +85,12 @@ async def handle_openai_request(request: Request) -> Response:
 
     if not isinstance(payload, Mapping):
         logger.error("Payload must be a JSON object")
-        request_log = request_log or RequestLogRecorder("unknown", False, request.url.path)
+        request_log = request_log or RequestLogRecorder(
+            "unknown",
+            False,
+            request.url.path,
+            db_log_target=_db_log_target_for("unknown"),
+        )
         request_log.record_request(request.method, request.url.query, request.headers, body)
         request_log.record_error("payload must be a JSON object")
         request_log.finalize("error")
@@ -90,7 +109,12 @@ async def handle_openai_request(request: Request) -> Response:
     raw_model_name = payload.get("model")
     if not isinstance(raw_model_name, str) or not raw_model_name:
         logger.error("Request missing model name")
-        request_log = request_log or RequestLogRecorder("unknown", False, request.url.path)
+        request_log = request_log or RequestLogRecorder(
+            "unknown",
+            False,
+            request.url.path,
+            db_log_target=_db_log_target_for("unknown"),
+        )
         request_log.record_request(request.method, request.url.query, request.headers, body)
         request_log.record_error("missing model parameter")
         request_log.finalize("error")
@@ -113,7 +137,12 @@ async def handle_openai_request(request: Request) -> Response:
         messages = payload.get("messages")
         if not messages or not isinstance(messages, list):
             logger.error("Request missing or invalid messages array")
-            request_log = request_log or RequestLogRecorder(model_name, False, request.url.path)
+            request_log = request_log or RequestLogRecorder(
+                model_name,
+                False,
+                request.url.path,
+                db_log_target=_db_log_target_for(model_name),
+            )
             request_log.record_request(request.method, request.url.query, request.headers, body)
             request_log.record_error("missing messages array")
             request_log.finalize("error")
@@ -131,14 +160,18 @@ async def handle_openai_request(request: Request) -> Response:
 
     is_stream = bool(payload.get("stream"))
     query = request.url.query or ""
-    request_log = request_log or RequestLogRecorder(model_name, is_stream, request.url.path)
+    request_log = request_log or RequestLogRecorder(
+        model_name,
+        is_stream,
+        request.url.path,
+        db_log_target=_db_log_target_for(model_name),
+    )
     request_log.record_request(request.method, query, request.headers, body)
     logger.info(f"Processing request for model {model_name}, stream={is_stream}")
 
     backend_path = request.url.path
     
     try:
-        router = get_router()
         response = await router.forward_request(
             model_name=model_name,
             path=backend_path,

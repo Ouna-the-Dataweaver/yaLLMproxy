@@ -11,6 +11,12 @@ yaLLMproxy/
 │   ├── configuration.md           # Detailed configuration guide
 │   └── project-structure.md       # This file
 │
+├── configs/                       # Configuration files
+│   ├── .env.example               # Environment variables template
+│   ├── config.yaml                # Main configuration file
+│   └── jinja_templates/           # Jinja chat templates
+│       └── template_example.jinja # Example Jinja template
+│
 ├── src/                           # Source code
 │   ├── __init__.py                # Main package exports
 │   ├── main.py                    # FastAPI application & lifecycle
@@ -102,10 +108,9 @@ yaLLMproxy/
 │   └── test_proxy_app.py          # Proxy application tests
 │
 ├── configs/                       # Configuration files
-│   ├── config_default.yaml        # Default configuration
-│   ├── config_added.yaml          # Runtime-added models (git-ignored)
-│   ├── .env_default               # Default environment variables
-│   └── .env_added                 # Added environment variables (git-ignored)
+│   ├── config.yaml              # Unified configuration
+│   ├── .env                     # Environment variables
+│   ├── .env.example             # Example environment variables
 │
 ├── logs/                          # Log files
 │   ├── requests/                  # Request/response logs
@@ -118,7 +123,6 @@ yaLLMproxy/
 ├── Taskfile.yml                   # Task automation (run, test, etc.)
 ├── README.md                      # Quick start guide
 ├── AGENTS.md                      # Agent-specific rules
-├── template_example.jinja         # Example Jinja template
 ├── LICENSE                        # MIT License
 │
 ├── install.sh                     # Installation script (Unix)
@@ -198,9 +202,8 @@ yaLLMproxy/
 ## Configuration Flow
 
 ```
-config_default.yaml ──┐
+config.yaml ──┐
                       ├──> config_loader.py ──> config_store.py ──> ProxyRouter
-config_added.yaml ────┘
 ```
 
 ## Request Flow

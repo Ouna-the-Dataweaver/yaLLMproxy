@@ -23,22 +23,21 @@ Complete reference for yaLLMproxy configuration options.
 
 ## Configuration Files
 
-yaLLMproxy uses two configuration files:
+yaLLMproxy uses a single configuration file:
 
 | File | Purpose |
 |------|---------|
-| `configs/config_default.yaml` | Base configuration with default models |
-| `configs/config_added.yaml` | Runtime-added models (不会被版本控制覆盖) |
+| `configs/config.yaml` | Unified configuration and model list |
 
-Environment variables are loaded from corresponding `.env` files:
-- `configs/.env_default` - Environment variables for default config
-- `configs/.env_added` - Environment variables for added config
+Environment variables are loaded from:
+- `configs/.env` - Environment variables referenced in config
 
 ## Full Configuration Reference
 
 ```yaml
 model_list:
   - model_name: GLM-4.6-nano              # 唯一模型标识符
+    protected: true
     model_params:
       api_type: openai                     # API类型: openai (目前仅支持)
       model: z-ai/glm-4.6:thinking         # 实际模型名称
@@ -133,6 +132,7 @@ forwarder_settings:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
+| `protected` | boolean | true | Require admin password to edit/delete this model |
 | `model_params.model` | string | - | Actual model name to send to backend |
 | `model_params.api_type` | string | "openai" | API type (only "openai" supported) |
 | `model_params.target_model` | string | - | Override model name sent to backend |
@@ -165,6 +165,7 @@ Models can inherit configuration from other models using the `extends` field. Th
 model_list:
   # Base model with full configuration
   - model_name: GLM-4.7
+    protected: true
     model_params:
       api_base: https://api.example.com/v1
       api_key: ${GLM_API_KEY}
@@ -179,6 +180,7 @@ model_list:
 
   # Derived model inherits from GLM-4.7, adds custom parsers
   - model_name: GLM-4.7:Cursor
+    protected: false
     extends: GLM-4.7
     parsers:
       enabled: true
@@ -230,14 +232,15 @@ The final `derived-model` will have:
 - `request_timeout` from `middle-model`
 - `temperature` parameter set to 0.7
 
-### Inheritance Across Config Files
+### Inheritance Within One Config
 
-Models in `config_added.yaml` can inherit from models in `config_default.yaml`:
+Models in the same `config.yaml` can inherit from each other:
 
 ```yaml
-# configs/config_default.yaml
+# configs/config.yaml
 model_list:
   - model_name: GLM-4.7
+    protected: true
     model_params:
       api_base: https://api.z.ai/api/coding/paas/v4
       api_key: ${GLM_API_KEY}
@@ -246,9 +249,8 @@ model_list:
       response:
         - swap_reasoning_content
 
-# configs/config_added.yaml
-model_list:
   - model_name: GLM-4.7:Custom
+    protected: false
     extends: GLM-4.7
     parsers:
       response:
@@ -287,22 +289,22 @@ curl -X POST "http://localhost:7979/admin/models/copy?source=GLM-4.7&target=GLM-
   "model": {
     "model_name": "GLM-4.7-Copy",
     "model_params": {
-      "api_base": "https://api.z.ai/api/coding/paas/v4",
-      "api_key": "****"
+      "api_base": "https://api.z.ai/api/coding/paas/v4"
     },
-    "editable": true,
-    "source": "added"
+    "protected": false,
+    "editable": true
   }
 }
 ```
 
 ### Copy Behavior
 
-- The copied model is always saved to `config_added.yaml` (editable)
-- Source model can come from either `config_default.yaml` or `config_added.yaml`
-- All settings are copied except metadata fields (`editable`, `source`, `_inherited_from`)
+- The copied model is saved to `config.yaml`
+- Source model can be any existing model in `config.yaml`
+- Protected source models require an admin password to copy
+- All settings are copied except metadata fields (`editable`, `_inherited_from`)
 - The new model name must not already exist
-- API keys are masked in the response
+- API keys are removed from admin API responses
 
 ### Use Cases
 
@@ -377,8 +379,8 @@ If `enabled` is omitted, per-model parsers default to enabled. Set `enabled: fal
 |---------------------|-------------|
 | `YALLMP_HOST` | Server bind address (overrides config) |
 | `YALLMP_PORT` | Server bind port (overrides config) |
-| `YALLMP_CONFIG_DEFAULT` | Path to default config file |
-| `YALLMP_CONFIG_ADDED` | Path to added config file |
+| `YALLMP_CONFIG` | Path to config file |
+| `YALLMP_ADMIN_PASSWORD` | Admin password for protected model changes |
 
 ### Forwarder Override
 
@@ -398,7 +400,7 @@ api_key: ${GLM_API_KEY}        # Braced format
 api_key: $GLM_API_KEY          # Simple format
 ```
 
-Variables are first read from `.env` files, then from actual environment.
+Variables are first read from `.env`, then from the actual environment.
 
 ## Router Settings
 
@@ -432,7 +434,7 @@ proxy_settings:
 To help align formatting with a Jinja chat template, inspect a template and print suggested `think_open`/`think_close` prefixes and suffixes:
 
 ```bash
-uv run python scripts/inspect_template.py template_example.jinja
+uv run python scripts/inspect_template.py configs/jinja_templates/template_example.jinja
 ```
 
 Copy the suggested values into your `swap_reasoning_content` config. If you set `think_close.suffix` to include a newline, consider setting `include_newline: false` to avoid double newlines.
@@ -448,6 +450,6 @@ When yaLLMproxy starts, it validates the configuration and logs any issues. Comm
 
 ## Hot Reloading
 
-Runtime model additions via `/admin/models` endpoints are persisted to `configs/config_added.yaml` and take effect immediately without restarting the proxy.
+Runtime model additions via `/admin/models` are persisted to `configs/config.yaml` and take effect immediately without restarting the proxy.
 
-Default models cannot be modified at runtime, but can be overridden by adding a model with the same name to `config_added.yaml`.
+Protected models require `YALLMP_ADMIN_PASSWORD` to edit/delete. Unprotected models can be edited without a password.

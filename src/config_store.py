@@ -1,4 +1,4 @@
-"""In-memory config store for default and added model configs."""
+"""In-memory config store for unified model configs."""
 
 from __future__ import annotations
 
@@ -7,13 +7,13 @@ import logging
 from pathlib import Path
 from threading import Lock
 from typing import Any
+from dataclasses import dataclass, field
 
 import yaml
 
 try:
     from .config_loader import (
-        CONFIG_ADDED_PATH,
-        CONFIG_DEFAULT_PATH,
+        CONFIG_PATH,
         load_config,
         load_env_values,
         resolve_config_path,
@@ -22,8 +22,7 @@ try:
     )
 except ImportError:  # pragma: no cover - support direct module imports in tests
     from config_loader import (  # type: ignore
-        CONFIG_ADDED_PATH,
-        CONFIG_DEFAULT_PATH,
+        CONFIG_PATH,
         load_config,
         load_env_values,
         resolve_config_path,
@@ -35,6 +34,7 @@ logger = logging.getLogger("yallmp-proxy")
 
 # Maximum depth for model inheritance chains to prevent infinite loops
 MAX_INHERITANCE_DEPTH = 10
+ADMIN_PASSWORD_ENV = "YALLMP_ADMIN_PASSWORD"
 
 
 class ModelInheritanceError(Exception):
@@ -92,7 +92,12 @@ def _resolve_single_model_inheritance(
 
     # No inheritance - return as-is
     if not extends:
-        return copy.deepcopy(model_entry)
+        resolved = copy.deepcopy(model_entry)
+        resolved.pop("source", None)
+        protected = _normalize_protected(model_entry.get("protected"), default=True)
+        resolved["protected"] = protected
+        resolved["editable"] = not protected
+        return resolved
 
     # Check for circular reference
     if extends in resolution_chain:
@@ -130,6 +135,12 @@ def _resolve_single_model_inheritance(
     # Track inheritance for debugging/logging
     if "extends" in model_entry:
         resolved["_inherited_from"] = extends
+
+    # Protected/editable flags are not inherited; they are per-model.
+    resolved.pop("source", None)
+    protected = _normalize_protected(model_entry.get("protected"), default=True)
+    resolved["protected"] = protected
+    resolved["editable"] = not protected
 
     logger.debug(
         "Resolved model '%s' inheritance from '%s'", model_name, extends
@@ -190,6 +201,18 @@ def _ensure_list(value: Any) -> list[Any]:
     return []
 
 
+def _parse_bool(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _normalize_protected(value: Any, default: bool = True) -> bool:
+    if value is None:
+        return default
+    return _parse_bool(value)
+
+
 def _normalize_fallbacks(value: Any) -> list[dict[str, list[str]]]:
     if not isinstance(value, list):
         return []
@@ -200,169 +223,454 @@ def _normalize_fallbacks(value: Any) -> list[dict[str, list[str]]]:
     return normalized
 
 
+@dataclass
+class DeleteResult:
+    success: bool
+    error: str | None = None
+    dependents: list[str] = field(default_factory=list)
+    deleted: list[str] = field(default_factory=list)
+
+
+@dataclass
+class ModelNode:
+    """Node in the model inheritance tree."""
+
+    name: str
+    config: dict[str, Any]
+    parent: str | None
+    children: list[str] = field(default_factory=list)
+    protected: bool = True
+    editable: bool = False
+    parent_missing: bool = False
+    _cached_resolved: dict[str, Any] | None = None
+    _cached_inherited: dict[str, Any] | None = None
+    _cached_chain: list[str] | None = None
+
+
+class ModelTree:
+    """Maintains the model inheritance tree."""
+
+    def __init__(self) -> None:
+        self.nodes: dict[str, ModelNode] = {}
+        self.roots: list[str] = []
+        self._order: list[str] = []
+
+    def build(self, models: list[dict[str, Any]]) -> None:
+        self.nodes = {}
+        self.roots = []
+        self._order = []
+
+        for entry in models:
+            if not isinstance(entry, dict):
+                continue
+            name = entry.get("model_name")
+            if not name:
+                continue
+            if name in self.nodes:
+                logger.warning(
+                    "Duplicate model_name '%s' found while building model tree; "
+                    "later entry will override earlier definition.",
+                    name,
+                )
+            parent = entry.get("extends")
+            parent = str(parent).strip() if parent else None
+
+            config = copy.deepcopy(entry)
+            config.pop("extends", None)
+            config.pop("editable", None)
+            config.pop("source", None)
+            config.pop("_inherited_from", None)
+
+            protected = _normalize_protected(entry.get("protected"), default=True)
+
+            node = ModelNode(
+                name=name,
+                config=config,
+                parent=parent or None,
+                protected=protected,
+                editable=not protected,
+            )
+            self.nodes[name] = node
+            if name not in self._order:
+                self._order.append(name)
+
+        # Build parent/child relationships
+        for node in self.nodes.values():
+            if node.parent and node.parent in self.nodes:
+                self.nodes[node.parent].children.append(node.name)
+            elif node.parent:
+                node.parent_missing = True
+
+        # Order children and roots based on original model list
+        order_index = {name: idx for idx, name in enumerate(self._order)}
+        for node in self.nodes.values():
+            node.children.sort(key=lambda n: order_index.get(n, 0))
+
+        self.roots = [
+            node.name
+            for node in self.nodes.values()
+            if not node.parent or node.parent not in self.nodes
+        ]
+        self.roots.sort(key=lambda n: order_index.get(n, 0))
+
+        self._validate_no_cycles()
+
+    def _validate_no_cycles(self) -> None:
+        for name in self.nodes:
+            self._check_chain(name, [])
+
+    def _check_chain(self, name: str, chain: list[str]) -> None:
+        if name in chain:
+            cycle = " -> ".join(chain + [name])
+            raise ModelInheritanceError(
+                f"Circular inheritance detected for model '{name}': {cycle}"
+            )
+        if len(chain) >= MAX_INHERITANCE_DEPTH:
+            raise ModelInheritanceError(
+                f"Maximum inheritance depth ({MAX_INHERITANCE_DEPTH}) exceeded for model '{name}'"
+            )
+        node = self.nodes.get(name)
+        if not node or not node.parent or node.parent not in self.nodes:
+            return
+        self._check_chain(node.parent, chain + [name])
+
+    def get_node(self, model_name: str) -> ModelNode | None:
+        return self.nodes.get(model_name)
+
+    def get_children(self, model_name: str) -> list[str]:
+        node = self.nodes.get(model_name)
+        if not node:
+            return []
+        return list(node.children)
+
+    def get_descendants(self, model_name: str) -> list[str]:
+        node = self.nodes.get(model_name)
+        if not node:
+            return []
+        descendants: list[str] = []
+        stack = list(reversed(node.children))
+        while stack:
+            child = stack.pop()
+            descendants.append(child)
+            child_node = self.nodes.get(child)
+            if child_node:
+                stack.extend(reversed(child_node.children))
+        return descendants
+
+    def get_ancestors(self, model_name: str) -> list[str]:
+        node = self.nodes.get(model_name)
+        if not node:
+            return []
+        ancestors: list[str] = []
+        parent = node.parent
+        depth = 0
+        while parent:
+            ancestors.append(parent)
+            if parent in self.nodes:
+                parent = self.nodes[parent].parent
+            else:
+                break
+            depth += 1
+            if depth >= MAX_INHERITANCE_DEPTH:
+                raise ModelInheritanceError(
+                    f"Maximum inheritance depth ({MAX_INHERITANCE_DEPTH}) exceeded for model '{model_name}'"
+                )
+        return ancestors
+
+    def has_ancestor(self, model_name: str, ancestor_name: str) -> bool:
+        return ancestor_name in self.get_ancestors(model_name)
+
+    def get_inheritance_chain(self, model_name: str) -> list[str]:
+        node = self.nodes.get(model_name)
+        if not node:
+            return []
+        if node._cached_chain is not None:
+            return list(node._cached_chain)
+        chain = [model_name]
+        parent = node.parent
+        depth = 0
+        while parent:
+            chain.append(parent)
+            if parent in self.nodes:
+                parent = self.nodes[parent].parent
+            else:
+                break
+            depth += 1
+            if depth >= MAX_INHERITANCE_DEPTH:
+                raise ModelInheritanceError(
+                    f"Maximum inheritance depth ({MAX_INHERITANCE_DEPTH}) exceeded for model '{model_name}'"
+                )
+        node._cached_chain = chain
+        return list(chain)
+
+    def _resolve_chain(self, chain: list[str]) -> dict[str, Any]:
+        merged: dict[str, Any] = {}
+        for name in reversed(chain):
+            node = self.nodes.get(name)
+            if not node:
+                continue
+            merged = _deep_merge_dicts(merged, node.config)
+        return merged
+
+    def resolve_model(self, model_name: str) -> dict[str, Any] | None:
+        node = self.nodes.get(model_name)
+        if not node:
+            return None
+        if node._cached_resolved is not None:
+            return copy.deepcopy(node._cached_resolved)
+
+        chain = self.get_inheritance_chain(model_name)
+        resolved = self._resolve_chain(chain)
+
+        # Only remove 'extends' when the parent exists in the tree.
+        if node.parent and node.parent in self.nodes:
+            resolved.pop("extends", None)
+        elif node.parent:
+            # Preserve explicit extends for missing parents.
+            resolved["extends"] = node.parent
+
+        resolved["model_name"] = node.name
+        resolved.pop("source", None)
+        resolved.pop("editable", None)
+        resolved.pop("_inherited_from", None)
+
+        if node.parent:
+            resolved["_inherited_from"] = node.parent
+
+        resolved["protected"] = node.protected
+        resolved["editable"] = not node.protected
+
+        node._cached_resolved = resolved
+        return copy.deepcopy(resolved)
+
+    def inherited_fields(self, model_name: str) -> dict[str, Any]:
+        node = self.nodes.get(model_name)
+        if not node:
+            return {}
+        if node._cached_inherited is not None:
+            return copy.deepcopy(node._cached_inherited)
+        chain = self.get_inheritance_chain(model_name)
+        inherited = self._resolve_chain(chain[1:]) if len(chain) > 1 else {}
+        node._cached_inherited = inherited
+        return copy.deepcopy(inherited)
+
+    def resolve_models(self, order: list[str] | None = None) -> list[dict[str, Any]]:
+        names = order or self._order
+        resolved: list[dict[str, Any]] = []
+        for name in names:
+            model = self.resolve_model(name)
+            if model is not None:
+                resolved.append(model)
+        return resolved
+
+    def delete_model(self, model_name: str, cascade: bool = False) -> DeleteResult:
+        node = self.nodes.get(model_name)
+        if not node:
+            return DeleteResult(success=False, error="Model not found")
+        children = list(node.children)
+        if children and not cascade:
+            return DeleteResult(
+                success=False,
+                error="Cannot delete model with existing dependents",
+                dependents=children,
+            )
+        to_delete = [model_name]
+        if cascade:
+            to_delete.extend(self.get_descendants(model_name))
+        # Update tree in-memory
+        for name in to_delete:
+            current = self.nodes.pop(name, None)
+            if current and current.parent and current.parent in self.nodes:
+                parent_node = self.nodes[current.parent]
+                if name in parent_node.children:
+                    parent_node.children.remove(name)
+        self.roots = [
+            node.name
+            for node in self.nodes.values()
+            if not node.parent or node.parent not in self.nodes
+        ]
+        return DeleteResult(success=True, deleted=to_delete)
+
+
 class ConfigStore:
-    """Manage config_default and config_added in memory with persistence."""
+    """Manage unified config in memory with persistence."""
 
     def __init__(
         self,
-        default_path: str | None = None,
-        added_path: str | None = None,
-        default_env_path: str | None = None,
-        added_env_path: str | None = None,
+        config_path: str | None = None,
+        env_path: str | None = None,
     ) -> None:
         self._lock = Lock()
-        self.default_path = resolve_config_path(default_path or CONFIG_DEFAULT_PATH)
-        self.added_path = resolve_config_path(added_path or CONFIG_ADDED_PATH)
-        self.default_env_path = resolve_env_path(self.default_path, default_env_path)
-        self.added_env_path = resolve_env_path(self.added_path, added_env_path)
-        self._default_raw: dict[str, Any] = {}
-        self._added_raw: dict[str, Any] = {}
-        self._default_env: dict[str, str] = {}
-        self._added_env: dict[str, str] = {}
+        self.config_path = resolve_config_path(config_path or CONFIG_PATH)
+        self.env_path = resolve_env_path(self.config_path, env_path)
+        self._raw: dict[str, Any] = {}
+        self._env: dict[str, str] = {}
+        self._model_tree: ModelTree = ModelTree()
         self.reload()
 
     def reload(self) -> None:
         with self._lock:
-            if not self.added_path.exists():
-                logger.warning(
-                    "config_added file not found at %s; creating an empty one",
-                    self.added_path,
-                )
-                self._write_config(
-                    self.added_path,
-                    {"model_list": [], "router_settings": {"fallbacks": []}},
-                )
-            self._default_raw = load_config(
-                str(self.default_path),
-                env_path=str(self.default_env_path),
+            self._raw = load_config(
+                str(self.config_path),
+                env_path=str(self.env_path),
                 substitute_env=False,
             )
-            self._added_raw = load_config(
-                str(self.added_path),
-                env_path=str(self.added_env_path),
-                substitute_env=False,
-            )
-            self._default_env = load_env_values(self.default_env_path)
-            self._added_env = load_env_values(self.added_env_path)
+            self._env = load_env_values(self.env_path)
+            self._rebuild_model_tree_locked()
 
-    def get_default_raw(self) -> dict[str, Any]:
+    def _rebuild_model_tree_locked(self) -> None:
+        resolved = _substitute_env_vars(
+            copy.deepcopy(self._raw),
+            self._env,
+            warn_on_missing=True,
+        )
+        model_list = _ensure_list(resolved.get("model_list"))
+        tree = ModelTree()
+        try:
+            tree.build(model_list)
+        except ModelInheritanceError as exc:
+            logger.error("Model tree build failed: %s", exc)
+            # Fallback: build a flat tree without inheritance
+            fallback_models: list[dict[str, Any]] = []
+            for model in model_list:
+                if isinstance(model, dict):
+                    entry = copy.deepcopy(model)
+                    entry.pop("extends", None)
+                    fallback_models.append(entry)
+            tree = ModelTree()
+            tree.build(fallback_models)
+        self._model_tree = tree
+
+    def get_raw(self) -> dict[str, Any]:
         with self._lock:
-            return copy.deepcopy(self._default_raw)
+            return copy.deepcopy(self._raw)
 
-    def get_added_raw(self) -> dict[str, Any]:
-        with self._lock:
-            return copy.deepcopy(self._added_raw)
-
-    def get_default_resolved(self, warn_on_missing: bool = True) -> dict[str, Any]:
+    def get_resolved(self, warn_on_missing: bool = True) -> dict[str, Any]:
         with self._lock:
             return _substitute_env_vars(
-                copy.deepcopy(self._default_raw),
-                self._default_env,
+                copy.deepcopy(self._raw),
+                self._env,
                 warn_on_missing,
             )
 
-    def get_added_resolved(self, warn_on_missing: bool = True) -> dict[str, Any]:
+    def get_env_value(self, key: str) -> str | None:
         with self._lock:
-            return _substitute_env_vars(
-                copy.deepcopy(self._added_raw),
-                self._added_env,
-                warn_on_missing,
-            )
+            value = self._env.get(key)
+        if value is not None and str(value).strip():
+            return value
+        from os import getenv
+
+        env_value = getenv(key)
+        if env_value is None:
+            return None
+        env_value = str(env_value)
+        return env_value if env_value.strip() else None
+
+    def get_admin_password(self) -> str | None:
+        return self.get_env_value(ADMIN_PASSWORD_ENV)
 
     def get_runtime_config(self) -> dict[str, Any]:
-        default_cfg = self.get_default_resolved()
-        added_cfg = self.get_added_resolved()
-        return _merge_configs(default_cfg, added_cfg)
+        with self._lock:
+            cfg = _substitute_env_vars(
+                copy.deepcopy(self._raw),
+                self._env,
+                warn_on_missing=True,
+            )
+            cfg["model_list"] = self._model_tree.resolve_models()
+            return cfg
 
     def list_models(
         self, resolve_inheritance: bool = True
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        """List all models from default and added configs.
+        """List all models, split into protected/unprotected.
 
         Args:
             resolve_inheritance: If True, resolve model inheritance.
 
         Returns:
-            Tuple of (default_models, added_models) lists.
+            Tuple of (protected_models, unprotected_models) lists.
         """
-        default_cfg = self.get_default_resolved(warn_on_missing=False)
-        added_cfg = self.get_added_resolved(warn_on_missing=False)
-        default_models = _mark_models(
-            _ensure_list(default_cfg.get("model_list")), "default", editable=False
-        )
-        added_models = _mark_models(
-            _ensure_list(added_cfg.get("model_list")), "added", editable=True
-        )
+        with self._lock:
+            cfg = _substitute_env_vars(
+                copy.deepcopy(self._raw),
+                self._env,
+                warn_on_missing=False,
+            )
+            if resolve_inheritance:
+                models = self._model_tree.resolve_models()
+            else:
+                models = _mark_models(_ensure_list(cfg.get("model_list")))
 
-        if resolve_inheritance:
-            # Resolve inheritance across all models together
-            # (added models can extend default models)
-            combined = default_models + added_models
-            try:
-                resolved = _resolve_all_model_inheritance(combined)
-                # Split back into default and added based on source marker
-                default_models = [m for m in resolved if m.get("source") == "default"]
-                added_models = [m for m in resolved if m.get("source") == "added"]
-            except ModelInheritanceError as e:
-                logger.error("Model inheritance resolution failed in list_models: %s", e)
-                # Fall back to unresolved models
+            protected_models = [m for m in models if m.get("protected")]
+            unprotected_models = [m for m in models if not m.get("protected")]
+            return protected_models, unprotected_models
 
-        return default_models, added_models
-
-    def save_default(self, new_config: dict[str, Any]) -> None:
+    def save(self, new_config: dict[str, Any]) -> None:
         with self._lock:
             cfg = copy.deepcopy(new_config)
-            self._write_config(self.default_path, cfg)
-            self._default_raw = cfg
+            self._write_config(self.config_path, cfg)
+            self._raw = cfg
+            self._rebuild_model_tree_locked()
 
-    def save_added(self, new_config: dict[str, Any]) -> None:
-        with self._lock:
-            cfg = copy.deepcopy(new_config)
-            self._write_config(self.added_path, cfg)
-            self._added_raw = cfg
-
-    def upsert_default_model(
+    def upsert_model(
         self, model_entry: dict[str, Any], fallbacks: list[str] | None = None
     ) -> bool:
         with self._lock:
-            cfg = copy.deepcopy(self._default_raw)
+            cfg = copy.deepcopy(self._raw)
+            if "extends" in model_entry and not model_entry.get("extends"):
+                model_entry = copy.deepcopy(model_entry)
+                model_entry.pop("extends", None)
+            existing = None
+            for model in _ensure_list(cfg.get("model_list")):
+                if isinstance(model, dict) and model.get("model_name") == model_entry.get("model_name"):
+                    existing = model
+                    break
+            if existing is not None and "extends" in existing and "extends" not in model_entry:
+                model_entry = copy.deepcopy(model_entry)
+                model_entry["extends"] = existing.get("extends")
             replaced = _upsert_model(cfg, model_entry)
             if fallbacks is not None:
                 _set_fallbacks(cfg, model_entry.get("model_name"), fallbacks)
-            self._write_config(self.default_path, cfg)
-            self._default_raw = cfg
+            self._write_config(self.config_path, cfg)
+            self._raw = cfg
+            self._rebuild_model_tree_locked()
             return replaced
 
-    def upsert_added_model(
-        self, model_entry: dict[str, Any], fallbacks: list[str] | None = None
-    ) -> bool:
-        with self._lock:
-            cfg = copy.deepcopy(self._added_raw)
-            replaced = _upsert_model(cfg, model_entry)
-            if fallbacks is not None:
-                _set_fallbacks(cfg, model_entry.get("model_name"), fallbacks)
-            self._write_config(self.added_path, cfg)
-            self._added_raw = cfg
-            return replaced
+    def delete_model(self, model_name: str) -> bool:
+        result = self.delete_model_with_dependents(model_name, cascade=False)
+        return result.success
 
-    def delete_added_model(self, model_name: str) -> bool:
+    def delete_model_with_dependents(
+        self, model_name: str, cascade: bool = False
+    ) -> DeleteResult:
         with self._lock:
-            cfg = copy.deepcopy(self._added_raw)
+            node = self._model_tree.get_node(model_name)
+            if not node:
+                return DeleteResult(success=False, error="Model not found")
+            children = self._model_tree.get_children(model_name)
+            if children and not cascade:
+                return DeleteResult(
+                    success=False,
+                    error="Cannot delete model with existing dependents",
+                    dependents=children,
+                )
+            to_delete = [model_name]
+            if cascade:
+                to_delete.extend(self._model_tree.get_descendants(model_name))
+            cfg = copy.deepcopy(self._raw)
             model_list = _ensure_list(cfg.get("model_list"))
-            filtered = [m for m in model_list if m.get("model_name") != model_name]
-            if len(filtered) == len(model_list):
-                return False
-            cfg["model_list"] = filtered
-            _remove_fallbacks(cfg, model_name)
-            self._write_config(self.added_path, cfg)
-            self._added_raw = cfg
-            return True
+            cfg["model_list"] = [
+                m for m in model_list if m.get("model_name") not in to_delete
+            ]
+            for name in to_delete:
+                _remove_fallbacks(cfg, name)
+            self._write_config(self.config_path, cfg)
+            self._raw = cfg
+            self._rebuild_model_tree_locked()
+            return DeleteResult(success=True, deleted=to_delete)
 
     def copy_model(self, source_name: str, new_name: str) -> dict[str, Any]:
         """Copy an existing model to a new model with a different name.
-
-        The copied model is always saved to the added config (config_added.yaml).
-        Source model can come from either default or added config.
 
         Args:
             source_name: The name of the model to copy.
@@ -375,41 +683,24 @@ class ConfigStore:
             ValueError: If source model not found or new_name already exists.
         """
         with self._lock:
-            # Find source model in default or added config
             source_model: dict[str, Any] | None = None
-
-            # Check added config first (user's models take precedence)
-            added_models = _ensure_list(self._added_raw.get("model_list"))
-            for model in added_models:
+            model_list = _ensure_list(copy.deepcopy(self._raw.get("model_list")))
+            for model in model_list:
                 if isinstance(model, dict) and model.get("model_name") == source_name:
                     source_model = model
                     break
 
-            # If not found in added, check default config
-            if source_model is None:
-                default_models = _ensure_list(self._default_raw.get("model_list"))
-                for model in default_models:
-                    if isinstance(model, dict) and model.get("model_name") == source_name:
-                        source_model = model
-                        break
-
             if source_model is None:
                 raise ValueError(f"Source model '{source_name}' not found")
 
-            # Check if new_name already exists in either config
-            all_names: set[str] = set()
-            for model in added_models:
-                if isinstance(model, dict) and model.get("model_name"):
-                    all_names.add(model["model_name"])
-            default_models = _ensure_list(self._default_raw.get("model_list"))
-            for model in default_models:
-                if isinstance(model, dict) and model.get("model_name"):
-                    all_names.add(model["model_name"])
-
-            if new_name in all_names:
+            existing_names = {
+                m.get("model_name")
+                for m in model_list
+                if isinstance(m, dict) and m.get("model_name")
+            }
+            if new_name in existing_names:
                 raise ValueError(f"Model '{new_name}' already exists")
 
-            # Create deep copy with new name
             new_model = copy.deepcopy(source_model)
             new_model["model_name"] = new_name
 
@@ -418,19 +709,18 @@ class ConfigStore:
             new_model.pop("source", None)
             new_model.pop("_inherited_from", None)
 
-            # Save to added config
-            cfg = copy.deepcopy(self._added_raw)
-            model_list = _ensure_list(cfg.get("model_list"))
             model_list.append(new_model)
+            cfg = copy.deepcopy(self._raw)
             cfg["model_list"] = model_list
-            self._write_config(self.added_path, cfg)
-            self._added_raw = cfg
+            self._write_config(self.config_path, cfg)
+            self._raw = cfg
+            self._rebuild_model_tree_locked()
 
             logger.info("Copied model '%s' to '%s'", source_name, new_name)
             return new_model
 
     def find_model(self, model_name: str) -> dict[str, Any] | None:
-        """Find a model by name in either default or added config.
+        """Find a model by name in config.
 
         Args:
             model_name: The name of the model to find.
@@ -439,19 +729,15 @@ class ConfigStore:
             The model entry if found, None otherwise.
         """
         with self._lock:
-            # Check added config first
-            added_models = _ensure_list(self._added_raw.get("model_list"))
-            for model in added_models:
+            model_list = _ensure_list(self._raw.get("model_list"))
+            for model in model_list:
                 if isinstance(model, dict) and model.get("model_name") == model_name:
                     return copy.deepcopy(model)
-
-            # Check default config
-            default_models = _ensure_list(self._default_raw.get("model_list"))
-            for model in default_models:
-                if isinstance(model, dict) and model.get("model_name") == model_name:
-                    return copy.deepcopy(model)
-
             return None
+
+    def get_model_tree(self) -> ModelTree:
+        with self._lock:
+            return self._model_tree
 
     @staticmethod
     def _write_config(path: Path, data: dict[str, Any]) -> None:
@@ -460,64 +746,16 @@ class ConfigStore:
             yaml.safe_dump(data, handle, default_flow_style=False, sort_keys=False)
 
 
-def _merge_configs(
-    default_cfg: dict[str, Any],
-    added_cfg: dict[str, Any],
-    resolve_inheritance: bool = True,
-) -> dict[str, Any]:
-    """Merge default and added configs into a single runtime config.
-
-    Args:
-        default_cfg: The default configuration.
-        added_cfg: The added configuration to merge.
-        resolve_inheritance: If True, resolve model inheritance after merging.
-
-    Returns:
-        Merged configuration dictionary.
-    """
-    merged = copy.deepcopy(default_cfg)
-    default_models = _ensure_list(default_cfg.get("model_list"))
-    added_models = _ensure_list(added_cfg.get("model_list"))
-
-    # Mark models with their source before merging
-    marked_default = _mark_models(default_models, "default", editable=False)
-    marked_added = _mark_models(added_models, "added", editable=True)
-    combined_models = marked_default + marked_added
-
-    # Resolve inheritance across all models (default + added)
-    if resolve_inheritance:
-        try:
-            combined_models = _resolve_all_model_inheritance(combined_models)
-        except ModelInheritanceError as e:
-            logger.error("Model inheritance resolution failed: %s", e)
-            # Fall back to unresolved models on error
-            combined_models = marked_default + marked_added
-
-    merged["model_list"] = combined_models
-
-    merged_router = _ensure_dict(merged.get("router_settings"))
-    merged["router_settings"] = merged_router
-    merged_fallbacks = _normalize_fallbacks(merged_router.get("fallbacks"))
-    added_router = _ensure_dict(added_cfg.get("router_settings"))
-    added_fallbacks = _normalize_fallbacks(added_router.get("fallbacks"))
-    if added_fallbacks:
-        merged_fallbacks.extend(copy.deepcopy(added_fallbacks))
-    if merged_fallbacks:
-        merged_router["fallbacks"] = merged_fallbacks
-
-    return merged
-
-
-def _mark_models(
-    models: list[Any], source: str, editable: bool
-) -> list[dict[str, Any]]:
+def _mark_models(models: list[Any]) -> list[dict[str, Any]]:
     marked: list[dict[str, Any]] = []
     for model in models:
         if not isinstance(model, dict):
             continue
         entry = copy.deepcopy(model)
-        entry["editable"] = editable
-        entry["source"] = source
+        protected = _normalize_protected(entry.get("protected"), default=True)
+        entry["protected"] = protected
+        entry["editable"] = not protected
+        entry.pop("source", None)
         marked.append(entry)
     return marked
 

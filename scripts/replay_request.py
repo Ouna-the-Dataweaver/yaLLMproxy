@@ -7,7 +7,7 @@ Usage:
 The script loads the saved request JSON or log, restores headers/body, and
 replays the request directly against the upstream server. If the saved
 Authorization header is masked, it can look up the API key from
-config_default.yaml/config_added.yaml (and their .env files).
+config.yaml (and its .env file).
 """
 
 from __future__ import annotations
@@ -205,25 +205,6 @@ def resolve_config(config_path: Optional[str]) -> Optional[dict]:
         config = load_config(config_path)
         logger.debug("Loaded config from %s", config_path or "default path")
 
-        added_path = os.getenv("YALLMP_CONFIG_ADDED")
-        if added_path:
-            try:
-                added_cfg = load_config(added_path)
-                config.setdefault("model_list", []).extend(
-                    added_cfg.get("model_list", []) or []
-                )
-            except Exception as exc:
-                logger.debug("Failed to load added config: %s", exc)
-        else:
-            default_added = PROJECT_ROOT / "configs" / "config_added.yaml"
-            if default_added.exists():
-                try:
-                    added_cfg = load_config(str(default_added))
-                    config.setdefault("model_list", []).extend(
-                        added_cfg.get("model_list", []) or []
-                    )
-                except Exception as exc:
-                    logger.debug("Failed to load added config: %s", exc)
         return config
     except Exception as exc:
         print(f"Warning: failed to load config: {exc}")
@@ -383,7 +364,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--config",
-        help="Path to config_default.yaml (default: configs/config_default.yaml or YALLMP_CONFIG_DEFAULT)",
+        help="Path to config.yaml (default: configs/config.yaml or YALLMP_CONFIG)",
     )
     parser.add_argument(
         "--timeout",

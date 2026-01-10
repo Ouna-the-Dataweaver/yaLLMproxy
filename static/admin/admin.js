@@ -72,27 +72,41 @@ async function fetchModels() {
     }
 }
 
+async function fetchModelTree() {
+    try {
+        const response = await fetch(`${API_BASE}/models/tree`);
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        return await response.json();
+    } catch (error) {
+        console.error('Error loading model tree:', error);
+        showNotification('Failed to load model tree', 'error');
+        return null;
+    }
+}
+
 function renderModels(payload) {
-    const defaultModels = payload?.default || [];
-    const addedModels = payload?.added || [];
+    const protectedModels = payload?.protected || [];
+    const unprotectedModels = payload?.unprotected || [];
 
-    const defaultCountEl = document.getElementById('defaultCount');
-    const addedCountEl = document.getElementById('addedCount');
-    if (defaultCountEl) {
-        defaultCountEl.textContent = defaultModels.length;
+    const protectedCountEl = document.getElementById('protectedCount');
+    const unprotectedCountEl = document.getElementById('unprotectedCount');
+    if (protectedCountEl) {
+        protectedCountEl.textContent = protectedModels.length;
     }
-    if (addedCountEl) {
-        addedCountEl.textContent = addedModels.length;
+    if (unprotectedCountEl) {
+        unprotectedCountEl.textContent = unprotectedModels.length;
     }
 
-    renderModelList('defaultModelList', defaultModels, {
-        title: 'No default models configured',
-        description: 'Add models to config_default.yaml to show them here.',
+    renderModelList('protectedModelList', protectedModels, {
+        title: 'No protected models configured',
+        description: 'Mark models as protected in config.yaml to lock them.',
         showAdd: false,
         transparentIcon: false
     });
-    renderModelList('addedModelList', addedModels, {
-        title: 'No added models yet',
+    renderModelList('unprotectedModelList', unprotectedModels, {
+        title: 'No unprotected models yet',
         description: 'Register models via the admin UI or API to populate this list.',
         showAdd: true,
         transparentIcon: true
@@ -137,15 +151,77 @@ function renderModelList(containerId, models, emptyState) {
     container.innerHTML = renderModelCards(models);
 }
 
+function renderModelTree(payload) {
+    const container = document.getElementById('modelTree');
+    if (!container) {
+        return;
+    }
+
+    if (!payload || !payload.nodes || Object.keys(payload.nodes).length === 0) {
+        container.innerHTML = `
+            <div class="empty-state">
+                <div class="empty-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+                        <path d="M2 17l10 5 10-5"/>
+                        <path d="M2 12l10 5 10-5"/>
+                    </svg>
+                </div>
+                <h3 class="empty-title">No model relationships yet</h3>
+                <p class="empty-description">Add models with extends to build the inheritance tree.</p>
+            </div>
+        `;
+        return;
+    }
+
+    const nodes = payload.nodes || {};
+    const roots = payload.roots || [];
+    const rows = [];
+
+    function walk(name, depth) {
+        const node = nodes[name];
+        if (!node) {
+            return;
+        }
+        rows.push({ name, node, depth });
+        const children = node.children || [];
+        children.forEach(child => walk(child, depth + 1));
+    }
+
+    roots.forEach(root => walk(root, 0));
+
+    container.innerHTML = rows.map(row => {
+        const parent = row.node.parent;
+        const protectedModel = row.node.protected === true;
+        const protectionLabel = protectedModel ? 'Protected' : 'Unprotected';
+        const derivedLabel = parent ? 'Derived' : 'Root';
+        const parentLabel = parent ? `extends ${escapeHtml(parent)}` : 'base model';
+
+        return `
+            <div class="tree-row" data-depth="${row.depth}" style="--depth: ${row.depth};">
+                <div class="tree-dot"></div>
+                <div class="tree-content">
+                    <div class="tree-name">${escapeHtml(row.name)}</div>
+                    <div class="tree-meta">
+                        <span class="tree-pill ${protectedModel ? 'tree-pill-locked' : ''}">${protectionLabel}</span>
+                        <span class="tree-pill ${parent ? 'tree-pill-derived' : ''}">${derivedLabel}</span>
+                        <span class="tree-parent">${parentLabel}</span>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
 function renderModelCards(models) {
     return models.map((model, index) => {
         const params = model.model_params || {};
         const apiType = params.api_type || 'openai';
         const supportsReasoning = params.supports_reasoning;
-        const editable = model.editable !== false; // Default to true if not specified
+        const protectedModel = model.protected === true;
+        const editable = !protectedModel;
         const safeModelName = escapeHtml(model.model_name);
-        const source = model.source || (editable ? 'added' : 'default');
-        const sourceLabel = source === 'added' ? 'Added' : 'Default';
+        const protectionLabel = protectedModel ? 'Protected' : 'Unprotected';
         const inheritedFrom = model._inherited_from;
 
         let badges = '';
@@ -165,18 +241,15 @@ function renderModelCards(models) {
 
         // Add editable/locked badge
         if (editable) {
-            badges += `<span class="badge badge-editable">${sourceLabel}</span>`;
+            badges += `<span class="badge badge-editable">${protectionLabel}</span>`;
         } else {
-            badges += `<span class="badge badge-locked">${sourceLabel}</span>`;
+            badges += `<span class="badge badge-locked">${protectionLabel}</span>`;
         }
 
         const details = [];
         details.push({ label: 'API Endpoint', value: params.api_base });
         if (params.model) {
             details.push({ label: 'Upstream Model', value: params.model });
-        }
-        if (params.api_key) {
-            details.push({ label: 'API Key', value: params.api_key });
         }
         details.push({ label: 'Timeout', value: `${params.request_timeout || 'Default'}s` });
 
@@ -188,8 +261,8 @@ function renderModelCards(models) {
         // Build action buttons with disabled state for non-editable models
         const editDisabled = !editable ? 'btn-disabled tooltip' : '';
         const deleteDisabled = !editable ? 'btn-disabled tooltip' : '';
-        const editTooltip = !editable ? 'data-tooltip="Config-loaded models cannot be modified"' : '';
-        const deleteTooltip = !editable ? 'data-tooltip="Config-loaded models cannot be deleted"' : '';
+        const editTooltip = !editable ? 'data-tooltip="Protected models require an admin password"' : '';
+        const deleteTooltip = !editable ? 'data-tooltip="Protected models require an admin password"' : '';
         const editAria = !editable ? 'aria-disabled="true"' : 'aria-disabled="false"';
         const deleteAria = !editable ? 'aria-disabled="true"' : 'aria-disabled="false"';
 
@@ -223,7 +296,7 @@ function renderModelCards(models) {
                             data-model="${safeModelName}"
                             ${editTooltip}
                             ${editAria}
-                            title="${editable ? 'Edit model' : 'Config-loaded models cannot be modified'}">
+                            title="${editable ? 'Edit model' : 'Protected models require an admin password'}">
                         ${Icons.edit}
                     </button>
                     <button class="btn btn-danger btn-icon ${deleteDisabled}"
@@ -232,7 +305,7 @@ function renderModelCards(models) {
                             data-model="${safeModelName}"
                             ${deleteTooltip}
                             ${deleteAria}
-                            title="${editable ? 'Delete model' : 'Config-loaded models cannot be deleted'}">
+                            title="${editable ? 'Delete model' : 'Protected models require an admin password'}">
                         ${Icons.trash}
                     </button>
                 </div>
@@ -249,24 +322,34 @@ function escapeHtml(text) {
 }
 
 async function loadModels() {
-    const defaultContainer = document.getElementById('defaultModelList');
-    const addedContainer = document.getElementById('addedModelList');
+    const protectedContainer = document.getElementById('protectedModelList');
+    const unprotectedContainer = document.getElementById('unprotectedModelList');
+    const treeContainer = document.getElementById('modelTree');
     const loadingMarkup = `
         <div class="loading">
             <div class="spinner"></div>
             <span>Loading models...</span>
         </div>
     `;
-    if (defaultContainer) {
-        defaultContainer.innerHTML = loadingMarkup;
+    if (protectedContainer) {
+        protectedContainer.innerHTML = loadingMarkup;
     }
-    if (addedContainer) {
-        addedContainer.innerHTML = loadingMarkup;
+    if (unprotectedContainer) {
+        unprotectedContainer.innerHTML = loadingMarkup;
+    }
+    if (treeContainer) {
+        treeContainer.innerHTML = `
+            <div class="loading">
+                <div class="spinner"></div>
+                <span>Loading model tree...</span>
+            </div>
+        `;
     }
 
     try {
-        const payload = await fetchModels();
+        const [payload, tree] = await Promise.all([fetchModels(), fetchModelTree()]);
         renderModels(payload);
+        renderModelTree(tree);
     } catch (error) {
         const errorMarkup = `
             <div class="empty-state">
@@ -288,11 +371,14 @@ async function loadModels() {
                 </button>
             </div>
         `;
-        if (defaultContainer) {
-            defaultContainer.innerHTML = errorMarkup;
+        if (protectedContainer) {
+            protectedContainer.innerHTML = errorMarkup;
         }
-        if (addedContainer) {
-            addedContainer.innerHTML = errorMarkup;
+        if (unprotectedContainer) {
+            unprotectedContainer.innerHTML = errorMarkup;
+        }
+        if (treeContainer) {
+            treeContainer.innerHTML = errorMarkup;
         }
     }
 }
@@ -445,7 +531,7 @@ function closeCopyModal() {
 
 function openExtendModal(modelName) {
     fetchModels().then(payload => {
-        const models = [...(payload?.default || []), ...(payload?.added || [])];
+        const models = [...(payload?.protected || []), ...(payload?.unprotected || [])];
         const model = models.find(m => m.model_name === modelName);
         if (!model) {
             showNotification('Model not found', 'error');
@@ -566,7 +652,7 @@ function openAddModal() {
 
 function editModel(modelName) {
     fetchModels().then(payload => {
-        const models = [...(payload?.default || []), ...(payload?.added || [])];
+        const models = [...(payload?.protected || []), ...(payload?.unprotected || [])];
         const model = models.find(m => m.model_name === modelName);
         if (!model) {
             showNotification('Model not found', 'error');
@@ -700,7 +786,7 @@ function initAdminUi() {
         }
     });
 
-    ['defaultModelList', 'addedModelList'].forEach((id) => {
+    ['protectedModelList', 'unprotectedModelList'].forEach((id) => {
         const modelList = document.getElementById(id);
         if (modelList) {
             modelList.addEventListener('click', handleModelListClick);
