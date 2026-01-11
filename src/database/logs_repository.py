@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from uuid import UUID
 
-from sqlalchemy import or_, select, text, func
+from sqlalchemy import and_, or_, select, text, func
 from sqlalchemy.orm import Session
 
 from .factory import get_database
@@ -378,13 +378,6 @@ class LogsRepository:
             results = sess.execute(query).fetchall()
 
         return {row[0]: row[1] for row in results}
-
-
-# Helper function for and_ condition
-def and_(*conditions):
-    """Create an AND condition from multiple conditions."""
-    from sqlalchemy import and_
-    return and_(*conditions)
 
 
 # Global repository instance
