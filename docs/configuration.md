@@ -36,23 +36,23 @@ Environment variables are loaded from:
 
 ```yaml
 model_list:
-  - model_name: GLM-4.6-nano              # 唯一模型标识符
+  - model_name: GLM-4.6-nano              # Unique model identifier
     protected: true
     model_params:
-      api_type: openai                     # API类型: openai (目前仅支持)
-      model: z-ai/glm-4.6:thinking         # 实际模型名称
-      api_base: https://nano-gpt.com/api/v1thinking  # API基础URL
-      api_key: ${NANOGPT_API_KEY}          # API密钥 (从.env读取)
-      supports_reasoning: true             # 是否支持思考内容
-      request_timeout: 540                 # 请求超时(秒)
-      parameters:                          # 参数覆盖配置
+      api_type: openai                     # API type: openai (currently only)
+      model: z-ai/glm-4.6:thinking         # Actual model name
+      api_base: https://nano-gpt.com/api/v1thinking  # API base URL
+      api_key: ${NANOGPT_API_KEY}          # API key (from .env)
+      supports_reasoning: true             # Supports reasoning content
+      request_timeout: 540                 # Request timeout (seconds)
+      parameters:                          # Parameter override config
         temperature:
           default: 1.0
-          allow_override: false            # 是否允许请求覆盖
+          allow_override: false            # Allow request override
         top_p:
           default: 0.95
           allow_override: false
-    parsers:                               # 响应解析器配置
+    parsers:                               # Response parser config
       enabled: true
       response:
         - parse_unparsed
@@ -74,25 +74,25 @@ model_list:
         include_newline: true
 
 router_settings:
-  num_retries: 1                           # 每个后端重试次数
-  fallbacks:                               # 备用模型配置
+  num_retries: 1                           # Retry attempts per backend
+  fallbacks:                               # Fallback model config
     - primary_model: [fallback1, fallback2]
 
 proxy_settings:
   server:
-    host: 127.0.0.1                        # 监听地址
-    port: 7979                             # 监听端口
-  enable_responses_endpoint: false         # 是否启用/v1/responses端点
+    host: 127.0.0.1                        # Listen address
+    port: 7979                             # Listen port
+  enable_responses_endpoint: false         # Enable /v1/responses endpoint
   logging:
-    log_parsed_response: true              # 记录解析后的响应
-    log_parsed_stream: true                # 记录解析后的流式响应
+    log_parsed_response: true              # Log parsed response
+    log_parsed_stream: true                # Log parsed stream response
   parsers:
-    enabled: false                         # 全局解析器是否启用
+    enabled: false                         # Global parser enabled
     response:
       - parse_unparsed
       - swap_reasoning_content
     paths:
-      - /chat/completions                  # 应用解析器的路径
+      - /chat/completions                  # Paths to apply parsers
     parse_unparsed:
       parse_thinking: true
       parse_tool_calls: true
@@ -111,11 +111,11 @@ proxy_settings:
 
 forwarder_settings:
   listen:
-    host: 0.0.0.0                          # 转发器监听地址
-    port: 6969                             # 转发器监听端口
+    host: 0.0.0.0                          # Forwarder listen address
+    port: 6969                             # Forwarder listen port
   target:
-    host: 127.0.0.1                        # 代理主机
-    port: 7979                             # 代理端口
+    host: 127.0.0.1                        # Proxy host
+    port: 7979                             # Proxy port
 
 http_forwarder_settings:
   preserve_host: true
