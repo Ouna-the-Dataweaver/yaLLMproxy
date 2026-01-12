@@ -12,8 +12,10 @@ Complete reference for yaLLMproxy configuration options.
   - [Parameter Overrides](#parameter-overrides)
   - [Model Inheritance](#model-inheritance)
   - [Model Copying](#model-copying)
-- [Response Parsers](#response-parsers)
-- [Per-Model Parser Overrides](#per-model-parser-overrides)
+- [Response Modules](#response-modules)
+  - [Available Modules](#available-modules)
+  - [Per-Model Module Overrides](#per-model-module-overrides)
+  - [Template-Based Parsing](#template-based-parsing)
 - [Environment Variables](#environment-variables)
 - [Router Settings](#router-settings)
 - [Logging Configuration](#logging-configuration)
@@ -45,14 +47,14 @@ model_list:
       api_key: ${NANOGPT_API_KEY}          # API key (from .env)
       supports_reasoning: true             # Supports reasoning content
       request_timeout: 540                 # Request timeout (seconds)
-      parameters:                          # Parameter override config
+        parameters:                          # Parameter override config
         temperature:
           default: 1.0
           allow_override: false            # Allow request override
         top_p:
           default: 0.95
           allow_override: false
-    parsers:                               # Response parser config
+    modules:                               # Response module config
       enabled: true
       response:
         - parse_unparsed
@@ -86,8 +88,8 @@ proxy_settings:
   logging:
     log_parsed_response: true              # Log parsed response
     log_parsed_stream: true                # Log parsed stream response
-  parsers:
-    enabled: false                         # Global parser enabled
+    parsers:                               # Response module config (legacy name, use "modules")
+      enabled: false                         # Global parser enabled
     response:
       - parse_unparsed
       - swap_reasoning_content
@@ -183,16 +185,16 @@ model_list:
         temperature:
           default: 1.0
           allow_override: false
-    parsers:
+    modules:
       enabled: true
       response:
         - swap_reasoning_content
 
-  # Derived model inherits from GLM-4.7, adds custom parsers
+  # Derived model inherits from GLM-4.7, adds custom modules
   - model_name: GLM-4.7:Cursor
     protected: false
     extends: GLM-4.7
-    parsers:
+    modules:
       enabled: true
       response:
         - parse_unparsed
@@ -254,7 +256,7 @@ model_list:
     model_params:
       api_base: https://api.z.ai/api/coding/paas/v4
       api_key: ${GLM_API_KEY}
-    parsers:
+    modules:
       enabled: true
       response:
         - swap_reasoning_content
@@ -262,7 +264,7 @@ model_list:
   - model_name: GLM-4.7:Custom
     protected: false
     extends: GLM-4.7
-    parsers:
+    modules:
       response:
         - parse_unparsed
         - swap_reasoning_content
@@ -322,14 +324,17 @@ curl -X POST "http://localhost:7979/admin/models/copy?source=GLM-4.7&target=GLM-
 2. **Configuration experiments**: Copy a model, modify settings, test without affecting original
 3. **Per-environment models**: Copy production model to staging with different parameters
 
-## Response Parsers
+## Response Modules
 
-### Available Parsers
+### Available Modules
+
+The proxy uses a modular pipeline system for processing responses. Modules can be applied globally or per-model.
 
 1. **parse_unparsed** - Extract tool calls and thinking content from raw responses
 2. **swap_reasoning_content** - Swap reasoning content with main content
+3. **parse_template** - Use Jinja2 templates for custom response parsing
 
-### Parser Configuration
+### Module Configuration
 
 #### parse_unparsed
 
@@ -361,9 +366,28 @@ swap_reasoning_content:
 - `content_to_reasoning`: Move content to thinking
 - `auto`: Auto-detect based on tags
 
-### Per-Model Parser Overrides
+#### parse_template
 
-Per-model parsers replace global `proxy_settings.parsers` config:
+```yaml
+parse_template:
+  template_path: configs/jinja_templates/template_example.jinja
+  parse_thinking: true
+  parse_tool_calls: true
+```
+
+**Parameters:**
+- `template_path`: Path to Jinja2 template file (required)
+- `parse_thinking`: Extract thinking content from template tags (default: true)
+- `parse_tool_calls`: Extract tool calls from template tags (default: true)
+
+**Use Cases:**
+- Custom parsing for models with non-standard output formats
+- Handling model-specific response structures
+- Extracting structured data from free-form responses
+
+### Per-Model Module Overrides
+
+Per-model modules replace global `proxy_settings.modules` config:
 
 ```yaml
 model_list:
@@ -371,7 +395,7 @@ model_list:
     model_params:
       api_base: https://api.example.com/v1
       api_key: ${GLM_API_KEY}
-    parsers:
+    modules:
       enabled: true
       response:
         - swap_reasoning_content
@@ -379,7 +403,7 @@ model_list:
         mode: reasoning_to_content
 ```
 
-If `enabled` is omitted, per-model parsers default to enabled. Set `enabled: false` to explicitly disable.
+If `enabled` is omitted, per-model modules default to enabled. Set `enabled: false` to explicitly disable.
 
 ## Environment Variables
 

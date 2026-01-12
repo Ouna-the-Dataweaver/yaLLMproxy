@@ -55,9 +55,15 @@ yaLLMproxy/
 │   │   ├── parsers.py             # Response parsing middleware
 │   │   └── stateful_api.py        # Stateful API utilities
 │   │
-│   ├── parsers/                   # Response parsing pipeline
+│   ├── modules/                   # Request/response pipeline modules
 │   │   ├── __init__.py
-│   │   └── response_pipeline.py   # Response parsing pipeline
+│   │   ├── request_pipeline.py    # Request pipeline modules
+│   │   └── response_pipeline.py   # Response pipeline modules
+│   │
+│   ├── parsers/                   # Response module pipeline (legacy parsers alias)
+│   │   ├── __init__.py
+│   │   ├── response_pipeline.py   # Response parsing pipeline
+│   │   └── template_analyzer.py   # Jinja template analysis
 │   │
 │   ├── routing/                   # Model routing utilities
 │   │   ├── __init__.py
@@ -76,7 +82,8 @@ yaLLMproxy/
 │   ├── postgres.py                # PostgreSQL database implementation
 │   ├── factory.py                 # Database factory for creating instances
 │   ├── logger.py                  # Database logger for async logging
-│   ├── repository.py              # Repository classes for queries
+│   ├── logs_repository.py         # Request log repository (queries)
+│   ├── repository.py              # Usage repository (stats/analytics)
 │   └── models/                    # SQLAlchemy models
 │       ├── __init__.py            # Model exports
 │       ├── base.py                # Base declarative model
@@ -93,9 +100,12 @@ yaLLMproxy/
 │       ├── ui.css                 # UI component styles
 │       ├── usage.html             # Usage statistics page
 │       ├── usage.css              # Usage page styles
-│       └── usage.js               # Usage page JavaScript
+│       ├── usage.js               # Usage page JavaScript
+│       ├── logs.html             # Logs viewer page
+│       └── logs.js               # Logs viewer JavaScript
 │
 ├── scripts/                       # Utility scripts
+│   ├── db_clean.py              # Clean database logs
 │   ├── inspect_template.py        # Inspect Jinja templates for parsing
 │   ├── manual_test.py             # Manual testing utilities
 │   ├── print_run_config.py        # Print resolved configuration
@@ -130,10 +140,10 @@ yaLLMproxy/
 ├── install.bat                    # Installation script (Windows)
 ├── run.sh                         # Run script (Unix)
 ├── run.bat                        # Run script (Windows)
-├── run_forwarder.sh               # Run forwarder script (Unix)
-├── run_http_forwarder.sh               # Run HTTP forwarder script (Unix)
-└── run_forwarder.bat              # Run forwarder script (Windows)
-└── run_http_forwarder.bat              # Run HTTP forwarder script (Windows)
+├── run_forwarder.sh               # Run TCP forwarder script (Unix)
+├── run_http_forwarder.sh          # Run HTTP forwarder script (Unix)
+├── run_forwarder.bat              # Run TCP forwarder script (Windows)
+└── run_http_forwarder.bat          # Run HTTP forwarder script (Windows)
 ```
 
 ## Module Descriptions

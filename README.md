@@ -14,6 +14,8 @@ Yet Another LLM Proxy - A lightweight, modular LLM proxy with OpenAI-compatible 
 - **Streaming Support**: Transparent handling of streaming responses with SSE error detection
 - **Model Inheritance**: Create derived models with configuration overrides (e.g., `GLM-4.7:Cursor` extends `GLM-4.7`)
 - **Model Copying**: Duplicate existing models via API for easy configuration reuse
+- **Template-Based Parsing**: Use Jinja2 templates for custom response parsing and extraction
+- **Logs Viewer**: Built-in UI for browsing and analyzing request logs with filtering
 
 ## Installation
 
@@ -189,8 +191,18 @@ Note: both forwarders default to port `6969`. If you want to run both at once, c
 ```
 yaLLMproxy/
 ├── src/                  # Source code
-├── static/admin/         # Admin UI
+│   ├── modules/           # Request/response pipeline modules
+│   ├── parsers/           # Response module pipeline (legacy parsers alias)
+│   ├── core/              # Core proxy functionality
+│   ├── api/               # HTTP API layer
+│   ├── database/           # Database support
+│   ├── logging/           # Request/response logging
+│   ├── middleware/        # Request/response middleware
+│   ├── routing/           # Model routing utilities
+│   └── types/             # Type definitions
+├── static/admin/         # Admin UI (includes logs viewer)
 ├── configs/              # Configuration files
+│   └── jinja_templates/  # Jinja2 templates for parsing
 ├── docs/                 # Detailed documentation
 ├── scripts/              # Utility scripts
 └── tests/                # Test suite
@@ -223,8 +235,9 @@ This will:
 1. Reload `config.yaml` from disk
 2. Re-parse all models and backends
 3. Update the router's runtime state atomically
+4. Apply model inheritance changes to derived models
 
-Useful for applying config changes without interrupting active requests.
+Useful for applying config changes without interrupting active requests. Note: Changes to base models update derived models in runtime config, but require router reload to apply to active backends.
 
 ## Database Configuration
 

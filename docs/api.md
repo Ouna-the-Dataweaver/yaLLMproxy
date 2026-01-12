@@ -286,6 +286,134 @@ Serve the admin web UI. `/admin/` serves `admin.html`.
 
 ---
 
+## Logs Viewer
+
+### Logs Page
+
+```http
+GET /logs
+```
+
+Serve the logs viewer HTML page for browsing and analyzing request logs.
+
+### Get Logs
+
+```http
+GET /api/logs
+```
+
+Get paginated request logs with optional filters.
+
+**Query Parameters:**
+
+| Parameter | Type | Description |
+|-----------|--------|-------------|
+| `model` | string | Filter by model name (partial match) |
+| `outcome` | string | Filter by outcome: success, error, cancelled |
+| `stop_reason` | string | Filter by stop reason: stop, tool_calls, length, content_filter |
+| `is_tool_call` | boolean | Filter by whether tool calls were made |
+| `start_date` | datetime | Start of time range (ISO 8601) |
+| `end_date` | datetime | End of time range (ISO 8601) |
+| `search` | string | Full-text search in request/response body |
+| `limit` | integer | Maximum number of logs to return (1-200, default: 50) |
+| `offset` | integer | Number of logs to skip (default: 0) |
+
+**Response:**
+
+```json
+{
+  "logs": [...],
+  "total": 150,
+  "limit": 50,
+  "offset": 0
+}
+```
+
+### Get Log by ID
+
+```http
+GET /api/logs/{log_id}
+```
+
+Get a single request log by ID with full details.
+
+**Query Parameters:**
+
+| Parameter | Type | Description |
+|-----------|--------|-------------|
+| `body_max_chars` | integer | Maximum size of request body to include (0 disables truncation, default: 10000) |
+
+### Get Stop Reasons Analytics
+
+```http
+GET /api/stop-reasons
+```
+
+Get statistics on stop reasons from logged requests.
+
+**Response:**
+
+```json
+{
+  "stop_reasons": [
+    {"stop_reason": "stop", "count": 100, "percentage": 66.7},
+    {"stop_reason": "tool_calls", "count": 30, "percentage": 20.0},
+    {"stop_reason": "length", "count": 15, "percentage": 10.0},
+    {"stop_reason": "content_filter", "count": 5, "percentage": 3.3}
+  ],
+  "time_range": {
+    "start": "2026-01-11T12:00:00Z",
+    "end": "2026-01-12T12:00:00Z"
+  }
+}
+```
+
+### Get Tool Call Rate
+
+```http
+GET /api/tool-call-rate
+```
+
+Get percentage of requests that resulted in tool calls.
+
+**Response:**
+
+```json
+{
+  "total_requests": 150,
+  "tool_call_requests": 30,
+  "tool_call_rate": 20.0
+}
+```
+
+### Get Models with Stop Reasons
+
+```http
+GET /api/models
+```
+
+Get request counts per model with stop reason breakdown.
+
+**Response:**
+
+```json
+{
+  "models": [
+    {
+      "model_name": "gpt-4",
+      "total_requests": 100,
+      "stop_reasons": [
+        {"stop_reason": "stop", "count": 70},
+        {"stop_reason": "tool_calls", "count": 20},
+        {"stop_reason": "length", "count": 10}
+      ]
+    }
+  ]
+}
+```
+
+---
+
 ## Usage Statistics
 
 ### Usage Page
