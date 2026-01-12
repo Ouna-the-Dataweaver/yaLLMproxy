@@ -159,29 +159,36 @@ class TestResolveModelInheritance:
         base = {
             "model_name": "base",
             "model_params": {"api_base": "http://base.local"},
-            "parsers": {
-                "enabled": True,
-                "response": ["parse_unparsed"],
-                "parse_unparsed": {"parse_thinking": True},
+            "modules": {
+                "upstream": {
+                    "enabled": True,
+                    "response": ["parse_unparsed"],
+                    "parse_unparsed": {"parse_thinking": True},
+                }
             },
         }
         derived = {
             "model_name": "derived",
             "extends": "base",
-            "parsers": {
-                "response": ["swap_reasoning_content"],  # Replace list
-                "swap_reasoning_content": {"mode": "reasoning_to_content"},
+            "modules": {
+                "upstream": {
+                    "response": ["swap_reasoning_content"],  # Replace list
+                    "swap_reasoning_content": {"mode": "reasoning_to_content"},
+                }
             },
         }
         all_models = {"base": base, "derived": derived}
         result = _resolve_single_model_inheritance(derived, all_models, [])
 
-        assert result["parsers"]["enabled"] is True  # Inherited
-        assert result["parsers"]["response"] == ["swap_reasoning_content"]  # Replaced
+        assert result["modules"]["upstream"]["enabled"] is True  # Inherited
+        assert result["modules"]["upstream"]["response"] == ["swap_reasoning_content"]  # Replaced
         # Base parser config should still be present from deep merge
-        assert result["parsers"]["parse_unparsed"]["parse_thinking"] is True
+        assert result["modules"]["upstream"]["parse_unparsed"]["parse_thinking"] is True
         # Derived parser config should be added
-        assert result["parsers"]["swap_reasoning_content"]["mode"] == "reasoning_to_content"
+        assert (
+            result["modules"]["upstream"]["swap_reasoning_content"]["mode"]
+            == "reasoning_to_content"
+        )
 
     def test_parameter_overrides_inheritance(self):
         """Test that parameter overrides from base are inherited and can be overridden."""
@@ -342,17 +349,21 @@ class TestConfigStoreInheritance:
                             "api_base": "https://api.z.ai/api/coding/paas/v4",
                             "api_key": "test-key",
                         },
-                        "parsers": {
-                            "enabled": True,
-                            "response": ["swap_reasoning_content"],
+                        "modules": {
+                            "upstream": {
+                                "enabled": True,
+                                "response": ["swap_reasoning_content"],
+                            }
                         },
                     },
                     {
                         "model_name": "GLM-4.7:Cursor",
                         "protected": False,
                         "extends": "GLM-4.7",
-                        "parsers": {
-                            "response": ["parse_unparsed", "swap_reasoning_content"],
+                        "modules": {
+                            "upstream": {
+                                "response": ["parse_unparsed", "swap_reasoning_content"],
+                            }
                         },
                     },
                 ]
@@ -365,8 +376,8 @@ class TestConfigStoreInheritance:
 
         cursor_model = next(m for m in models if m["model_name"] == "GLM-4.7:Cursor")
         assert cursor_model["model_params"]["api_base"] == "https://api.z.ai/api/coding/paas/v4"
-        assert cursor_model["parsers"]["enabled"] is True
-        assert cursor_model["parsers"]["response"] == [
+        assert cursor_model["modules"]["upstream"]["enabled"] is True
+        assert cursor_model["modules"]["upstream"]["response"] == [
             "parse_unparsed",
             "swap_reasoning_content",
         ]
@@ -453,8 +464,8 @@ class TestRouterWithInheritedModels:
         assert derived_backend.api_key == "derived-key"
         assert derived_backend.timeout == 120
 
-    def test_router_with_inherited_parsers(self, tmp_path: Path) -> None:
-        """Test that router correctly handles inherited parser configuration."""
+    def test_router_with_inherited_modules(self, tmp_path: Path) -> None:
+        """Test that router correctly handles inherited module configuration."""
         config_path = tmp_path / "config.yaml"
 
         _write_yaml(
@@ -468,20 +479,24 @@ class TestRouterWithInheritedModels:
                             "api_base": "http://base.local/v1",
                             "api_key": "base-key",
                         },
-                        "parsers": {
-                            "enabled": True,
-                            "response": ["swap_reasoning_content"],
-                            "swap_reasoning_content": {
-                                "mode": "reasoning_to_content",
-                            },
+                        "modules": {
+                            "upstream": {
+                                "enabled": True,
+                                "response": ["swap_reasoning_content"],
+                                "swap_reasoning_content": {
+                                    "mode": "reasoning_to_content",
+                                },
+                            }
                         },
                     },
                     {
                         "model_name": "derived-model",
                         "protected": False,
                         "extends": "base-model",
-                        "parsers": {
-                            "response": ["parse_unparsed", "swap_reasoning_content"],
+                        "modules": {
+                            "upstream": {
+                                "response": ["parse_unparsed", "swap_reasoning_content"],
+                            }
                         },
                     },
                 ]
@@ -494,9 +509,9 @@ class TestRouterWithInheritedModels:
         router = ProxyRouter(config)
 
         # Derived model should have parser overrides
-        assert "derived-model" in router.response_parser_overrides
-        derived_parser = router.response_parser_overrides["derived-model"]
-        # The parser should have 2 parsers in the pipeline
+        assert "derived-model" in router.response_module_overrides
+        derived_parser = router.response_module_overrides["derived-model"]
+        # The module pipeline should have 2 modules
         assert len(derived_parser.parsers) == 2
 
     def test_router_with_inherited_parameters(self, tmp_path: Path) -> None:

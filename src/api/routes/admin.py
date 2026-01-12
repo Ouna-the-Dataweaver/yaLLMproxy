@@ -179,9 +179,16 @@ def _build_model_entry(
     }
     if "extends" in payload:
         entry["extends"] = payload.get("extends")
-    for key in ("parameters", "parsers"):
-        if key in payload:
-            entry[key] = payload[key]
+    if "parameters" in payload:
+        entry["parameters"] = payload["parameters"]
+
+    modules_payload = None
+    if "modules" in payload:
+        modules_payload = payload.get("modules")
+    elif "parsers" in payload:
+        modules_payload = payload.get("parsers")
+    if modules_payload is not None:
+        entry["modules"] = modules_payload
     return entry
 
 

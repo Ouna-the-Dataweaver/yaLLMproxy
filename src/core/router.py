@@ -22,10 +22,12 @@ from .exceptions import BackendRetryableError
 logger = logging.getLogger("yallmp-proxy")
 
 from .sse import SSEJSONDecoder, detect_sse_stream_error
-from ..parsers import (
-    ParserContext,
-    build_response_parser_overrides,
-    build_response_parser_pipeline,
+from ..modules import (
+    ModuleContext,
+    build_request_module_overrides,
+    build_request_module_pipeline,
+    build_response_module_overrides,
+    build_response_module_pipeline,
 )
 
 DEFAULT_TIMEOUT = 30
@@ -39,8 +41,13 @@ class ProxyRouter:
         if not self.backends:
             raise RuntimeError("No backends found in config")
         self._lock = asyncio.Lock()
-        self.response_parsers = build_response_parser_pipeline(config)
-        self.response_parser_overrides = build_response_parser_overrides(config)
+        self.response_modules = build_response_module_pipeline(config)
+        self.response_module_overrides = build_response_module_overrides(config)
+        # Backwards-compatible aliases (parsers -> modules)
+        self.response_parsers = self.response_modules
+        self.response_parser_overrides = self.response_module_overrides
+        self.request_modules = build_request_module_pipeline(config)
+        self.request_module_overrides = build_request_module_overrides(config)
 
         proxy_settings = config.get("proxy_settings") or {}
         logging_cfg = proxy_settings.get("logging") or {}
@@ -168,7 +175,7 @@ class ProxyRouter:
     async def reload_config(self, new_config: dict) -> None:
         """Reload router with new configuration atomically.
 
-        Re-parses backends, fallbacks, and response parsers from the config.
+        Re-parses backends, fallbacks, and response modules from the config.
         This method is safe to call while requests are being processed.
 
         Args:
@@ -176,8 +183,13 @@ class ProxyRouter:
         """
         async with self._lock:
             self.backends = self._parse_backends(new_config.get("model_list", []))
-            self.response_parsers = build_response_parser_pipeline(new_config)
-            self.response_parser_overrides = build_response_parser_overrides(new_config)
+            self.response_modules = build_response_module_pipeline(new_config)
+            self.response_module_overrides = build_response_module_overrides(new_config)
+            # Backwards-compatible aliases (parsers -> modules)
+            self.response_parsers = self.response_modules
+            self.response_parser_overrides = self.response_module_overrides
+            self.request_modules = build_request_module_pipeline(new_config)
+            self.request_module_overrides = build_request_module_overrides(new_config)
             router_cfg = new_config.get("router_settings") or {}
             self.fallbacks = self._parse_fallbacks(router_cfg.get("fallbacks", []))
 
@@ -193,10 +205,18 @@ class ProxyRouter:
             router_cfg = new_config.get("router_settings") or {}
             self.num_retries = max(1, int(router_cfg.get("num_retries", 1)))
 
+    def _select_response_modules(self, backend_name: str):
+        if backend_name in self.response_module_overrides:
+            return self.response_module_overrides[backend_name]
+        return self.response_modules
+
     def _select_response_parsers(self, backend_name: str):
-        if backend_name in self.response_parser_overrides:
-            return self.response_parser_overrides[backend_name]
-        return self.response_parsers
+        return self._select_response_modules(backend_name)
+
+    def _select_request_modules(self, backend_name: str):
+        if backend_name in self.request_module_overrides:
+            return self.request_module_overrides[backend_name]
+        return self.request_modules
 
     async def list_model_names(self) -> List[str]:
         async with self._lock:
@@ -295,6 +315,32 @@ class ProxyRouter:
         outbound_headers = build_outbound_headers(
             headers, backend.api_key, is_stream=is_stream
         )
+        request_pipeline = self._select_request_modules(backend.name)
+        if request_pipeline:
+            request_context = ModuleContext(
+                path=path,
+                model=model_name,
+                backend=backend.name,
+                is_stream=is_stream,
+            )
+            content_type = (
+                headers.get("content-type")
+                or headers.get("Content-Type")
+                or ""
+            )
+            if not content_type or "application/json" in content_type.lower():
+                updated_payload = request_pipeline.transform_request_payload(
+                    payload, request_context
+                )
+                if updated_payload is not None:
+                    payload = updated_payload
+                    try:
+                        body = json.dumps(updated_payload, ensure_ascii=False).encode("utf-8")
+                    except (TypeError, ValueError):
+                        logger.warning(
+                            "Failed to encode updated request payload from modules; "
+                            "falling back to original body."
+                        )
         outbound_body = build_backend_body(
             payload, backend, body, is_stream=is_stream
         )
@@ -319,7 +365,7 @@ class ProxyRouter:
             logger.debug(f"Initiating streaming request to {url}")
             logger.debug(f"Body size for {backend.name}: {len(outbound_body)} bytes")
             pipeline = self._select_response_parsers(backend.name)
-            parser_context = ParserContext(
+            parser_context = ModuleContext(
                 path=path,
                 model=model_name,
                 backend=backend.name,
@@ -400,7 +446,7 @@ class ProxyRouter:
             )
 
         pipeline = self._select_response_parsers(backend.name)
-        parser_context = ParserContext(
+        parser_context = ModuleContext(
             path=path,
             model=model_name,
             backend=backend.name,
@@ -528,7 +574,7 @@ async def _streaming_request(
     request_log: Optional[Any] = None,
     disconnect_checker: Optional[Callable[[], Awaitable[bool]]] = None,
     parser_pipeline: Optional[Any] = None,
-    parser_context: Optional[ParserContext] = None,
+    parser_context: Optional[ModuleContext] = None,
 ) -> Response:
     from .backend import (
         DEFAULT_RETRY_DELAY,

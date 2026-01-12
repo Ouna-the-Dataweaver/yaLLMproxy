@@ -18,7 +18,7 @@ jinja2 = pytest.importorskip("jinja2")
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from src.parsers.response_pipeline import ParserContext, ReasoningSwapParser
+from src.modules.response_pipeline import ModuleContext, ReasoningSwapParser
 
 PROJECT_ROOT = Path(__file__).parent.parent
 TEMPLATE_PATH = PROJECT_ROOT / "configs" / "jinja_templates" / "template_example.jinja"
@@ -126,7 +126,7 @@ def _apply_stream(
     parser: ReasoningSwapParser, events: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
     state = parser.create_stream_state()
-    ctx = ParserContext(
+    ctx = ModuleContext(
         path="/chat/completions",
         model="test-model",
         backend="test-backend",

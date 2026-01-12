@@ -40,13 +40,13 @@ if "%CFG_FOUND%"=="0" echo [WARN] No CFG_ values found; using defaults/env.
 del "%CFG_TMP%" "%CFG_TMP%.err" >nul 2>nul
 
 REM Defaults (override with config, then env vars)
-set "LISTEN_HOST=0.0.0.0"
-set "LISTEN_PORT=7979"
-set "TARGET_HOST=127.0.0.1"
-set "TARGET_PORT=7978"
-set "BUF_SIZE=65536"
-set "LOG_LEVEL=INFO"
-set "IDLE_LOG=0"
+set "LISTEN_HOST="
+set "LISTEN_PORT="
+set "TARGET_HOST="
+set "TARGET_PORT="
+set "BUF_SIZE="
+set "LOG_LEVEL="
+set "IDLE_LOG="
 
 if not "%CFG_FORWARD_LISTEN_HOST%"=="" set "LISTEN_HOST=%CFG_FORWARD_LISTEN_HOST%"
 if not "%CFG_FORWARD_LISTEN_PORT%"=="" set "LISTEN_PORT=%CFG_FORWARD_LISTEN_PORT%"
@@ -60,6 +60,15 @@ if not "%FORWARD_TARGET_PORT%"=="" set "TARGET_PORT=%FORWARD_TARGET_PORT%"
 if not "%FORWARD_BUF_SIZE%"=="" set "BUF_SIZE=%FORWARD_BUF_SIZE%"
 if not "%FORWARD_LOG_LEVEL%"=="" set "LOG_LEVEL=%FORWARD_LOG_LEVEL%"
 if not "%FORWARD_IDLE_LOG%"=="" set "IDLE_LOG=%FORWARD_IDLE_LOG%"
+
+REM Fallback defaults (only if still empty)
+if "%LISTEN_HOST%"=="" set "LISTEN_HOST=0.0.0.0"
+if "%LISTEN_PORT%"=="" set "LISTEN_PORT=7979"
+if "%TARGET_HOST%"=="" set "TARGET_HOST=127.0.0.1"
+if "%TARGET_PORT%"=="" set "TARGET_PORT=7978"
+if "%BUF_SIZE%"=="" set "BUF_SIZE=65536"
+if "%LOG_LEVEL%"=="" set "LOG_LEVEL=INFO"
+if "%IDLE_LOG%"=="" set "IDLE_LOG=0"
 
 echo [INFO] Forwarding %LISTEN_HOST%:%LISTEN_PORT% ^> %TARGET_HOST%:%TARGET_PORT%
 echo [INFO] Press Ctrl+C to stop (then Y if prompted).

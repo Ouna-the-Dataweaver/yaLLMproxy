@@ -12,7 +12,7 @@ from fastapi import HTTPException, Query, Request
 from fastapi.routing import APIRouter
 from fastapi.responses import FileResponse, JSONResponse
 
-from ...database.logs_repository import get_logs_repository
+from ...database.logs_repository import BODY_MAX_CHARS_DEFAULT, get_logs_repository
 from ...database.repository import get_usage_repository
 
 logger = logging.getLogger("yallmp-proxy")
@@ -158,7 +158,15 @@ async def get_models_with_stop_reasons(
 
 # Generic log ID endpoint - MUST be last to avoid catching specific routes
 @router.get("/logs/{log_id}")
-async def get_log_by_id(log_id: str) -> JSONResponse:
+async def get_log_by_id(
+    log_id: str,
+    body_max_chars: int = Query(
+        BODY_MAX_CHARS_DEFAULT,
+        ge=0,
+        le=1_000_000,
+        description="Maximum size of the request body to include (0 disables truncation).",
+    ),
+) -> JSONResponse:
     """Get a single request log by ID.
 
     Returns full details of a request log including:
@@ -175,7 +183,7 @@ async def get_log_by_id(log_id: str) -> JSONResponse:
             raise HTTPException(status_code=400, detail="Invalid log ID format")
 
         repository = get_logs_repository()
-        log = repository.get_log_by_id(uuid_id)
+        log = repository.get_log_by_id(uuid_id, body_max_chars=body_max_chars)
 
         if log is None:
             raise HTTPException(status_code=404, detail="Log not found")

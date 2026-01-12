@@ -30,6 +30,14 @@ tasks:
       - cmd: bash ./run_forwarder.sh
         platforms: [linux, darwin]
 
+  forwarder:http:
+    desc: Run HTTP forwarder (reverse proxy)
+    cmds:
+      - cmd: cmd /c "{{.TASKFILE_DIR}}\\run_http_forwarder.bat"
+        platforms: [windows]
+      - cmd: bash ./run_http_forwarder.sh
+        platforms: [linux, darwin]
+
   install:
     desc: Create venv + sync dependencies (uses install script)
     cmds:

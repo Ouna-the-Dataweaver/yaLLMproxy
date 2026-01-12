@@ -150,9 +150,11 @@ class TestCopyModel:
                                 "temperature": {"default": 0.7, "allow_override": False},
                             },
                         },
-                        "parsers": {
-                            "enabled": True,
-                            "response": ["swap_reasoning_content"],
+                        "modules": {
+                            "upstream": {
+                                "enabled": True,
+                                "response": ["swap_reasoning_content"],
+                            }
                         },
                     }
                 ]
@@ -167,8 +169,8 @@ class TestCopyModel:
         assert new_model["model_params"]["api_base"] == "http://full.local"
         assert new_model["model_params"]["request_timeout"] == 120
         assert new_model["model_params"]["parameters"]["temperature"]["default"] == 0.7
-        assert new_model["parsers"]["enabled"] is True
-        assert new_model["parsers"]["response"] == ["swap_reasoning_content"]
+        assert new_model["modules"]["upstream"]["enabled"] is True
+        assert new_model["modules"]["upstream"]["response"] == ["swap_reasoning_content"]
 
     def test_copy_model_removes_metadata_fields(self, tmp_path: Path) -> None:
         """Test that metadata fields are not copied."""

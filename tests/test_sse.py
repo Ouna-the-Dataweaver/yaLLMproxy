@@ -7,7 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from src.core.sse import detect_sse_stream_error, STREAM_ERROR_CHECK_BUFFER_SIZE
-from src.parsers.response_pipeline import SSEDecoder
+from src.modules.response_pipeline import SSEDecoder
 
 
 class TestDetectSseStreamError:

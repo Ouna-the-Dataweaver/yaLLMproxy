@@ -3,6 +3,7 @@
 Provides methods for paginated log queries, filtering, and analytics.
 """
 
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
@@ -15,6 +16,28 @@ from .factory import get_database
 from .models import RequestLog, ErrorLog
 
 logger = logging.getLogger("yallmp-proxy")
+
+BODY_MAX_CHARS_DEFAULT = 100_000
+
+
+def _truncate_json_payload(value: Any, max_chars: int) -> tuple[Any, bool, int]:
+    """Truncate JSON-serializable values to a max character count.
+
+    Returns the possibly-truncated value, a truncation flag, and the original
+    serialized length (0 when value is None).
+    """
+    if value is None:
+        return value, False, 0
+    if max_chars <= 0:
+        return value, False, 0
+    try:
+        serialized = json.dumps(value, ensure_ascii=False)
+    except (TypeError, ValueError):
+        serialized = str(value)
+    original_len = len(serialized)
+    if original_len <= max_chars:
+        return value, False, original_len
+    return serialized[:max_chars], True, original_len
 
 
 class LogsRepository:
@@ -147,8 +170,16 @@ class LogsRepository:
             "created_at": log.created_at.isoformat() if log.created_at else None,
         }
 
-    def get_log_by_id(self, log_id: UUID) -> Optional[dict[str, Any]]:
+    def get_log_by_id(
+        self,
+        log_id: UUID,
+        body_max_chars: Optional[int] = BODY_MAX_CHARS_DEFAULT,
+    ) -> Optional[dict[str, Any]]:
         """Get a single log by ID with full details.
+
+        Note: Large fields like stream_chunks are limited to the first 50 chunks
+        to prevent timeouts and memory issues. Use a dedicated endpoint for
+        full stream data if needed.
 
         Args:
             log_id: The UUID of the log to retrieve.
@@ -168,10 +199,42 @@ class LogsRepository:
 
             log_dict = log.to_dict()
 
+            # Limit stream_chunks to prevent huge response payloads
+            # Full stream data can be 500KB+ which causes timeouts
+            if log_dict.get("stream_chunks") and len(log_dict["stream_chunks"]) > 50:
+                original_count = len(log_dict["stream_chunks"])
+                log_dict["stream_chunks"] = log_dict["stream_chunks"][:50]
+                log_dict["stream_chunks_truncated"] = True
+                log_dict["stream_chunks_total"] = original_count
+
+            # Truncate very large request bodies to avoid large responses
+            if body_max_chars is None:
+                body_max_chars = BODY_MAX_CHARS_DEFAULT
+            if body_max_chars is not None and body_max_chars > 0:
+                body_value, truncated, original_len = _truncate_json_payload(
+                    log_dict.get("body"),
+                    body_max_chars,
+                )
+                if truncated:
+                    log_dict["body"] = body_value
+                    log_dict["body_truncated"] = True
+                    log_dict["body_total_chars"] = original_len
+                    log_dict["body_preview_chars"] = min(original_len, body_max_chars)
+
+            # Truncate very long full_response to prevent timeouts
+            if log_dict.get("full_response") and len(log_dict["full_response"]) > 100000:
+                log_dict["full_response"] = log_dict["full_response"][:100000]
+                log_dict["full_response_truncated"] = True
+
+            # Limit backend_attempts to prevent large payloads
+            if log_dict.get("backend_attempts") and len(log_dict["backend_attempts"]) > 5:
+                log_dict["backend_attempts"] = log_dict["backend_attempts"][:5]
+                log_dict["backend_attempts_truncated"] = True
+
             # Get linked error logs if any
             error_query = select(ErrorLog).where(ErrorLog.request_log_id == log_id)
             error_result = sess.execute(error_query)
-            error_logs = [err.to_dict() for err in error_result.fetchall()]
+            error_logs = [row[0].to_dict() for row in error_result.fetchall()]
             log_dict["error_logs"] = error_logs
 
             return log_dict

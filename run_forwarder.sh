@@ -71,13 +71,13 @@ fi
 rm -f "$CFG_TMP" "$CFG_TMP.err" >/dev/null 2>&1
 
 # Defaults (override with config, then env vars)
-LISTEN_HOST="0.0.0.0"
-LISTEN_PORT="7979"
-TARGET_HOST="127.0.0.1"
-TARGET_PORT="7978"
-BUF_SIZE="65536"
-LOG_LEVEL="INFO"
-IDLE_LOG="0"
+LISTEN_HOST=""
+LISTEN_PORT=""
+TARGET_HOST=""
+TARGET_PORT=""
+BUF_SIZE=""
+LOG_LEVEL=""
+IDLE_LOG=""
 
 if [[ -n "${CFG_FORWARD_LISTEN_HOST:-}" ]]; then
   LISTEN_HOST="$CFG_FORWARD_LISTEN_HOST"
@@ -112,6 +112,29 @@ if [[ -n "${FORWARD_LOG_LEVEL:-}" ]]; then
 fi
 if [[ -n "${FORWARD_IDLE_LOG:-}" ]]; then
   IDLE_LOG="$FORWARD_IDLE_LOG"
+fi
+
+# Fallback defaults (only if still empty)
+if [[ -z "$LISTEN_HOST" ]]; then
+  LISTEN_HOST="0.0.0.0"
+fi
+if [[ -z "$LISTEN_PORT" ]]; then
+  LISTEN_PORT="7979"
+fi
+if [[ -z "$TARGET_HOST" ]]; then
+  TARGET_HOST="127.0.0.1"
+fi
+if [[ -z "$TARGET_PORT" ]]; then
+  TARGET_PORT="7978"
+fi
+if [[ -z "$BUF_SIZE" ]]; then
+  BUF_SIZE="65536"
+fi
+if [[ -z "$LOG_LEVEL" ]]; then
+  LOG_LEVEL="INFO"
+fi
+if [[ -z "$IDLE_LOG" ]]; then
+  IDLE_LOG="0"
 fi
 
 echo "[INFO] Forwarding $LISTEN_HOST:$LISTEN_PORT -> $TARGET_HOST:$TARGET_PORT"

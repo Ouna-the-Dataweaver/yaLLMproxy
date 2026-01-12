@@ -20,6 +20,7 @@ yaLLMproxy/
 ├── src/                           # Source code
 │   ├── __init__.py                # Main package exports
 │   ├── main.py                    # FastAPI application & lifecycle
+│   ├── http_forwarder.py                    # HTTP reverse-proxy forwarder
 │   ├── config_loader.py           # Configuration loading with env var substitution
 │   ├── config_store.py            # Config persistence & management
 │   ├── usage_metrics.py           # Usage tracking & metrics
@@ -130,7 +131,9 @@ yaLLMproxy/
 ├── run.sh                         # Run script (Unix)
 ├── run.bat                        # Run script (Windows)
 ├── run_forwarder.sh               # Run forwarder script (Unix)
+├── run_http_forwarder.sh               # Run HTTP forwarder script (Unix)
 └── run_forwarder.bat              # Run forwarder script (Windows)
+└── run_http_forwarder.bat              # Run HTTP forwarder script (Windows)
 ```
 
 ## Module Descriptions

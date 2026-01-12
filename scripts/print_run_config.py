@@ -86,6 +86,14 @@ def main() -> int:
         fwd_target_host = _default_target_host(proxy_host)
     fwd_target_port = _to_int(_get(cfg, "forwarder_settings", "target", "port")) or proxy_port
 
+    http_fwd_listen_host = _to_str(_get(cfg, "http_forwarder_settings", "listen", "host")) or "0.0.0.0"
+    http_fwd_listen_port = _to_int(_get(cfg, "http_forwarder_settings", "listen", "port")) or 6969
+    http_fwd_target_scheme = _to_str(_get(cfg, "http_forwarder_settings", "target", "scheme")) or "http"
+    http_fwd_target_host = _to_str(_get(cfg, "http_forwarder_settings", "target", "host"))
+    if not http_fwd_target_host:
+        http_fwd_target_host = _default_target_host(proxy_host)
+    http_fwd_target_port = _to_int(_get(cfg, "http_forwarder_settings", "target", "port")) or proxy_port
+
     lines = [
         f"CFG_PROXY_HOST={proxy_host}",
         f"CFG_PROXY_PORT={proxy_port}",
@@ -93,6 +101,11 @@ def main() -> int:
         f"CFG_FORWARD_LISTEN_PORT={fwd_listen_port}",
         f"CFG_FORWARD_TARGET_HOST={fwd_target_host}",
         f"CFG_FORWARD_TARGET_PORT={fwd_target_port}",
+        f"CFG_HTTP_FORWARD_LISTEN_HOST={http_fwd_listen_host}",
+        f"CFG_HTTP_FORWARD_LISTEN_PORT={http_fwd_listen_port}",
+        f"CFG_HTTP_FORWARD_TARGET_SCHEME={http_fwd_target_scheme}",
+        f"CFG_HTTP_FORWARD_TARGET_HOST={http_fwd_target_host}",
+        f"CFG_HTTP_FORWARD_TARGET_PORT={http_fwd_target_port}",
     ]
     sys.stdout.write("\n".join(lines) + "\n")
     return 0

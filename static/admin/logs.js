@@ -226,7 +226,7 @@ const renderPagination = () => {
     document.getElementById("nextPage").disabled = !hasMore;
 };
 
-const showLogDetail = async (logId) => {
+const showLogDetail = async (logId, bodyMaxChars = null) => {
     const modal = document.getElementById("detailModal");
     const body = document.getElementById("detailBody");
     const title = document.getElementById("detailTitle");
@@ -235,7 +235,10 @@ const showLogDetail = async (logId) => {
     body.innerHTML = '<div class="loading"><div class="spinner"></div><span>Loading...</span></div>';
 
     try {
-        const response = await fetch(`${API_ENDPOINT}/${logId}`, { cache: "no-store" });
+        const detailUrl = bodyMaxChars === null
+            ? `${API_ENDPOINT}/${logId}`
+            : `${API_ENDPOINT}/${logId}?body_max_chars=${bodyMaxChars}`;
+        const response = await fetch(detailUrl, { cache: "no-store" });
 
         if (!response.ok) {
             throw new Error(`HTTP ${response.status}`);
@@ -299,9 +302,18 @@ const showLogDetail = async (logId) => {
         `;
 
         // Request body section
+        const bodyPreviewChars = log.body_preview_chars ?? (typeof log.body === "string" ? log.body.length : 0);
+        const bodyTotalChars = log.body_total_chars ?? bodyPreviewChars;
+        const bodyNotice = log.body_truncated
+            ? `<div style="margin-bottom: 10px; color: var(--ink-muted); font-size: 12px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+                <span>Request body truncated to ${formatNumber(bodyPreviewChars)} of ${formatNumber(bodyTotalChars)} chars.</span>
+                <button class="btn btn-secondary" type="button" data-action="load-full-body">Load full body</button>
+            </div>`
+            : "";
         const requestSection = `
             <div class="detail-section">
                 <h3>Request</h3>
+                ${bodyNotice}
                 <div class="content">${formatJson(log.body)}</div>
             </div>
         `;
@@ -359,6 +371,11 @@ const showLogDetail = async (logId) => {
         }
 
         body.innerHTML = tokenStatsHtml + statsHtml + requestSection + responseSection + chunksSection + usageSection + errorsSection + linkedErrorsSection;
+
+        const loadFullBtn = body.querySelector('[data-action="load-full-body"]');
+        if (loadFullBtn) {
+            loadFullBtn.addEventListener("click", () => showLogDetail(logId, 0));
+        }
     } catch (error) {
         console.error("Failed to fetch log details:", error);
         body.innerHTML = `<p style="color: var(--error-ink)">Error loading log details: ${escapeHtml(error.message)}</p>`;
@@ -367,6 +384,9 @@ const showLogDetail = async (logId) => {
 
 const formatJson = (data) => {
     if (!data) return "No data";
+    if (typeof data === "string") {
+        return escapeHtml(data);
+    }
     try {
         return escapeHtml(JSON.stringify(data, null, 2));
     } catch (e) {

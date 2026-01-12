@@ -115,6 +115,16 @@ forwarder_settings:
   target:
     host: 127.0.0.1                # Proxy host
     port: 7979                     # Proxy port
+
+http_forwarder_settings:
+  preserve_host: true              # Preserve Host header (recommended)
+  listen:
+    host: 0.0.0.0                  # External listen address
+    port: 6969                     # External listen port
+  target:
+    scheme: http
+    host: 127.0.0.1
+    port: 7979
 ```
 
 Protected models require `YALLMP_ADMIN_PASSWORD` in `configs/.env` for edits/deletes via admin APIs.
@@ -149,13 +159,25 @@ model_list:
         mode: reasoning_to_content
 ```
 
-## Forwarder
+## Forwarders
 
-The TCP forwarder is optional but useful when you need a separate inbound port or a separate process for the inbound traffic (e.g. you have a VPN which you must use for API access, but it breaks inbound traffic(or WSL shenanigans), in that case you can whitelist the forwarder executable/process, or run forwader in windows, and keep proxy running under VPN/in WSL etc.):
+### TCP forwarder
+
+The TCP forwarder is optional but useful when you need a separate inbound port or a separate process for the inbound traffic (e.g. you have a VPN which you must use for API access, but it breaks inbound traffic (or WSL shenanigans); you can whitelist the forwarder executable/process, or run the forwarder in Windows, and keep the proxy running under VPN/in WSL).
 
 It reads `forwarder_settings` from `configs/config.yaml`. You can override with
 `FORWARD_LISTEN_HOST`, `FORWARD_LISTEN_PORT`, `FORWARD_TARGET_HOST`,
 `FORWARD_TARGET_PORT` at runtime.
+
+### HTTP forwarder (reverse proxy)
+
+Use the HTTP forwarder when you want a protocol-aware reverse proxy (e.g., to avoid connection resets on large JSON responses). It preserves the `Host` header by default and streams SSE responses.
+
+It reads `http_forwarder_settings` from `configs/config.yaml`. You can override with
+`HTTP_FORWARD_LISTEN_HOST`, `HTTP_FORWARD_LISTEN_PORT`, `HTTP_FORWARD_TARGET_SCHEME`,
+`HTTP_FORWARD_TARGET_HOST`, `HTTP_FORWARD_TARGET_PORT`, and `HTTP_FORWARD_PRESERVE_HOST`.
+
+Note: both forwarders default to port `6969`. If you want to run both at once, change one of their ports.
 
 ## Documentation
 - [API Reference](docs/api.md) - Complete endpoint documentation
@@ -182,6 +204,7 @@ yaLLMproxy/
 | `task run:reload` | Start with autoreload (development) |
 | `task test` | Run tests |
 | `task forwarder` | Run TCP forwarder |
+| `task forwarder:http` | Run HTTP forwarder |
 | `uv run pytest tests/` | Run tests directly |
 
 ## Runtime Management

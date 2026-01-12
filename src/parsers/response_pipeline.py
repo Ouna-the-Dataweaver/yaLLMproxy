@@ -1,4 +1,4 @@
-"""Response parser pipeline for transforming backend responses before returning to clients."""
+"""Response module pipeline for transforming backend responses before returning to clients."""
 
 from __future__ import annotations
 
@@ -6,7 +6,8 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Mapping, Optional
+from pathlib import Path
+from typing import Any, Callable, Iterable, Mapping, Optional
 
 
 logger = logging.getLogger("yallmp-proxy")
@@ -18,6 +19,9 @@ class ParserContext:
     model: str
     backend: str
     is_stream: bool
+
+
+ModuleContext = ParserContext
 
 
 def _parse_bool(value: Any) -> bool:
@@ -81,6 +85,53 @@ def _parse_tool_call_block(text: str) -> Optional[dict[str, Any]]:
     return {"name": name, "arguments": args}
 
 
+K2_TOOL_MARKERS = {
+    "call_open": "<|tool_call_begin|>",
+    "arg_open": "<|tool_call_argument_begin|>",
+    "call_close": "<|tool_call_end|>",
+    "section_open": "<|tool_calls_section_begin|>",
+    "section_close": "<|tool_calls_section_end|>",
+}
+
+
+def _detect_tool_call_format(template_text: str) -> Optional[str]:
+    if "<|tool_call_begin|>" in template_text and "<|tool_call_end|>" in template_text:
+        return "k2"
+    if "<tool_call>" in template_text and "</tool_call>" in template_text:
+        return "xml"
+    return None
+
+
+def _detect_tool_call_tag(template_text: str) -> Optional[str]:
+    for tag in ("tool_call", "function_call", "tool"):
+        if f"<{tag}>" in template_text and f"</{tag}>" in template_text:
+            return tag
+    return None
+
+
+def _k2_tool_call_parser_factory(
+    arg_open: str,
+) -> Callable[[str], Optional[dict[str, Any]]]:
+    def _parse(text: str) -> Optional[dict[str, Any]]:
+        stripped = text.strip()
+        if not stripped:
+            return None
+        if arg_open in stripped:
+            name_part, args_part = stripped.split(arg_open, 1)
+        else:
+            name_part, args_part = stripped, ""
+        name = name_part.strip()
+        if not name:
+            return None
+        args_text = args_part.strip()
+        arguments: Any = {}
+        if args_text:
+            arguments = _maybe_json(args_text)
+        return {"name": name, "arguments": arguments}
+
+    return _parse
+
+
 @dataclass
 class TagScanResult:
     content: str = ""
@@ -98,13 +149,19 @@ class TagScanner:
         tool_tag: str = "tool_call",
         parse_thinking: bool = True,
         parse_tool_calls: bool = True,
+        tool_open: Optional[str] = None,
+        tool_close: Optional[str] = None,
+        tool_parser: Optional[Callable[[str], Optional[dict[str, Any]]]] = None,
+        drop_tags: Optional[Iterable[str]] = None,
     ) -> None:
         self.parse_thinking = parse_thinking
         self.parse_tool_calls = parse_tool_calls
         self.think_open = f"<{think_tag}>"
         self.think_close = f"</{think_tag}>"
-        self.tool_open = f"<{tool_tag}>"
-        self.tool_close = f"</{tool_tag}>"
+        self.tool_open = tool_open or f"<{tool_tag}>"
+        self.tool_close = tool_close or f"</{tool_tag}>"
+        self.tool_parser = tool_parser or _parse_tool_call_block
+        self.drop_tags = [tag for tag in (drop_tags or []) if tag]
         self._open_tags = [
             tag
             for tag, enabled in [
@@ -113,6 +170,8 @@ class TagScanner:
             ]
             if enabled
         ]
+        if self.drop_tags:
+            self._open_tags.extend(self.drop_tags)
         self.mode = "text"
         self.buffer = ""
         self.tool_buffer = ""
@@ -144,6 +203,15 @@ class TagScanner:
                     self.tool_buffer = ""
                     self.mode = "tool"
                     continue
+                if self.drop_tags:
+                    matched_drop = False
+                    for drop_tag in self.drop_tags:
+                        if self.buffer.startswith(drop_tag):
+                            self.buffer = self.buffer[len(drop_tag):]
+                            matched_drop = True
+                            break
+                    if matched_drop:
+                        continue
                 if self._open_tags and any(tag.startswith(self.buffer) for tag in self._open_tags):
                     break
                 out_content.append(self.buffer[0])
@@ -173,7 +241,7 @@ class TagScanner:
                     break
                 self.tool_buffer += self.buffer[:idx]
                 self.buffer = self.buffer[idx + len(self.tool_close):]
-                parsed = _parse_tool_call_block(self.tool_buffer)
+                parsed = self.tool_parser(self.tool_buffer)
                 if parsed:
                     out_tool_calls.append(parsed)
                 else:
@@ -272,6 +340,9 @@ class ResponseParser:
 
     def finalize_stream(self, state: Any, ctx: ParserContext) -> list[dict[str, Any]]:
         return []
+
+
+ResponseModule = ResponseParser
 
 
 @dataclass
@@ -425,6 +496,240 @@ class ParseTagsParser(ResponseParser):
                         parsed, index=i + choice_state.next_tool_index, id_prefix=id_prefix
                     )
                     for i, parsed in enumerate(flushed.tool_calls)
+                ]
+            events.append({"choices": [{"index": choice_index, "delta": delta}]})
+        return events
+
+
+@dataclass
+class TemplateTagsStreamState:
+    choices: dict[int, ChoiceTagState] = field(default_factory=dict)
+
+
+class TemplateParseParser(ResponseParser):
+    name = "parse_template"
+
+    def __init__(self, config: Mapping[str, Any]) -> None:
+        self.parse_thinking = _parse_bool(config.get("parse_thinking", True))
+        self.parse_tool_calls = _parse_bool(config.get("parse_tool_calls", True))
+        self.think_tag = str(config.get("think_tag") or "think")
+        self.tool_tag = str(config.get("tool_tag") or "tool_call")
+        self.tool_format = str(config.get("tool_format") or "auto").strip().lower()
+        self.template_path = str(config.get("template_path") or "").strip()
+
+        self.k2_call_open = str(config.get("tool_call_open") or K2_TOOL_MARKERS["call_open"])
+        self.k2_call_close = str(config.get("tool_call_close") or K2_TOOL_MARKERS["call_close"])
+        self.k2_arg_open = str(config.get("tool_call_arg_open") or K2_TOOL_MARKERS["arg_open"])
+        self.k2_section_open = str(
+            config.get("tool_call_section_open") or K2_TOOL_MARKERS["section_open"]
+        )
+        self.k2_section_close = str(
+            config.get("tool_call_section_close") or K2_TOOL_MARKERS["section_close"]
+        )
+
+        tool_tag_explicit = "tool_tag" in config and config.get("tool_tag") is not None
+        if self.template_path:
+            self._load_template_overrides(tool_tag_explicit)
+
+        if self.tool_format == "auto":
+            self.tool_format = "xml"
+        if self.tool_format not in {"xml", "k2"}:
+            logger.warning(
+                "Unknown tool_format '%s' for parse_template; defaulting to xml",
+                self.tool_format,
+            )
+            self.tool_format = "xml"
+
+    def _load_template_overrides(self, tool_tag_explicit: bool) -> None:
+        path = Path(self.template_path)
+        try:
+            template_text = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            logger.warning(
+                "Template file not found for parse_template: %s. Using defaults.",
+                self.template_path,
+            )
+            return
+        except Exception as exc:
+            logger.warning(
+                "Failed to load template for parse_template: %s. Error: %s.",
+                self.template_path,
+                exc,
+            )
+            return
+
+        detected_format = _detect_tool_call_format(template_text)
+        if self.tool_format == "auto" and detected_format:
+            self.tool_format = detected_format
+        if self.tool_format == "xml" and not tool_tag_explicit:
+            detected_tag = _detect_tool_call_tag(template_text)
+            if detected_tag:
+                self.tool_tag = detected_tag
+
+    def _build_scanner(self) -> TagScanner:
+        tool_open = None
+        tool_close = None
+        tool_parser = None
+        drop_tags: list[str] = []
+
+        if self.parse_tool_calls and self.tool_format == "k2":
+            tool_open = self.k2_call_open
+            tool_close = self.k2_call_close
+            tool_parser = _k2_tool_call_parser_factory(self.k2_arg_open)
+            drop_tags = [self.k2_section_open, self.k2_section_close]
+
+        return TagScanner(
+            think_tag=self.think_tag,
+            tool_tag=self.tool_tag,
+            parse_thinking=self.parse_thinking,
+            parse_tool_calls=self.parse_tool_calls,
+            tool_open=tool_open,
+            tool_close=tool_close,
+            tool_parser=tool_parser,
+            drop_tags=drop_tags,
+        )
+
+    def _scan_text(self, content: str) -> TagScanResult:
+        scanner = self._build_scanner()
+        result = scanner.feed(content)
+        flushed = scanner.flush()
+        return TagScanResult(
+            content=result.content + flushed.content,
+            reasoning=result.reasoning + flushed.reasoning,
+            tool_calls=result.tool_calls + flushed.tool_calls,
+        )
+
+    def apply_response(self, payload: dict[str, Any], ctx: ParserContext) -> dict[str, Any]:
+        choices = payload.get("choices")
+        if not isinstance(choices, list):
+            return payload
+        for choice in choices:
+            message = choice.get("message")
+            if not isinstance(message, dict):
+                continue
+            if message.get("role") not in {None, "assistant"}:
+                continue
+            content = message.get("content")
+            if not isinstance(content, str) or not content:
+                continue
+
+            parsed = self._scan_text(content)
+
+            if (
+                self.parse_thinking
+                and parsed.reasoning
+                and not message.get("reasoning_content")
+            ):
+                message["reasoning_content"] = parsed.reasoning
+
+            tool_calls: list[dict[str, Any]] = []
+            if self.parse_tool_calls and not message.get("tool_calls"):
+                tool_calls = parsed.tool_calls
+
+            if tool_calls:
+                id_prefix = f"call_{choice.get('index', 0)}_"
+                tool_payload = [
+                    _build_tool_call(parsed_call, index=i, id_prefix=id_prefix)
+                    for i, parsed_call in enumerate(tool_calls)
+                ]
+                message["tool_calls"] = tool_payload
+                finish_reason = choice.get("finish_reason")
+                if finish_reason in {None, "stop"}:
+                    choice["finish_reason"] = "tool_calls"
+
+            if isinstance(parsed.content, str):
+                if parsed.content.strip():
+                    message["content"] = parsed.content
+                else:
+                    message["content"] = None
+
+        return payload
+
+    def create_stream_state(self) -> TemplateTagsStreamState:
+        return TemplateTagsStreamState()
+
+    def _get_choice_state(
+        self, state: TemplateTagsStreamState, choice_index: int
+    ) -> ChoiceTagState:
+        choice_state = state.choices.get(choice_index)
+        if choice_state is None:
+            scanner = self._build_scanner()
+            choice_state = ChoiceTagState(scanner=scanner)
+            state.choices[choice_index] = choice_state
+        return choice_state
+
+    def apply_stream_event(
+        self, event: dict[str, Any], state: TemplateTagsStreamState, ctx: ParserContext
+    ) -> dict[str, Any]:
+        choices = event.get("choices")
+        if not isinstance(choices, list):
+            return event
+
+        for choice in choices:
+            delta = choice.get("delta")
+            if not isinstance(delta, dict):
+                continue
+            content = delta.get("content")
+            if not isinstance(content, str) or not content:
+                continue
+
+            choice_index = int(choice.get("index", 0))
+            choice_state = self._get_choice_state(state, choice_index)
+            result = choice_state.scanner.feed(content)
+
+            if result.content:
+                delta["content"] = result.content
+            else:
+                delta.pop("content", None)
+
+            if result.reasoning:
+                existing = delta.get("reasoning_content")
+                if isinstance(existing, str):
+                    delta["reasoning_content"] = existing + result.reasoning
+                else:
+                    delta["reasoning_content"] = result.reasoning
+
+            if result.tool_calls:
+                id_prefix = f"call_{choice_index}_"
+                tool_payload = []
+                for parsed_call in result.tool_calls:
+                    tool_payload.append(
+                        _build_tool_call(
+                            parsed_call,
+                            index=choice_state.next_tool_index,
+                            id_prefix=id_prefix,
+                        )
+                    )
+                    choice_state.next_tool_index += 1
+                if tool_payload:
+                    delta["tool_calls"] = tool_payload
+                    choice_state.saw_tool_calls = True
+
+            if choice_state.saw_tool_calls and choice.get("finish_reason") in {None, "stop"}:
+                choice["finish_reason"] = "tool_calls"
+
+        return event
+
+    def finalize_stream(
+        self, state: TemplateTagsStreamState, ctx: ParserContext
+    ) -> list[dict[str, Any]]:
+        events: list[dict[str, Any]] = []
+        for choice_index, choice_state in state.choices.items():
+            flushed = choice_state.scanner.flush()
+            if not (flushed.content or flushed.reasoning or flushed.tool_calls):
+                continue
+            delta: dict[str, Any] = {}
+            if flushed.content:
+                delta["content"] = flushed.content
+            if flushed.reasoning:
+                delta["reasoning_content"] = flushed.reasoning
+            if flushed.tool_calls:
+                id_prefix = f"call_{choice_index}_"
+                delta["tool_calls"] = [
+                    _build_tool_call(
+                        parsed_call, index=i + choice_state.next_tool_index, id_prefix=id_prefix
+                    )
+                    for i, parsed_call in enumerate(flushed.tool_calls)
                 ]
             events.append({"choices": [{"index": choice_index, "delta": delta}]})
         return events
@@ -914,6 +1219,9 @@ class ResponseStreamParser:
         return output
 
 
+ResponseStreamModule = ResponseStreamParser
+
+
 class ResponseParserPipeline:
     def __init__(self, parsers: Iterable[ResponseParser], paths: Iterable[str]) -> None:
         self.parsers = list(parsers)
@@ -949,7 +1257,54 @@ class ResponseParserPipeline:
         return ResponseStreamParser(self, ctx)
 
 
-def build_response_parser_pipeline(
+ResponseModulePipeline = ResponseParserPipeline
+
+
+def _select_upstream_modules_config(
+    root_cfg: Mapping[str, Any]
+) -> dict[str, Any]:
+    modules_cfg = root_cfg.get("modules")
+    parsers_cfg = root_cfg.get("parsers")
+    if isinstance(modules_cfg, Mapping) and isinstance(parsers_cfg, Mapping):
+        logger.warning(
+            "Both 'modules' and legacy 'parsers' configs are present; using 'modules'."
+        )
+    if isinstance(modules_cfg, Mapping):
+        if "upstream" in modules_cfg or "downstream" in modules_cfg:
+            upstream_cfg = modules_cfg.get("upstream")
+            if not isinstance(upstream_cfg, Mapping):
+                upstream_cfg = {}
+            if "enabled" not in upstream_cfg and "enabled" in modules_cfg:
+                upstream_cfg = dict(upstream_cfg)
+                upstream_cfg["enabled"] = modules_cfg.get("enabled")
+            return dict(upstream_cfg)
+        return dict(modules_cfg)
+    if isinstance(parsers_cfg, Mapping):
+        return dict(parsers_cfg)
+    # Support direct upstream config (e.g., per-model override payloads)
+    if "upstream" in root_cfg or "downstream" in root_cfg:
+        upstream_cfg = root_cfg.get("upstream")
+        if not isinstance(upstream_cfg, Mapping):
+            upstream_cfg = {}
+        if "enabled" not in upstream_cfg and "enabled" in root_cfg:
+            upstream_cfg = dict(upstream_cfg)
+            upstream_cfg["enabled"] = root_cfg.get("enabled")
+        return dict(upstream_cfg)
+    if any(
+        key in root_cfg
+        for key in (
+            "response",
+            "paths",
+            "parse_unparsed",
+            "parse_template",
+            "swap_reasoning_content",
+        )
+    ):
+        return dict(root_cfg)
+    return {}
+
+
+def build_response_module_pipeline(
     config: Mapping[str, Any],
     *,
     enabled_default: bool = False,
@@ -957,50 +1312,60 @@ def build_response_parser_pipeline(
 ) -> ResponseParserPipeline:
     if "proxy_settings" in config:
         proxy_settings = config.get("proxy_settings") or {}
-        parsers_cfg = proxy_settings.get("parsers") or {}
+        modules_cfg = _select_upstream_modules_config(proxy_settings)
         enabled_default = False
     else:
-        parsers_cfg = config or {}
+        modules_cfg = _select_upstream_modules_config(config or {})
 
-    if not parsers_cfg:
+    if not modules_cfg:
         return ResponseParserPipeline([], [])
 
-    enabled_raw = parsers_cfg.get("enabled")
+    enabled_raw = modules_cfg.get("enabled")
     enabled = enabled_default if enabled_raw is None else _parse_bool(enabled_raw)
     if not enabled:
         return ResponseParserPipeline([], [])
 
-    parser_names = _ensure_list(parsers_cfg.get("response"))
-    if not parser_names:
+    module_names = _ensure_list(modules_cfg.get("response"))
+    if not module_names:
         return ResponseParserPipeline([], [])
 
     available = {
         "parse_unparsed": ParseTagsParser,
         "parse_unparsed_tags": ParseTagsParser,
         "parse_tags": ParseTagsParser,
+        "parse_template": TemplateParseParser,
+        "parse_unparsed_template": TemplateParseParser,
         "swap_reasoning_content": ReasoningSwapParser,
         "swap_reasoning": ReasoningSwapParser,
     }
 
     parsed_parsers: list[ResponseParser] = []
-    for name in parser_names:
+    for name in module_names:
         parser_cls = available.get(name)
         if not parser_cls:
-            logger.warning("Unknown response parser '%s' configured; skipping", name)
+            logger.warning("Unknown response module '%s' configured; skipping", name)
             continue
-        parser_config = parsers_cfg.get(name) or {}
+        parser_config = modules_cfg.get(name) or {}
         parsed_parsers.append(parser_cls(parser_config))
 
     # Enforce ordering: parse tags before swap if both enabled.
     names = [p.name for p in parsed_parsers]
-    if "parse_unparsed" in names and "swap_reasoning_content" in names:
-        parse_index = names.index("parse_unparsed")
-        swap_index = names.index("swap_reasoning_content")
-        if swap_index < parse_index:
-            parsed_parsers.insert(parse_index, parsed_parsers.pop(swap_index))
-            logger.info("Reordered response parsers to run parse_unparsed before swap_reasoning_content")
+    if "swap_reasoning_content" in names:
+        parse_candidates = [
+            idx
+            for idx, name in enumerate(names)
+            if name in {"parse_unparsed", "parse_template"}
+        ]
+        if parse_candidates:
+            swap_index = names.index("swap_reasoning_content")
+            last_parse_index = max(parse_candidates)
+            if swap_index < last_parse_index:
+                parsed_parsers.insert(last_parse_index, parsed_parsers.pop(swap_index))
+                logger.info(
+                    "Reordered response modules to run parse_unparsed/parse_template before swap_reasoning_content"
+                )
 
-    paths = _ensure_list(parsers_cfg.get("paths"))
+    paths = _ensure_list(modules_cfg.get("paths"))
     if not paths:
         if default_paths:
             paths = list(default_paths)
@@ -1009,7 +1374,7 @@ def build_response_parser_pipeline(
     return ResponseParserPipeline(parsed_parsers, paths)
 
 
-def build_response_parser_overrides(
+def build_response_module_overrides(
     config: Mapping[str, Any],
 ) -> dict[str, ResponseParserPipeline]:
     overrides: dict[str, ResponseParserPipeline] = {}
@@ -1020,16 +1385,39 @@ def build_response_parser_overrides(
         name = entry.get("model_name")
         if not name:
             continue
-        parsers_cfg = entry.get("parsers")
-        if parsers_cfg is None:
+        modules_cfg = entry.get("modules")
+        if modules_cfg is None:
+            modules_cfg = entry.get("parsers")
+        if modules_cfg is None:
             model_params = entry.get("model_params") or {}
             if isinstance(model_params, Mapping):
-                parsers_cfg = model_params.get("parsers")
-        if parsers_cfg is None:
+                modules_cfg = model_params.get("modules")
+                if modules_cfg is None:
+                    modules_cfg = model_params.get("parsers")
+        if modules_cfg is None:
             continue
-        overrides[str(name)] = build_response_parser_pipeline(
-            parsers_cfg,
+        overrides[str(name)] = build_response_module_pipeline(
+            modules_cfg,
             enabled_default=True,
             default_paths=["/chat/completions"],
         )
     return overrides
+
+
+def build_response_parser_pipeline(
+    config: Mapping[str, Any],
+    *,
+    enabled_default: bool = False,
+    default_paths: Optional[Iterable[str]] = None,
+) -> ResponseParserPipeline:
+    return build_response_module_pipeline(
+        config,
+        enabled_default=enabled_default,
+        default_paths=default_paths,
+    )
+
+
+def build_response_parser_overrides(
+    config: Mapping[str, Any],
+) -> dict[str, ResponseParserPipeline]:
+    return build_response_module_overrides(config)

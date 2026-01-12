@@ -116,6 +116,16 @@ forwarder_settings:
   target:
     host: 127.0.0.1                        # 代理主机
     port: 7979                             # 代理端口
+
+http_forwarder_settings:
+  preserve_host: true
+  listen:
+    host: 0.0.0.0
+    port: 6969
+  target:
+    scheme: http
+    host: 127.0.0.1
+    port: 7979
 ```
 
 ## Model Configuration
@@ -390,6 +400,17 @@ If `enabled` is omitted, per-model parsers default to enabled. Set `enabled: fal
 | `FORWARD_LISTEN_PORT` | Forwarder listen port |
 | `FORWARD_TARGET_HOST` | Forwarder target host |
 | `FORWARD_TARGET_PORT` | Forwarder target port |
+
+### HTTP Forwarder Override
+
+| Environment Variable | Description |
+|---------------------|-------------|
+| `HTTP_FORWARD_LISTEN_HOST` | HTTP forwarder listen address |
+| `HTTP_FORWARD_LISTEN_PORT` | HTTP forwarder listen port |
+| `HTTP_FORWARD_TARGET_SCHEME` | HTTP forwarder target scheme |
+| `HTTP_FORWARD_TARGET_HOST` | HTTP forwarder target host |
+| `HTTP_FORWARD_TARGET_PORT` | HTTP forwarder target port |
+| `HTTP_FORWARD_PRESERVE_HOST` | Preserve Host header (true/false) |
 
 ### In-Config Substitution
 
