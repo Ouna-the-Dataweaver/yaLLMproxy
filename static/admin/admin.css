@@ -3,6 +3,50 @@
   margin-top: 24px;
 }
 
+.admin-access {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: var(--control-height);
+  padding: 0 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-soft);
+}
+
+.admin-access .btn {
+  min-height: auto;
+  padding: 6px 12px;
+  box-shadow: none;
+}
+
+.admin-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.admin-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #6b7280;
+  box-shadow: 0 0 0 3px rgba(107, 114, 128, 0.18);
+}
+
+.admin-status.unlocked .admin-status-dot {
+  background: #16a34a;
+  box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.2);
+}
+
+.admin-status-text {
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--ink-muted);
+}
+
 .model-list {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));

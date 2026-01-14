@@ -1,4 +1,7 @@
 const API_BASE = '/admin';
+const ADMIN_PASSWORD_HEADER = 'x-admin-password';
+const ADMIN_PASSWORD_KEY = 'yallmp_admin_password';
+
 
 const Icons = {
     openai: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -57,6 +60,160 @@ const Icons = {
         <path d="M16.24 7.76l2.83-2.83"/>
     </svg>`
 };
+
+let adminPassword = '';
+
+function readStoredAdminPassword() {
+    let stored = '';
+    try {
+        stored = sessionStorage.getItem(ADMIN_PASSWORD_KEY) || '';
+    } catch (error) {
+        stored = '';
+    }
+    if (!stored) {
+        try {
+            stored = localStorage.getItem(ADMIN_PASSWORD_KEY) || '';
+        } catch (error) {
+            stored = '';
+        }
+    }
+    return stored;
+}
+
+function setAdminPassword(value, remember) {
+    const next = (value || '').trim();
+    adminPassword = next;
+    try {
+        sessionStorage.removeItem(ADMIN_PASSWORD_KEY);
+    } catch (error) {
+        // ignore storage errors
+    }
+    try {
+        localStorage.removeItem(ADMIN_PASSWORD_KEY);
+    } catch (error) {
+        // ignore storage errors
+    }
+    if (!next) {
+        return;
+    }
+    if (remember) {
+        try {
+            localStorage.setItem(ADMIN_PASSWORD_KEY, next);
+        } catch (error) {
+            // ignore storage errors
+        }
+    } else {
+        try {
+            sessionStorage.setItem(ADMIN_PASSWORD_KEY, next);
+        } catch (error) {
+            // ignore storage errors
+        }
+    }
+}
+
+function clearAdminPassword() {
+    adminPassword = '';
+    try {
+        sessionStorage.removeItem(ADMIN_PASSWORD_KEY);
+    } catch (error) {
+        // ignore storage errors
+    }
+    try {
+        localStorage.removeItem(ADMIN_PASSWORD_KEY);
+    } catch (error) {
+        // ignore storage errors
+    }
+}
+
+function isAdminUnlocked() {
+    return Boolean(adminPassword);
+}
+
+function getAdminHeaders() {
+    const headers = {};
+    if (adminPassword) {
+        headers[ADMIN_PASSWORD_HEADER] = adminPassword;
+    }
+    return headers;
+}
+
+function updateAdminStatus() {
+    const status = document.getElementById('adminStatus');
+    const statusText = document.getElementById('adminStatusText');
+    const button = document.getElementById('adminAccessBtn');
+    if (!status || !statusText || !button) {
+        return;
+    }
+
+    if (isAdminUnlocked()) {
+        status.classList.add('unlocked');
+        statusText.textContent = 'Admin unlocked';
+        button.textContent = 'Lock';
+        button.title = 'Clear admin password';
+    } else {
+        status.classList.remove('unlocked');
+        statusText.textContent = 'Admin locked';
+        button.textContent = 'Unlock';
+        button.title = 'Unlock protected models';
+    }
+}
+
+function openAdminModal() {
+    const modal = document.getElementById('adminModal');
+    const input = document.getElementById('admin_password');
+    const remember = document.getElementById('adminRemember');
+    if (!modal || !input || !remember) {
+        return;
+    }
+    input.value = '';
+    remember.checked = false;
+    modal.classList.add('active');
+    setTimeout(() => {
+        input.focus();
+    }, 100);
+}
+
+function closeAdminModal() {
+    const modal = document.getElementById('adminModal');
+    if (modal) {
+        modal.classList.remove('active');
+    }
+}
+
+adminPassword = readStoredAdminPassword();
+
+function handleAdminAccessClick() {
+    if (isAdminUnlocked()) {
+        if (!confirm('Clear admin access for this browser session?')) {
+            return;
+        }
+        clearAdminPassword();
+        updateAdminStatus();
+        showNotification('Admin access locked', 'success');
+        loadModels();
+    } else {
+        openAdminModal();
+    }
+}
+
+function saveAdminAccess(event) {
+    event.preventDefault();
+    const input = document.getElementById('admin_password');
+    const remember = document.getElementById('adminRemember');
+    if (!input || !remember) {
+        return;
+    }
+    const value = input.value.trim();
+    if (!value) {
+        showNotification('Admin password is required', 'error');
+        return;
+    }
+    setAdminPassword(value, remember.checked);
+    updateAdminStatus();
+    closeAdminModal();
+    showNotification('Admin access unlocked', 'success');
+    loadModels();
+}
 
 async function fetchModels() {
     try {
@@ -219,7 +376,9 @@ function renderModelCards(models) {
         const apiType = params.api_type || 'openai';
         const supportsReasoning = params.supports_reasoning;
         const protectedModel = model.protected === true;
-        const editable = !protectedModel;
+        const adminUnlocked = isAdminUnlocked();
+        const editable = !protectedModel || adminUnlocked;
+        const canCopy = !protectedModel || adminUnlocked;
         const safeModelName = escapeHtml(model.model_name);
         const protectionLabel = protectedModel ? 'Protected' : 'Unprotected';
         const inheritedFrom = model._inherited_from;
@@ -261,10 +420,13 @@ function renderModelCards(models) {
         // Build action buttons with disabled state for non-editable models
         const editDisabled = !editable ? 'btn-disabled tooltip' : '';
         const deleteDisabled = !editable ? 'btn-disabled tooltip' : '';
+        const copyDisabled = !canCopy ? 'btn-disabled tooltip' : '';
         const editTooltip = !editable ? 'data-tooltip="Protected models require an admin password"' : '';
         const deleteTooltip = !editable ? 'data-tooltip="Protected models require an admin password"' : '';
+        const copyTooltip = !canCopy ? 'data-tooltip="Protected models require an admin password"' : '';
         const editAria = !editable ? 'aria-disabled="true"' : 'aria-disabled="false"';
         const deleteAria = !editable ? 'aria-disabled="true"' : 'aria-disabled="false"';
+        const copyAria = !canCopy ? 'aria-disabled="true"' : 'aria-disabled="false"';
 
         return `
             <div class="model-item" style="animation-delay: ${index * 0.08}s">
@@ -283,10 +445,12 @@ function renderModelCards(models) {
                     </div>
                 </div>
                 <div class="model-actions">
-                    <button class="btn btn-secondary btn-icon"
+                    <button class="btn btn-secondary btn-icon ${copyDisabled}"
                             type="button"
                             data-action="copy"
                             data-model="${safeModelName}"
+                            ${copyTooltip}
+                            ${copyAria}
                             title="Copy model">
                         ${Icons.copy}
                     </button>
@@ -434,13 +598,17 @@ async function saveModel(event) {
 async function upsertModel(modelData) {
     const response = await fetch(`${API_BASE}/models`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getAdminHeaders() },
         body: JSON.stringify(modelData)
     });
 
     if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.detail || 'Failed to save model');
+        const error = await response.json().catch(() => ({}));
+        const detail = error.detail || 'Failed to save model';
+        if (response.status === 403) {
+            openAdminModal();
+        }
+        throw new Error(detail);
     }
 
     return response.json();
@@ -455,12 +623,17 @@ async function deleteModel(modelName, skipConfirm = false) {
 
     try {
         const response = await fetch(`${API_BASE}/models/${encodeURIComponent(modelName)}`, {
-            method: 'DELETE'
+            method: 'DELETE',
+            headers: getAdminHeaders()
         });
 
         if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.detail || 'Failed to delete model');
+            const error = await response.json().catch(() => ({}));
+            const detail = error.detail || 'Failed to delete model';
+            if (response.status === 403) {
+                openAdminModal();
+            }
+            throw new Error(detail);
         }
 
         showNotification(`Model "${modelName}" deleted`, 'success');
@@ -474,12 +647,17 @@ async function deleteModel(modelName, skipConfirm = false) {
 async function copyModel(sourceName, targetName) {
     try {
         const response = await fetch(`${API_BASE}/models/copy?source=${encodeURIComponent(sourceName)}&target=${encodeURIComponent(targetName)}`, {
-            method: 'POST'
+            method: 'POST',
+            headers: getAdminHeaders()
         });
 
         if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.detail || 'Failed to copy model');
+            const error = await response.json().catch(() => ({}));
+            const detail = error.detail || 'Failed to copy model';
+            if (response.status === 403) {
+                openAdminModal();
+            }
+            throw new Error(detail);
         }
 
         const result = await response.json();
@@ -495,12 +673,17 @@ async function copyModel(sourceName, targetName) {
 async function reloadConfig() {
     try {
         const response = await fetch(`${API_BASE}/config/reload`, {
-            method: 'POST'
+            method: 'POST',
+            headers: getAdminHeaders()
         });
 
         if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.detail || 'Failed to reload config');
+            const error = await response.json().catch(() => ({}));
+            const detail = error.detail || 'Failed to reload config';
+            if (response.status === 403) {
+                openAdminModal();
+            }
+            throw new Error(detail);
         }
 
         const result = await response.json();
@@ -594,12 +777,17 @@ async function saveDerivedModel(event) {
     try {
         // First copy the model
         const copyResponse = await fetch(`${API_BASE}/models/copy?source=${encodeURIComponent(sourceName)}&target=${encodeURIComponent(targetName)}`, {
-            method: 'POST'
+            method: 'POST',
+            headers: getAdminHeaders()
         });
 
         if (!copyResponse.ok) {
-            const error = await copyResponse.json();
-            throw new Error(error.detail || 'Failed to copy model');
+            const error = await copyResponse.json().catch(() => ({}));
+            const detail = error.detail || 'Failed to copy model';
+            if (copyResponse.status === 403) {
+                openAdminModal();
+            }
+            throw new Error(detail);
         }
 
         const copyResult = await copyResponse.json();
@@ -706,6 +894,7 @@ document.addEventListener('keydown', function(e) {
         closeModal();
         closeCopyModal();
         closeExtendModal();
+        closeAdminModal();
     }
 });
 
@@ -758,9 +947,22 @@ function initAdminUi() {
         reloadButton.addEventListener('click', reloadConfig);
     }
 
+    const adminAccessBtn = document.getElementById('adminAccessBtn');
+    if (adminAccessBtn) {
+        adminAccessBtn.addEventListener('click', handleAdminAccessClick);
+    }
+
     document.querySelectorAll('[data-action="close-modal"]').forEach((button) => {
         button.addEventListener('click', closeModal);
     });
+
+    document.querySelectorAll('[data-action="close-admin-modal"]').forEach((button) => {
+        button.addEventListener('click', closeAdminModal);
+    });
+    const adminForm = document.getElementById('adminForm');
+    if (adminForm) {
+        adminForm.addEventListener('submit', saveAdminAccess);
+    }
 
     // Copy modal handlers
     document.querySelectorAll('[data-action="close-copy-modal"]').forEach((button) => {
@@ -785,6 +987,11 @@ function initAdminUi() {
             closeExtendModal();
         }
     });
+    document.getElementById('adminModal').addEventListener('click', function(e) {
+        if (e.target === this) {
+            closeAdminModal();
+        }
+    });
 
     ['protectedModelList', 'unprotectedModelList'].forEach((id) => {
         const modelList = document.getElementById(id);
@@ -793,6 +1000,7 @@ function initAdminUi() {
         }
     });
 
+    updateAdminStatus();
     updateThemeIcons(ThemeManager.getCurrent());
     loadModels();
 }

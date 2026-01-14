@@ -344,7 +344,14 @@ parse_unparsed:
   parse_tool_calls: true       # Extract tool calls
   think_tag: "think"           # Tag name for thinking content
   tool_tag: "tool_call"        # Tag name for tool calls
+  tool_buffer_limit: 200       # Optional: max buffered chars before treating as literal
 ```
+
+Notes:
+- Uses the same tag scanner for non-stream and stream responses.
+- Tool calls can appear inside thinking blocks; tool parsing has higher priority than think parsing.
+- Tool calls are emitted only after a full, parseable block is confirmed.
+- If `tool_buffer_limit` is set and the buffer exceeds the limit without closing, the tag is treated as literal text.
 
 #### swap_reasoning_content
 
@@ -373,12 +380,20 @@ parse_template:
   template_path: configs/jinja_templates/template_example.jinja
   parse_thinking: true
   parse_tool_calls: true
+  think_tag: "think"            # Optional override (auto-detected from template if omitted)
+  tool_tag: "tool_call"         # Optional override (auto-detected from template if omitted)
+  tool_format: "auto"           # auto | xml | k2
+  tool_buffer_limit: 200        # Optional: max buffered chars before treating as literal
 ```
 
 **Parameters:**
 - `template_path`: Path to Jinja2 template file (required)
 - `parse_thinking`: Extract thinking content from template tags (default: true)
 - `parse_tool_calls`: Extract tool calls from template tags (default: true)
+- `think_tag`: Thinking tag name (default: auto-detect from template, fallback "think")
+- `tool_tag`: Tool tag name for xml format (default: auto-detect from template)
+- `tool_format`: Tool call format (auto-detect k2 vs xml, fallback "xml")
+- `tool_buffer_limit`: Max buffered chars before falling back to literal text (optional)
 
 **Use Cases:**
 - Custom parsing for models with non-standard output formats

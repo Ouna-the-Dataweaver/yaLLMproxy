@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Optional
@@ -30,6 +31,17 @@ def _parse_bool(value: Any) -> bool:
     return bool(value)
 
 
+def _parse_int(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
 def _ensure_list(value: Any) -> list[str]:
     if value is None:
         return []
@@ -44,6 +56,20 @@ def _split_tail_for_prefix(text: str, tag: str) -> tuple[str, str]:
     for i in range(1, max_len + 1):
         if text.endswith(tag[:i]):
             max_prefix = i
+    if max_prefix:
+        return text[:-max_prefix], text[-max_prefix:]
+    return text, ""
+
+
+def _split_tail_for_prefixes(text: str, tags: Iterable[str]) -> tuple[str, str]:
+    max_prefix = 0
+    for tag in tags:
+        if not tag:
+            continue
+        max_len = min(len(tag) - 1, len(text))
+        for i in range(1, max_len + 1):
+            if text.endswith(tag[:i]) and i > max_prefix:
+                max_prefix = i
     if max_prefix:
         return text[:-max_prefix], text[-max_prefix:]
     return text, ""
@@ -68,18 +94,29 @@ def _parse_tool_call_block(text: str) -> Optional[dict[str, Any]]:
         return None
     arg_start = stripped.find("<arg_key>")
     if arg_start == -1:
-        name = stripped.split()[0] if stripped else ""
+        name = stripped
+        if not name or any(ch.isspace() for ch in name):
+            return None
         args: dict[str, Any] = {}
     else:
         name = stripped[:arg_start].strip()
+        if not name or any(ch.isspace() for ch in name):
+            return None
         args_text = stripped[arg_start:]
         args = {}
+        last_end = 0
         for match in ARG_PAIR_RE.finditer(args_text):
+            gap = args_text[last_end:match.start()]
+            if gap.strip():
+                return None
             key = match.group("key").strip()
             value_text = match.group("value").strip()
             if not key:
                 continue
             args[key] = _maybe_json(value_text)
+            last_end = match.end()
+        if args_text[last_end:].strip():
+            return None
     if not name:
         return None
     return {"name": name, "arguments": args}
@@ -109,6 +146,51 @@ def _detect_tool_call_tag(template_text: str) -> Optional[str]:
     return None
 
 
+THINK_TAG_PREFERENCE = ("think", "analysis", "reasoning", "thought")
+TAG_OPEN_RE = re.compile(r"<(?P<tag>[A-Za-z][\w:-]*)>")
+TAG_CLOSE_RE = re.compile(r"</(?P<tag>[A-Za-z][\w:-]*)>")
+STRING_LITERAL_RE = re.compile(r"(?P<quote>['\"])(?P<body>(?:\\.|(?!\1).)*)\1", re.DOTALL)
+JINJA_EXPR_RE = re.compile(r"\{\{(.*?)\}\}", re.DOTALL)
+
+
+def _pick_tag_from_text(text: str, *, ignore: set[str]) -> Optional[str]:
+    if not text:
+        return None
+    open_counts = Counter(match.group("tag") for match in TAG_OPEN_RE.finditer(text))
+    close_counts = Counter(match.group("tag") for match in TAG_CLOSE_RE.finditer(text))
+    candidates: dict[str, int] = {}
+    for tag, open_count in open_counts.items():
+        if tag in ignore:
+            continue
+        close_count = close_counts.get(tag)
+        if close_count:
+            candidates[tag] = min(open_count, close_count)
+    if not candidates:
+        return None
+    return max(candidates.items(), key=lambda item: item[1])[0]
+
+
+def _detect_think_tag(template_text: str) -> Optional[str]:
+    ignore = {"tool_call", "function_call", "tool", "arg_key", "arg_value"}
+    for tag in THINK_TAG_PREFERENCE:
+        if f"<{tag}>" in template_text and f"</{tag}>" in template_text:
+            return tag
+
+    expr_literals: list[str] = []
+    for expr in JINJA_EXPR_RE.findall(template_text):
+        if "reasoning_content" not in expr:
+            continue
+        expr_literals.extend(
+            match.group("body") for match in STRING_LITERAL_RE.finditer(expr)
+        )
+    if expr_literals:
+        candidate = _pick_tag_from_text(" ".join(expr_literals), ignore=ignore)
+        if candidate:
+            return candidate
+
+    return _pick_tag_from_text(template_text, ignore=ignore)
+
+
 def _k2_tool_call_parser_factory(
     arg_open: str,
 ) -> Callable[[str], Optional[dict[str, Any]]]:
@@ -121,7 +203,7 @@ def _k2_tool_call_parser_factory(
         else:
             name_part, args_part = stripped, ""
         name = name_part.strip()
-        if not name:
+        if not name or any(ch.isspace() for ch in name):
             return None
         args_text = args_part.strip()
         arguments: Any = {}
@@ -153,6 +235,7 @@ class TagScanner:
         tool_close: Optional[str] = None,
         tool_parser: Optional[Callable[[str], Optional[dict[str, Any]]]] = None,
         drop_tags: Optional[Iterable[str]] = None,
+        tool_buffer_limit: Optional[int] = None,
     ) -> None:
         self.parse_thinking = parse_thinking
         self.parse_tool_calls = parse_tool_calls
@@ -175,6 +258,10 @@ class TagScanner:
         self.mode = "text"
         self.buffer = ""
         self.tool_buffer = ""
+        self.tool_parent_mode = "text"
+        self.tool_buffer_limit = (
+            tool_buffer_limit if tool_buffer_limit and tool_buffer_limit > 0 else None
+        )
 
     def feed(self, text: str) -> TagScanResult:
         if not text:
@@ -183,6 +270,20 @@ class TagScanner:
         out_content: list[str] = []
         out_reasoning: list[str] = []
         out_tool_calls: list[dict[str, Any]] = []
+
+        def _emit_literal(value: str, mode: str) -> None:
+            if not value:
+                return
+            if mode == "think":
+                out_reasoning.append(value)
+            else:
+                out_content.append(value)
+
+        def _enter_tool(parent_mode: str) -> None:
+            self.buffer = self.buffer[len(self.tool_open):]
+            self.tool_buffer = ""
+            self.tool_parent_mode = parent_mode
+            self.mode = "tool"
 
         while self.buffer:
             if self.mode == "text":
@@ -199,9 +300,7 @@ class TagScanner:
                     self.mode = "think"
                     continue
                 if self.parse_tool_calls and self.buffer.startswith(self.tool_open):
-                    self.buffer = self.buffer[len(self.tool_open):]
-                    self.tool_buffer = ""
-                    self.mode = "tool"
+                    _enter_tool("text")
                     continue
                 if self.drop_tags:
                     matched_drop = False
@@ -219,16 +318,61 @@ class TagScanner:
                 continue
 
             if self.mode == "think":
-                idx = self.buffer.find(self.think_close)
-                if idx == -1:
-                    head, tail = _split_tail_for_prefix(self.buffer, self.think_close)
+                if self.parse_tool_calls and self.buffer.startswith(self.tool_open):
+                    _enter_tool("think")
+                    continue
+                if self.drop_tags:
+                    matched_drop = False
+                    for drop_tag in self.drop_tags:
+                        if self.buffer.startswith(drop_tag):
+                            self.buffer = self.buffer[len(drop_tag):]
+                            matched_drop = True
+                            break
+                    if matched_drop:
+                        continue
+                if self.buffer.startswith(self.think_close):
+                    self.buffer = self.buffer[len(self.think_close):]
+                    self.mode = "text"
+                    continue
+
+                next_idx: Optional[int] = None
+                next_drop: Optional[str] = None
+                if self.parse_tool_calls:
+                    tool_idx = self.buffer.find(self.tool_open)
+                    if tool_idx != -1:
+                        next_idx = tool_idx
+                if self.drop_tags:
+                    for drop_tag in self.drop_tags:
+                        drop_idx = self.buffer.find(drop_tag)
+                        if drop_idx != -1 and (next_idx is None or drop_idx < next_idx):
+                            next_idx = drop_idx
+                            next_drop = drop_tag
+                close_idx = self.buffer.find(self.think_close)
+                if close_idx != -1 and (next_idx is None or close_idx < next_idx):
+                    next_idx = close_idx
+                    next_drop = None
+
+                if next_idx is None:
+                    tags = [self.think_close]
+                    if self.parse_tool_calls:
+                        tags.append(self.tool_open)
+                    if self.drop_tags:
+                        tags.extend(self.drop_tags)
+                    head, tail = _split_tail_for_prefixes(self.buffer, tags)
                     if head:
                         out_reasoning.append(head)
                     self.buffer = tail
                     break
-                out_reasoning.append(self.buffer[:idx])
-                self.buffer = self.buffer[idx + len(self.think_close):]
-                self.mode = "text"
+                if next_idx > 0:
+                    out_reasoning.append(self.buffer[:next_idx])
+                    self.buffer = self.buffer[next_idx:]
+                    continue
+                if next_drop:
+                    self.buffer = self.buffer[len(next_drop):]
+                    continue
+                # Fallback: treat the current char as reasoning content.
+                out_reasoning.append(self.buffer[0])
+                self.buffer = self.buffer[1:]
                 continue
 
             if self.mode == "tool":
@@ -237,6 +381,15 @@ class TagScanner:
                     head, tail = _split_tail_for_prefix(self.buffer, self.tool_close)
                     if head:
                         self.tool_buffer += head
+                        if (
+                            self.tool_buffer_limit is not None
+                            and len(self.tool_buffer) > self.tool_buffer_limit
+                        ):
+                            _emit_literal(self.tool_open + self.tool_buffer, self.tool_parent_mode)
+                            self.tool_buffer = ""
+                            self.mode = self.tool_parent_mode
+                            self.buffer = tail
+                            continue
                     self.buffer = tail
                     break
                 self.tool_buffer += self.buffer[:idx]
@@ -245,9 +398,11 @@ class TagScanner:
                 if parsed:
                     out_tool_calls.append(parsed)
                 else:
-                    out_content.append(self.tool_open + self.tool_buffer + self.tool_close)
+                    _emit_literal(
+                        self.tool_open + self.tool_buffer + self.tool_close, self.tool_parent_mode
+                    )
                 self.tool_buffer = ""
-                self.mode = "text"
+                self.mode = self.tool_parent_mode
                 continue
 
         return TagScanResult(
@@ -263,7 +418,11 @@ class TagScanner:
         elif self.mode == "think":
             out.reasoning = self.buffer
         elif self.mode == "tool":
-            out.content = f"{self.tool_open}{self.tool_buffer}{self.buffer}"
+            literal = f"{self.tool_open}{self.tool_buffer}{self.buffer}"
+            if self.tool_parent_mode == "think":
+                out.reasoning = literal
+            else:
+                out.content = literal
         self.buffer = ""
         self.tool_buffer = ""
         self.mode = "text"
@@ -365,6 +524,7 @@ class ParseTagsParser(ResponseParser):
         self.parse_tool_calls = _parse_bool(config.get("parse_tool_calls", True))
         self.think_tag = str(config.get("think_tag") or "think")
         self.tool_tag = str(config.get("tool_tag") or "tool_call")
+        self.tool_buffer_limit = _parse_int(config.get("tool_buffer_limit"))
 
     def apply_response(self, payload: dict[str, Any], ctx: ParserContext) -> dict[str, Any]:
         choices = payload.get("choices")
@@ -380,14 +540,30 @@ class ParseTagsParser(ResponseParser):
             if not isinstance(content, str) or not content:
                 continue
 
-            if self.parse_thinking and not message.get("reasoning_content"):
-                reasoning, content = _extract_think_block(content, self.think_tag)
-                if reasoning is not None:
-                    message["reasoning_content"] = reasoning
+            parse_thinking = self.parse_thinking and not message.get("reasoning_content")
+            parse_tool_calls = self.parse_tool_calls and not message.get("tool_calls")
+
+            scanner = TagScanner(
+                think_tag=self.think_tag,
+                tool_tag=self.tool_tag,
+                parse_thinking=parse_thinking,
+                parse_tool_calls=parse_tool_calls,
+                tool_buffer_limit=self.tool_buffer_limit,
+            )
+            scanned = scanner.feed(content)
+            flushed = scanner.flush()
+            parsed = TagScanResult(
+                content=scanned.content + flushed.content,
+                reasoning=scanned.reasoning + flushed.reasoning,
+                tool_calls=scanned.tool_calls + flushed.tool_calls,
+            )
+
+            if parse_thinking and parsed.reasoning:
+                message["reasoning_content"] = parsed.reasoning
 
             tool_calls: list[dict[str, Any]] = []
-            if self.parse_tool_calls and not message.get("tool_calls"):
-                tool_calls, content = _extract_tool_calls(content, self.tool_tag)
+            if parse_tool_calls:
+                tool_calls = parsed.tool_calls
 
             if tool_calls:
                 id_prefix = f"call_{choice.get('index', 0)}_"
@@ -400,9 +576,9 @@ class ParseTagsParser(ResponseParser):
                 if finish_reason in {None, "stop"}:
                     choice["finish_reason"] = "tool_calls"
 
-            if isinstance(content, str):
-                if content.strip():
-                    message["content"] = content
+            if isinstance(parsed.content, str):
+                if parsed.content.strip():
+                    message["content"] = parsed.content
                 else:
                     message["content"] = None
 
@@ -419,6 +595,7 @@ class ParseTagsParser(ResponseParser):
                 tool_tag=self.tool_tag,
                 parse_thinking=self.parse_thinking,
                 parse_tool_calls=self.parse_tool_calls,
+                tool_buffer_limit=self.tool_buffer_limit,
             )
             choice_state = ChoiceTagState(scanner=scanner)
             state.choices[choice_index] = choice_state
@@ -516,6 +693,7 @@ class TemplateParseParser(ResponseParser):
         self.tool_tag = str(config.get("tool_tag") or "tool_call")
         self.tool_format = str(config.get("tool_format") or "auto").strip().lower()
         self.template_path = str(config.get("template_path") or "").strip()
+        self.tool_buffer_limit = _parse_int(config.get("tool_buffer_limit"))
 
         self.k2_call_open = str(config.get("tool_call_open") or K2_TOOL_MARKERS["call_open"])
         self.k2_call_close = str(config.get("tool_call_close") or K2_TOOL_MARKERS["call_close"])
@@ -528,8 +706,9 @@ class TemplateParseParser(ResponseParser):
         )
 
         tool_tag_explicit = "tool_tag" in config and config.get("tool_tag") is not None
+        think_tag_explicit = "think_tag" in config and config.get("think_tag") is not None
         if self.template_path:
-            self._load_template_overrides(tool_tag_explicit)
+            self._load_template_overrides(tool_tag_explicit, think_tag_explicit)
 
         if self.tool_format == "auto":
             self.tool_format = "xml"
@@ -540,7 +719,7 @@ class TemplateParseParser(ResponseParser):
             )
             self.tool_format = "xml"
 
-    def _load_template_overrides(self, tool_tag_explicit: bool) -> None:
+    def _load_template_overrides(self, tool_tag_explicit: bool, think_tag_explicit: bool) -> None:
         path = Path(self.template_path)
         try:
             template_text = path.read_text(encoding="utf-8")
@@ -565,6 +744,10 @@ class TemplateParseParser(ResponseParser):
             detected_tag = _detect_tool_call_tag(template_text)
             if detected_tag:
                 self.tool_tag = detected_tag
+        if self.parse_thinking and not think_tag_explicit:
+            detected_think = _detect_think_tag(template_text)
+            if detected_think:
+                self.think_tag = detected_think
 
     def _build_scanner(self) -> TagScanner:
         tool_open = None
@@ -587,6 +770,7 @@ class TemplateParseParser(ResponseParser):
             tool_close=tool_close,
             tool_parser=tool_parser,
             drop_tags=drop_tags,
+            tool_buffer_limit=self.tool_buffer_limit,
         )
 
     def _scan_text(self, content: str) -> TagScanResult:

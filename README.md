@@ -99,6 +99,7 @@ proxy_settings:
       parse_tool_calls: true
       think_tag: think
       tool_tag: tool_call
+      tool_buffer_limit: 200       # Optional: max buffered chars before treating as literal
     swap_reasoning_content:        # Swap reasoning_content <-> content
       mode: reasoning_to_content   # reasoning_to_content | content_to_reasoning | auto
       think_tag: think
@@ -135,6 +136,10 @@ Per-model parser overrides can be added to individual entries in `model_list`.
 When present, they replace the global `proxy_settings.parsers` config for that model.
 If `enabled` is omitted, per-model parsers default to enabled (set `enabled: false`
 to explicitly disable parsing on that model).
+
+Parsing notes: `parse_template` can auto-detect think/tool tags and tool format from
+the provided Jinja template. Tool parsing buffers until a full block is parsed; if
+`tool_buffer_limit` is set and exceeded, the tag is treated as literal text.
 
 To help align formatting with a Jinja chat template, you can inspect a template
 and print suggested `think_open`/`think_close` prefixes and suffixes:
