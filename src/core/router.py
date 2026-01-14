@@ -513,9 +513,14 @@ class ProxyRouter:
             http2 = _parse_bool(params.get("http2"))
             editable = _parse_bool(entry.get("editable"))
 
-            # Parse parameter overrides
+            # Parse parameter overrides (support top-level or model_params.parameters)
             param_configs: Dict[str, ParameterConfig] = {}
-            raw_params = entry.get("parameters") or {}
+            if "parameters" in entry:
+                raw_params = entry.get("parameters") or {}
+            else:
+                raw_params = params.get("parameters") or {}
+            if not isinstance(raw_params, dict):
+                raw_params = {}
             for param_name, param_config in raw_params.items():
                 if isinstance(param_config, dict):
                     default = param_config.get("default")

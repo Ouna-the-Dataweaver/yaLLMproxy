@@ -487,6 +487,10 @@
   background: var(--surface);
 }
 
+.form-checkbox-group.compact {
+  padding: 10px 12px;
+}
+
 .form-checkbox {
   width: 20px;
   height: 20px;
@@ -506,6 +510,92 @@
 .form-checkbox-label span:last-child {
   font-size: 0.82rem;
   color: var(--ink-muted);
+}
+
+.form-section {
+  margin-top: 24px;
+  padding-top: 18px;
+  border-top: 1px dashed rgba(30, 27, 22, 0.2);
+}
+
+[data-theme="dark"] .form-section {
+  border-top-color: rgba(230, 237, 243, 0.2);
+}
+
+.form-section-header {
+  margin-bottom: 16px;
+}
+
+.form-section-title {
+  font-family: 'Bricolage Grotesque', sans-serif;
+  font-size: 1.05rem;
+  margin-bottom: 4px;
+}
+
+.form-section-subtitle {
+  color: var(--ink-muted);
+  font-size: 0.85rem;
+}
+
+.param-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.param-card {
+  background: var(--surface-strong);
+  border: 1px solid var(--border);
+  padding: 14px;
+  border-radius: 0;
+}
+
+.param-card .form-group {
+  margin-bottom: 12px;
+}
+
+.modules-config {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.module-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.module-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--surface-strong);
+  border: 1px solid var(--border);
+  padding: 12px 14px;
+  border-radius: 0;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.module-settings {
+  border: 1px solid var(--border);
+  padding: 14px;
+  background: var(--surface-strong);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.module-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.hidden {
+  display: none !important;
 }
 
 .modal-footer {

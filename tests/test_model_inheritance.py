@@ -559,6 +559,50 @@ class TestRouterWithInheritedModels:
         # top_p should be inherited
         assert derived_backend.parameters["top_p"].default == 0.95
 
+    def test_router_with_model_params_parameters(self, tmp_path: Path) -> None:
+        """Test that router reads parameter overrides from model_params.parameters."""
+        config_path = tmp_path / "config.yaml"
+
+        _write_yaml(
+            config_path,
+            {
+                "model_list": [
+                    {
+                        "model_name": "base-model",
+                        "protected": True,
+                        "model_params": {
+                            "api_base": "http://base.local/v1",
+                            "api_key": "base-key",
+                            "parameters": {
+                                "temperature": {"default": 1.0, "allow_override": False},
+                                "top_p": {"default": 0.95, "allow_override": False},
+                            },
+                        },
+                    },
+                    {
+                        "model_name": "derived-model",
+                        "protected": False,
+                        "extends": "base-model",
+                        "model_params": {
+                            "parameters": {
+                                "temperature": {"default": 0.7},
+                            },
+                        },
+                    },
+                ]
+            },
+        )
+
+        store = ConfigStore(config_path=str(config_path))
+        config = store.get_runtime_config()
+
+        router = ProxyRouter(config)
+
+        derived_backend = router.backends["derived-model"]
+        assert derived_backend.parameters["temperature"].default == 0.7
+        assert derived_backend.parameters["temperature"].allow_override is False
+        assert derived_backend.parameters["top_p"].default == 0.95
+
 
 class TestDynamicInheritance:
     """Tests for dynamic inheritance behavior.

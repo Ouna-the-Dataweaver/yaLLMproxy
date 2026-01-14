@@ -61,7 +61,30 @@ const Icons = {
     </svg>`
 };
 
+const PARAMETER_FIELDS = [
+    { name: 'temperature', inputId: 'param_temperature', overrideId: 'param_temperature_override', parser: parseFloat },
+    { name: 'top_p', inputId: 'param_top_p', overrideId: 'param_top_p_override', parser: parseFloat },
+    { name: 'top_k', inputId: 'param_top_k', overrideId: 'param_top_k_override', parser: (value) => parseInt(value, 10) }
+];
+
+const RESPONSE_MODULES = ['parse_unparsed', 'parse_template', 'swap_reasoning_content'];
+const RESPONSE_ALIASES = {
+    parse_unparsed_tags: 'parse_unparsed',
+    parse_tags: 'parse_unparsed',
+    parse_unparsed_template: 'parse_template',
+    swap_reasoning: 'swap_reasoning_content'
+};
+
+const MODULE_IDS = {
+    parse_unparsed: 'module_parse_unparsed',
+    parse_template: 'module_parse_template',
+    swap_reasoning_content: 'module_swap_reasoning'
+};
+
 let adminPassword = '';
+let currentParametersConfig = null;
+let currentParametersSource = 'model_params';
+let currentModulesConfig = null;
 
 function readStoredAdminPassword() {
     let stored = '';
@@ -485,6 +508,420 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+function deepClone(value) {
+    if (!value || typeof value !== 'object') {
+        return value;
+    }
+    try {
+        return JSON.parse(JSON.stringify(value));
+    } catch (error) {
+        return value;
+    }
+}
+
+function parseNumber(value, parser) {
+    const raw = (value || '').toString().trim();
+    if (!raw) {
+        return undefined;
+    }
+    const parsed = parser(raw);
+    if (Number.isNaN(parsed)) {
+        return undefined;
+    }
+    return parsed;
+}
+
+function parseCommaList(value) {
+    if (!value) {
+        return [];
+    }
+    return value
+        .split(',')
+        .map(item => item.trim())
+        .filter(Boolean);
+}
+
+function setOptionalField(obj, key, value) {
+    if (!obj) {
+        return;
+    }
+    if (value === undefined || value === null || value === '') {
+        delete obj[key];
+    } else {
+        obj[key] = value;
+    }
+}
+
+function getParameterOverridesInfo(model) {
+    if (!model) {
+        return { params: {}, source: 'model_params' };
+    }
+    if (model.parameters && typeof model.parameters === 'object') {
+        return { params: model.parameters, source: 'top' };
+    }
+    const params = model.model_params || {};
+    if (params.parameters && typeof params.parameters === 'object') {
+        return { params: params.parameters, source: 'model_params' };
+    }
+    return { params: {}, source: 'model_params' };
+}
+
+function resetParametersForm() {
+    PARAMETER_FIELDS.forEach(field => {
+        const input = document.getElementById(field.inputId);
+        const toggle = document.getElementById(field.overrideId);
+        if (input) {
+            input.value = '';
+        }
+        if (toggle) {
+            toggle.checked = true;
+        }
+    });
+}
+
+function fillParametersForm(parameters) {
+    PARAMETER_FIELDS.forEach(field => {
+        const input = document.getElementById(field.inputId);
+        const toggle = document.getElementById(field.overrideId);
+        const config = parameters ? parameters[field.name] : undefined;
+        if (input) {
+            if (config && config.default !== undefined && config.default !== null) {
+                input.value = config.default;
+            } else {
+                input.value = '';
+            }
+        }
+        if (toggle) {
+            if (config && typeof config.allow_override === 'boolean') {
+                toggle.checked = config.allow_override;
+            } else {
+                toggle.checked = true;
+            }
+        }
+    });
+}
+
+function buildParameterOverrides() {
+    const base = deepClone(currentParametersConfig) || {};
+    PARAMETER_FIELDS.forEach(field => {
+        const input = document.getElementById(field.inputId);
+        const toggle = document.getElementById(field.overrideId);
+        if (!input || !toggle) {
+            return;
+        }
+        const value = parseNumber(input.value, field.parser);
+        if (value === undefined) {
+            delete base[field.name];
+            return;
+        }
+        const existing = base[field.name] && typeof base[field.name] === 'object'
+            ? base[field.name]
+            : {};
+        base[field.name] = {
+            ...existing,
+            default: value,
+            allow_override: toggle.checked
+        };
+    });
+    Object.keys(base).forEach(key => {
+        const cfg = base[key];
+        if (!cfg || typeof cfg !== 'object' || Object.keys(cfg).length === 0) {
+            delete base[key];
+        }
+    });
+    return Object.keys(base).length ? base : undefined;
+}
+
+function getModulesConfig(model) {
+    if (!model) {
+        return null;
+    }
+    if (model.modules && typeof model.modules === 'object') {
+        return model.modules;
+    }
+    if (model.parsers && typeof model.parsers === 'object') {
+        return model.parsers;
+    }
+    const params = model.model_params || {};
+    if (params.modules && typeof params.modules === 'object') {
+        return params.modules;
+    }
+    if (params.parsers && typeof params.parsers === 'object') {
+        return params.parsers;
+    }
+    return null;
+}
+
+function normalizeModulesConfig(modulesCfg) {
+    if (!modulesCfg || typeof modulesCfg !== 'object') {
+        return null;
+    }
+    if (modulesCfg.upstream || modulesCfg.downstream) {
+        const upstreamRaw = modulesCfg.upstream && typeof modulesCfg.upstream === 'object'
+            ? modulesCfg.upstream
+            : {};
+        const upstream = { ...upstreamRaw };
+        if (upstream.enabled === undefined && modulesCfg.enabled !== undefined) {
+            upstream.enabled = modulesCfg.enabled;
+        }
+        return { upstream };
+    }
+    return { upstream: { ...modulesCfg } };
+}
+
+function normalizeResponseNames(names) {
+    const normalized = new Set();
+    (names || []).forEach(name => {
+        if (!name) {
+            return;
+        }
+        const key = RESPONSE_ALIASES[name] || name;
+        normalized.add(key);
+    });
+    return Array.from(normalized);
+}
+
+function resetModulesForm() {
+    const override = document.getElementById('modules_override');
+    const enabled = document.getElementById('modules_enabled');
+    const paths = document.getElementById('modules_paths');
+    if (override) {
+        override.checked = false;
+    }
+    if (enabled) {
+        enabled.checked = true;
+    }
+    if (paths) {
+        paths.value = '';
+    }
+    RESPONSE_MODULES.forEach(name => {
+        const checkbox = document.getElementById(MODULE_IDS[name]);
+        if (checkbox) {
+            checkbox.checked = false;
+        }
+    });
+    document.getElementById('parse_unparsed_think_tag').value = 'think';
+    document.getElementById('parse_unparsed_tool_tag').value = 'tool_call';
+    document.getElementById('parse_unparsed_tool_buffer_limit').value = '';
+    document.getElementById('parse_unparsed_parse_thinking').checked = true;
+    document.getElementById('parse_unparsed_parse_tool_calls').checked = true;
+
+    document.getElementById('parse_template_path').value = '';
+    document.getElementById('parse_template_think_tag').value = '';
+    document.getElementById('parse_template_tool_tag').value = '';
+    document.getElementById('parse_template_tool_format').value = 'auto';
+    document.getElementById('parse_template_tool_buffer_limit').value = '';
+    document.getElementById('parse_template_parse_thinking').checked = true;
+    document.getElementById('parse_template_parse_tool_calls').checked = true;
+
+    document.getElementById('swap_reasoning_mode').value = 'reasoning_to_content';
+    document.getElementById('swap_reasoning_think_tag').value = 'think';
+    document.getElementById('swap_reasoning_open_prefix').value = '';
+    document.getElementById('swap_reasoning_open_suffix').value = '';
+    document.getElementById('swap_reasoning_close_prefix').value = '';
+    document.getElementById('swap_reasoning_close_suffix').value = '';
+    document.getElementById('swap_reasoning_include_newline').checked = true;
+
+    updateModulesVisibility();
+}
+
+function fillModulesForm(upstreamCfg) {
+    const override = document.getElementById('modules_override');
+    const enabled = document.getElementById('modules_enabled');
+    const paths = document.getElementById('modules_paths');
+    if (override) {
+        override.checked = Boolean(upstreamCfg);
+    }
+    if (enabled) {
+        enabled.checked = upstreamCfg?.enabled !== undefined ? Boolean(upstreamCfg.enabled) : true;
+    }
+    if (paths) {
+        paths.value = (upstreamCfg?.paths || []).join(', ');
+    }
+
+    const responseList = normalizeResponseNames(upstreamCfg?.response || []);
+    RESPONSE_MODULES.forEach(name => {
+        const checkbox = document.getElementById(MODULE_IDS[name]);
+        if (checkbox) {
+            checkbox.checked = responseList.includes(name);
+        }
+    });
+
+    const parseUnparsedCfg =
+        upstreamCfg?.parse_unparsed ||
+        upstreamCfg?.parse_unparsed_tags ||
+        upstreamCfg?.parse_tags ||
+        {};
+    document.getElementById('parse_unparsed_think_tag').value = parseUnparsedCfg.think_tag || 'think';
+    document.getElementById('parse_unparsed_tool_tag').value = parseUnparsedCfg.tool_tag || 'tool_call';
+    document.getElementById('parse_unparsed_tool_buffer_limit').value =
+        parseUnparsedCfg.tool_buffer_limit ?? '';
+    document.getElementById('parse_unparsed_parse_thinking').checked =
+        parseUnparsedCfg.parse_thinking !== undefined ? Boolean(parseUnparsedCfg.parse_thinking) : true;
+    document.getElementById('parse_unparsed_parse_tool_calls').checked =
+        parseUnparsedCfg.parse_tool_calls !== undefined ? Boolean(parseUnparsedCfg.parse_tool_calls) : true;
+
+    const parseTemplateCfg =
+        upstreamCfg?.parse_template ||
+        upstreamCfg?.parse_unparsed_template ||
+        {};
+    document.getElementById('parse_template_path').value = parseTemplateCfg.template_path || '';
+    document.getElementById('parse_template_think_tag').value = parseTemplateCfg.think_tag || '';
+    document.getElementById('parse_template_tool_tag').value = parseTemplateCfg.tool_tag || '';
+    document.getElementById('parse_template_tool_format').value = parseTemplateCfg.tool_format || 'auto';
+    document.getElementById('parse_template_tool_buffer_limit').value =
+        parseTemplateCfg.tool_buffer_limit ?? '';
+    document.getElementById('parse_template_parse_thinking').checked =
+        parseTemplateCfg.parse_thinking !== undefined ? Boolean(parseTemplateCfg.parse_thinking) : true;
+    document.getElementById('parse_template_parse_tool_calls').checked =
+        parseTemplateCfg.parse_tool_calls !== undefined ? Boolean(parseTemplateCfg.parse_tool_calls) : true;
+
+    const swapCfg = upstreamCfg?.swap_reasoning_content || upstreamCfg?.swap_reasoning || {};
+    document.getElementById('swap_reasoning_mode').value = swapCfg.mode || 'reasoning_to_content';
+    document.getElementById('swap_reasoning_think_tag').value = swapCfg.think_tag || 'think';
+    document.getElementById('swap_reasoning_open_prefix').value = swapCfg.think_open?.prefix || '';
+    document.getElementById('swap_reasoning_open_suffix').value = swapCfg.think_open?.suffix || '';
+    document.getElementById('swap_reasoning_close_prefix').value = swapCfg.think_close?.prefix || '';
+    document.getElementById('swap_reasoning_close_suffix').value = swapCfg.think_close?.suffix || '';
+    document.getElementById('swap_reasoning_include_newline').checked =
+        swapCfg.include_newline !== undefined ? Boolean(swapCfg.include_newline) : true;
+
+    updateModulesVisibility();
+}
+
+function updateModulesVisibility() {
+    const override = document.getElementById('modules_override');
+    const configSection = document.getElementById('modulesConfig');
+    const overrideEnabled = override && override.checked;
+    if (configSection) {
+        configSection.classList.toggle('hidden', !overrideEnabled);
+    }
+    RESPONSE_MODULES.forEach(name => {
+        const checkbox = document.getElementById(MODULE_IDS[name]);
+        const settings = document.querySelector(`.module-settings[data-module="${name}"]`);
+        if (!checkbox || !settings) {
+            return;
+        }
+        settings.classList.toggle('hidden', !overrideEnabled || !checkbox.checked);
+    });
+}
+
+function buildModulesConfig() {
+    const override = document.getElementById('modules_override');
+    if (!override || !override.checked) {
+        return undefined;
+    }
+
+    const base = currentModulesConfig ? deepClone(currentModulesConfig.upstream || {}) : {};
+    const enabled = document.getElementById('modules_enabled').checked;
+    base.enabled = enabled;
+
+    const response = RESPONSE_MODULES.filter(name => {
+        const checkbox = document.getElementById(MODULE_IDS[name]);
+        return checkbox && checkbox.checked;
+    });
+    if (enabled && response.length === 0) {
+        showNotification('Select at least one response module or disable modules', 'error');
+        return null;
+    }
+    if (response.length) {
+        base.response = response;
+    } else {
+        delete base.response;
+    }
+
+    const paths = parseCommaList(document.getElementById('modules_paths').value);
+    if (paths.length) {
+        base.paths = paths;
+    } else {
+        delete base.paths;
+    }
+
+    if (response.includes('parse_unparsed')) {
+        const cfg = { ...(base.parse_unparsed || base.parse_unparsed_tags || base.parse_tags || {}) };
+        setOptionalField(cfg, 'think_tag', document.getElementById('parse_unparsed_think_tag').value.trim() || undefined);
+        setOptionalField(cfg, 'tool_tag', document.getElementById('parse_unparsed_tool_tag').value.trim() || undefined);
+        const bufferLimit = parseNumber(
+            document.getElementById('parse_unparsed_tool_buffer_limit').value,
+            (value) => parseInt(value, 10)
+        );
+        setOptionalField(cfg, 'tool_buffer_limit', bufferLimit);
+        cfg.parse_thinking = document.getElementById('parse_unparsed_parse_thinking').checked;
+        cfg.parse_tool_calls = document.getElementById('parse_unparsed_parse_tool_calls').checked;
+        base.parse_unparsed = cfg;
+        delete base.parse_unparsed_tags;
+        delete base.parse_tags;
+    } else {
+        delete base.parse_unparsed;
+        delete base.parse_unparsed_tags;
+        delete base.parse_tags;
+    }
+
+    if (response.includes('parse_template')) {
+        const cfg = { ...(base.parse_template || base.parse_unparsed_template || {}) };
+        const templatePath = document.getElementById('parse_template_path').value.trim();
+        if (!templatePath) {
+            showNotification('Template path is required when Parse Template is enabled', 'error');
+            return null;
+        }
+        cfg.template_path = templatePath;
+        setOptionalField(cfg, 'think_tag', document.getElementById('parse_template_think_tag').value.trim() || undefined);
+        setOptionalField(cfg, 'tool_tag', document.getElementById('parse_template_tool_tag').value.trim() || undefined);
+        setOptionalField(cfg, 'tool_format', document.getElementById('parse_template_tool_format').value || undefined);
+        const bufferLimit = parseNumber(
+            document.getElementById('parse_template_tool_buffer_limit').value,
+            (value) => parseInt(value, 10)
+        );
+        setOptionalField(cfg, 'tool_buffer_limit', bufferLimit);
+        cfg.parse_thinking = document.getElementById('parse_template_parse_thinking').checked;
+        cfg.parse_tool_calls = document.getElementById('parse_template_parse_tool_calls').checked;
+        base.parse_template = cfg;
+        delete base.parse_unparsed_template;
+    } else {
+        delete base.parse_template;
+        delete base.parse_unparsed_template;
+    }
+
+    if (response.includes('swap_reasoning_content')) {
+        const cfg = { ...(base.swap_reasoning_content || base.swap_reasoning || {}) };
+        setOptionalField(cfg, 'mode', document.getElementById('swap_reasoning_mode').value || undefined);
+        setOptionalField(cfg, 'think_tag', document.getElementById('swap_reasoning_think_tag').value.trim() || undefined);
+        cfg.include_newline = document.getElementById('swap_reasoning_include_newline').checked;
+        const thinkOpen = { ...(cfg.think_open || {}) };
+        setOptionalField(thinkOpen, 'prefix', document.getElementById('swap_reasoning_open_prefix').value);
+        setOptionalField(thinkOpen, 'suffix', document.getElementById('swap_reasoning_open_suffix').value);
+        if (Object.keys(thinkOpen).length) {
+            cfg.think_open = thinkOpen;
+        } else {
+            delete cfg.think_open;
+        }
+        const thinkClose = { ...(cfg.think_close || {}) };
+        setOptionalField(thinkClose, 'prefix', document.getElementById('swap_reasoning_close_prefix').value);
+        setOptionalField(thinkClose, 'suffix', document.getElementById('swap_reasoning_close_suffix').value);
+        if (Object.keys(thinkClose).length) {
+            cfg.think_close = thinkClose;
+        } else {
+            delete cfg.think_close;
+        }
+        base.swap_reasoning_content = cfg;
+        delete base.swap_reasoning;
+    } else {
+        delete base.swap_reasoning_content;
+        delete base.swap_reasoning;
+    }
+
+    if (currentModulesConfig && currentModulesConfig.raw) {
+        if (currentModulesConfig.raw.upstream || currentModulesConfig.raw.downstream) {
+            const result = deepClone(currentModulesConfig.raw);
+            result.upstream = base;
+            return result;
+        }
+        return base;
+    }
+
+    return { upstream: base };
+}
+
 async function loadModels() {
     const protectedContainer = document.getElementById('protectedModelList');
     const unprotectedContainer = document.getElementById('unprotectedModelList');
@@ -562,6 +999,23 @@ async function saveModel(event) {
             supports_reasoning: document.getElementById('supports_reasoning').checked
         }
     };
+
+    const parameterOverrides = buildParameterOverrides();
+    if (parameterOverrides) {
+        if (currentParametersSource === 'top') {
+            modelData.parameters = parameterOverrides;
+        } else {
+            modelData.model_params.parameters = parameterOverrides;
+        }
+    }
+
+    const modulesConfig = buildModulesConfig();
+    if (modulesConfig === null) {
+        return;
+    }
+    if (modulesConfig) {
+        modelData.modules = modulesConfig;
+    }
 
     // Remove undefined/empty values
     Object.keys(modelData.model_params).forEach(key => {
@@ -829,6 +1283,11 @@ function openAddModal() {
     document.getElementById('request_timeout').value = 30;
     document.getElementById('api_type').value = 'openai';
     document.getElementById('supports_reasoning').checked = false;
+    currentParametersConfig = {};
+    currentParametersSource = 'model_params';
+    currentModulesConfig = null;
+    resetParametersForm();
+    resetModulesForm();
 
     // Focus first input
     setTimeout(() => {
@@ -860,6 +1319,27 @@ function editModel(modelName) {
         document.getElementById('request_timeout').value = params.request_timeout || 30;
         document.getElementById('api_type').value = params.api_type || 'openai';
         document.getElementById('supports_reasoning').checked = params.supports_reasoning || false;
+
+        const paramInfo = getParameterOverridesInfo(model);
+        currentParametersSource = paramInfo.source;
+        currentParametersConfig = deepClone(paramInfo.params) || {};
+        fillParametersForm(currentParametersConfig);
+
+        const modulesCfgRaw = getModulesConfig(model);
+        const hasModules = modulesCfgRaw && Object.keys(modulesCfgRaw).length > 0;
+        if (hasModules) {
+            const normalized = normalizeModulesConfig(modulesCfgRaw);
+            currentModulesConfig = normalized
+                ? { raw: deepClone(modulesCfgRaw), upstream: normalized.upstream }
+                : null;
+        } else {
+            currentModulesConfig = null;
+        }
+        if (currentModulesConfig) {
+            fillModulesForm(currentModulesConfig.upstream);
+        } else {
+            resetModulesForm();
+        }
 
         document.getElementById('modal').classList.add('active');
     });
@@ -993,6 +1473,17 @@ function initAdminUi() {
         }
     });
 
+    const modulesOverride = document.getElementById('modules_override');
+    if (modulesOverride) {
+        modulesOverride.addEventListener('change', updateModulesVisibility);
+    }
+    RESPONSE_MODULES.forEach(name => {
+        const checkbox = document.getElementById(MODULE_IDS[name]);
+        if (checkbox) {
+            checkbox.addEventListener('change', updateModulesVisibility);
+        }
+    });
+
     ['protectedModelList', 'unprotectedModelList'].forEach((id) => {
         const modelList = document.getElementById(id);
         if (modelList) {
@@ -1002,6 +1493,7 @@ function initAdminUi() {
 
     updateAdminStatus();
     updateThemeIcons(ThemeManager.getCurrent());
+    updateModulesVisibility();
     loadModels();
 }
 
