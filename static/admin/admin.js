@@ -752,6 +752,7 @@ function fillModulesForm(upstreamCfg) {
         upstreamCfg?.parse_unparsed_tags ||
         upstreamCfg?.parse_tags ||
         {};
+    populateTemplateSelect('parse_unparsed_template_path', parseUnparsedCfg.template_path || '', '-- None (use manual tags) --');
     document.getElementById('parse_unparsed_think_tag').value = parseUnparsedCfg.think_tag || 'think';
     document.getElementById('parse_unparsed_tool_tag').value = parseUnparsedCfg.tool_tag || 'tool_call';
     document.getElementById('parse_unparsed_tool_buffer_limit').value =
@@ -765,7 +766,7 @@ function fillModulesForm(upstreamCfg) {
         upstreamCfg?.parse_template ||
         upstreamCfg?.parse_unparsed_template ||
         {};
-    document.getElementById('parse_template_path').value = parseTemplateCfg.template_path || '';
+    populateTemplateSelect('parse_template_path', parseTemplateCfg.template_path || '', '-- Select a template --');
     document.getElementById('parse_template_think_tag').value = parseTemplateCfg.think_tag || '';
     document.getElementById('parse_template_tool_tag').value = parseTemplateCfg.tool_tag || '';
     document.getElementById('parse_template_tool_format').value = parseTemplateCfg.tool_format || 'auto';
@@ -839,6 +840,7 @@ function buildModulesConfig() {
 
     if (response.includes('parse_unparsed')) {
         const cfg = { ...(base.parse_unparsed || base.parse_unparsed_tags || base.parse_tags || {}) };
+        setOptionalField(cfg, 'template_path', document.getElementById('parse_unparsed_template_path').value.trim() || undefined);
         setOptionalField(cfg, 'think_tag', document.getElementById('parse_unparsed_think_tag').value.trim() || undefined);
         setOptionalField(cfg, 'tool_tag', document.getElementById('parse_unparsed_tool_tag').value.trim() || undefined);
         const bufferLimit = parseNumber(
@@ -1411,6 +1413,144 @@ function handleModelListClick(event) {
     }
 }
 
+// Template management functions
+let availableTemplates = [];
+
+async function loadTemplates() {
+    try {
+        const response = await fetch(`${API_BASE}/templates`);
+        if (!response.ok) {
+            console.error('Failed to load templates:', response.statusText);
+            return;
+        }
+        const data = await response.json();
+        availableTemplates = data.templates || [];
+        populateAllTemplateSelects();
+    } catch (error) {
+        console.error('Error loading templates:', error);
+    }
+}
+
+function populateTemplateSelect(selectId, selectedValue = null, placeholderText = '-- Select a template --') {
+    const select = document.getElementById(selectId);
+    if (!select) return;
+
+    // Preserve current selection if not explicitly setting one
+    const currentValue = selectedValue !== null ? selectedValue : select.value;
+
+    // Clear existing options except the placeholder
+    select.innerHTML = `<option value="">${placeholderText}</option>`;
+
+    // Add template options
+    availableTemplates.forEach(template => {
+        const option = document.createElement('option');
+        option.value = template.path;
+        option.textContent = template.name;
+        select.appendChild(option);
+    });
+
+    // Restore selection
+    if (currentValue) {
+        select.value = currentValue;
+        // If the value doesn't match any option, it might be a custom path
+        // Add it as an option so it's visible
+        if (!select.value && currentValue) {
+            const customOption = document.createElement('option');
+            customOption.value = currentValue;
+            customOption.textContent = currentValue + ' (custom)';
+            select.appendChild(customOption);
+            select.value = currentValue;
+        }
+    }
+}
+
+function populateAllTemplateSelects() {
+    populateTemplateSelect('parse_template_path', null, '-- Select a template --');
+    populateTemplateSelect('parse_unparsed_template_path', null, '-- None (use manual tags) --');
+}
+
+async function uploadTemplate(file, selectId, statusId) {
+    const statusEl = document.getElementById(statusId);
+    const placeholderText = selectId === 'parse_template_path'
+        ? '-- Select a template --'
+        : '-- None (use manual tags) --';
+
+    try {
+        statusEl.textContent = 'Uploading...';
+        statusEl.className = 'upload-status';
+
+        const formData = new FormData();
+        formData.append('file', file);
+
+        const response = await fetch(`${API_BASE}/templates`, {
+            method: 'POST',
+            body: formData
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Upload failed');
+        }
+
+        const result = await response.json();
+
+        // Add to templates list and select it in the target select
+        availableTemplates.push(result);
+        populateAllTemplateSelects();
+        // Select the uploaded template in the triggering select
+        populateTemplateSelect(selectId, result.path, placeholderText);
+
+        statusEl.textContent = 'Uploaded!';
+        statusEl.className = 'upload-status success';
+
+        // Clear status after 3 seconds
+        setTimeout(() => {
+            statusEl.textContent = '';
+            statusEl.className = 'upload-status';
+        }, 3000);
+
+    } catch (error) {
+        statusEl.textContent = error.message;
+        statusEl.className = 'upload-status error';
+
+        // Clear error after 5 seconds
+        setTimeout(() => {
+            statusEl.textContent = '';
+            statusEl.className = 'upload-status';
+        }, 5000);
+    }
+}
+
+function initTemplateUpload() {
+    // Parse Template upload
+    const uploadBtn = document.getElementById('template_upload_btn');
+    const uploadInput = document.getElementById('template_upload_input');
+
+    if (uploadBtn && uploadInput) {
+        uploadBtn.addEventListener('click', () => uploadInput.click());
+        uploadInput.addEventListener('change', (e) => {
+            if (e.target.files && e.target.files[0]) {
+                uploadTemplate(e.target.files[0], 'parse_template_path', 'template_upload_status');
+                e.target.value = '';
+            }
+        });
+    }
+
+    // Parse Unparsed upload
+    const unparsedUploadBtn = document.getElementById('parse_unparsed_template_upload_btn');
+    const unparsedUploadInput = document.getElementById('parse_unparsed_template_upload_input');
+
+    if (unparsedUploadBtn && unparsedUploadInput) {
+        unparsedUploadBtn.addEventListener('click', () => unparsedUploadInput.click());
+        unparsedUploadInput.addEventListener('change', (e) => {
+            if (e.target.files && e.target.files[0]) {
+                uploadTemplate(e.target.files[0], 'parse_unparsed_template_path', 'parse_unparsed_template_upload_status');
+                e.target.value = '';
+            }
+        });
+    }
+}
+
 function initAdminUi() {
     const themeButton = document.querySelector('.theme-toggle');
     if (themeButton) {
@@ -1495,6 +1635,8 @@ function initAdminUi() {
     updateThemeIcons(ThemeManager.getCurrent());
     updateModulesVisibility();
     loadModels();
+    loadTemplates();
+    initTemplateUpload();
 }
 
 // Initialize

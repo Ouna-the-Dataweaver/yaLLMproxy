@@ -525,6 +525,41 @@ class ParseTagsParser(ResponseParser):
         self.think_tag = str(config.get("think_tag") or "think")
         self.tool_tag = str(config.get("tool_tag") or "tool_call")
         self.tool_buffer_limit = _parse_int(config.get("tool_buffer_limit"))
+        self.template_path = str(config.get("template_path") or "").strip()
+
+        # Load template overrides if template_path provided
+        tool_tag_explicit = "tool_tag" in config and config.get("tool_tag") is not None
+        think_tag_explicit = "think_tag" in config and config.get("think_tag") is not None
+        if self.template_path:
+            self._load_template_overrides(tool_tag_explicit, think_tag_explicit)
+
+    def _load_template_overrides(self, tool_tag_explicit: bool, think_tag_explicit: bool) -> None:
+        """Load think_tag and tool_tag from template file if not explicitly set."""
+        path = Path(self.template_path)
+        try:
+            template_text = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            logger.warning(
+                "Template file not found for parse_unparsed: %s. Using defaults.",
+                self.template_path,
+            )
+            return
+        except Exception as exc:
+            logger.warning(
+                "Failed to load template for parse_unparsed: %s. Error: %s.",
+                self.template_path,
+                exc,
+            )
+            return
+
+        if not tool_tag_explicit:
+            detected_tag = _detect_tool_call_tag(template_text)
+            if detected_tag:
+                self.tool_tag = detected_tag
+        if self.parse_thinking and not think_tag_explicit:
+            detected_think = _detect_think_tag(template_text)
+            if detected_think:
+                self.think_tag = detected_think
 
     def apply_response(self, payload: dict[str, Any], ctx: ParserContext) -> dict[str, Any]:
         choices = payload.get("choices")

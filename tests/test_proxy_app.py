@@ -13,18 +13,27 @@ def _load_proxy_with_config(config_path: Path):
     """Load the proxy module with specific config file."""
     os.environ["YALLMP_CONFIG"] = str(config_path)
     module_name = f"proxy_test_{uuid.uuid4().hex}"
-    
+
     # Import from src package instead of proxy.py
     src_path = Path(__file__).resolve().parents[1] / "src"
     src_init_path = src_path / "__init__.py"
-    
+
     # Create a spec for the src package
     spec = importlib.util.spec_from_file_location(module_name, src_init_path)
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
     assert spec.loader is not None
     spec.loader.exec_module(module)
-    
+
+    # Disable database logging in the dynamically loaded module's namespace.
+    # This is needed because the dynamic import creates a separate module instance
+    # with its own _DB_LOGGING_ENABLED flag that isn't affected by conftest's fixture.
+    recorder_module_name = f"{module_name}.logging.recorder"
+    if recorder_module_name in sys.modules:
+        recorder_mod = sys.modules[recorder_module_name]
+        if hasattr(recorder_mod, "set_db_logging_enabled"):
+            recorder_mod.set_db_logging_enabled(False)
+
     module._test_config = config_path
     # Return the app and router from the module
     return module

@@ -381,3 +381,82 @@ def _mask_sensitive_data(data: Any) -> Any:
         return [_mask_sensitive_data(item) for item in data]
     else:
         return data
+
+
+# Template directory for jinja templates
+TEMPLATES_DIR = Path(__file__).parent.parent.parent.parent / "configs" / "jinja_templates"
+
+
+async def list_templates():
+    """List available jinja templates.
+
+    GET /admin/templates
+
+    Returns:
+        List of template filenames in configs/jinja_templates.
+    """
+    if not TEMPLATES_DIR.exists():
+        return {"templates": []}
+
+    templates = []
+    for file_path in sorted(TEMPLATES_DIR.iterdir()):
+        if file_path.is_file() and file_path.suffix in (".jinja", ".j2", ".jinja2"):
+            templates.append({
+                "name": file_path.name,
+                "path": f"configs/jinja_templates/{file_path.name}"
+            })
+
+    return {"templates": templates}
+
+
+async def upload_template(request: Request):
+    """Upload a new jinja template.
+
+    POST /admin/templates
+
+    Expects multipart form data with:
+        - file: The template file to upload
+
+    Returns:
+        The path to the uploaded template.
+    """
+    form = await request.form()
+    file = form.get("file")
+
+    if not file:
+        raise HTTPException(status_code=400, detail="No file provided")
+
+    # Validate filename
+    filename = file.filename
+    if not filename:
+        raise HTTPException(status_code=400, detail="No filename provided")
+
+    # Sanitize filename - only allow safe characters
+    import re
+    safe_name = re.sub(r'[^\w\-.]', '_', filename)
+
+    # Ensure it has a valid template extension
+    if not any(safe_name.endswith(ext) for ext in (".jinja", ".j2", ".jinja2")):
+        safe_name += ".jinja"
+
+    # Create templates directory if it doesn't exist
+    TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Write the file
+    file_path = TEMPLATES_DIR / safe_name
+    content = await file.read()
+
+    # Basic validation - check it's text content
+    try:
+        content.decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="File must be valid UTF-8 text")
+
+    file_path.write_bytes(content)
+
+    logger.info("Uploaded template: %s", safe_name)
+
+    return {
+        "name": safe_name,
+        "path": f"configs/jinja_templates/{safe_name}"
+    }

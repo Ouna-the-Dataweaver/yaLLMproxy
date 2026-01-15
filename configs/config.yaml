@@ -1,146 +1,131 @@
 model_list:
-  - model_name: GLM-4.6-nano
-    protected: true
-    model_params:
-      api_type: openai
-      model: z-ai/glm-4.6:thinking
-      api_base: https://nano-gpt.com/api/v1thinking
-      api_key: ${NANOGPT_API_KEY}
-      supports_reasoning: True
-      request_timeout: 540
-
-  - model_name: GLM-4.7
-    protected: true
-    model_params:
-      api_type: openai
-      model: GLM-4.7
-      api_base: https://api.z.ai/api/coding/paas/v4
-      api_key: ${GLM_API_KEY}
-      thinking:
-        type: "enabled"
-      request_timeout: 540
-      parameters:
-        temperature:
-          default: 0.9
-          allow_override: false  # Always force t=0.9 for this model
-        top_p:
-          default: 0.95
-          allow_override: false
-    modules:
-      upstream:
-        enabled: true
-        response:
-          - swap_reasoning_content
-        swap_reasoning_content:
-          mode: "reasoning_to_content"
-          think_tag: "think"
-          think_open:
-            prefix: ""
-            suffix: ""
-          think_close:
-            prefix: ""
-            suffix: ""
-          include_newline: false
-      
-
-  - model_name: MiniMax-M2.1
-    protected: true
-    model_params:
-      api_type: openai
-      model: MiniMax-M2.1
-      api_base: https://api.minimax.io/v1
-      api_key: ${MINIMAX_API_KEY}
-      request_timeout: 540
-      parameters:
-        temperature:
-          default: 1.0
-          allow_override: false  # Always force t=1.0 for this model
-        top_p:
-          default: 0.95
-          allow_override: false
-        top_k:
-          default: 40
-          allow_override: false
-    
-  - model_name: MiniMax-M2-nano
-    protected: true
-    model_params:
-      api_type: openai
-      model: MiniMax-M2
-      api_base: https://nano-gpt.com/api/v1thinking
-      api_key: ${NANOGPT_API_KEY}
-      supports_reasoning: True
-      request_timeout: 540
-
-  - model_name: Kimi-K2-Thinking-nano
-    protected: true
-    model_params:
-      api_type: openai
-      model: moonshotai/kimi-k2-thinking
-      api_base: https://nano-gpt.com/api/v1thinking
-      api_key: ${NANOGPT_API_KEY}
-      supports_reasoning: True
-      request_timeout: 540
-    modules:
-      upstream:
-        enabled: true
-        response:
-          - parse_template
-        parse_template:
-          template_path: configs/jinja_templates/k2thinking.jinja
-          parse_thinking: false
-          parse_tool_calls: true
-
-# Router / reliability settings
+- model_name: GLM-4.6-nano
+  protected: true
+  model_params:
+    api_type: openai
+    model: z-ai/glm-4.6:thinking
+    api_base: https://nano-gpt.com/api/v1thinking
+    api_key: ${NANOGPT_API_KEY}
+    supports_reasoning: true
+    request_timeout: 540
+- model_name: GLM-4.7
+  protected: true
+  model_params:
+    api_type: openai
+    model: GLM-4.7
+    api_base: https://api.z.ai/api/coding/paas/v4
+    api_key: ${GLM_API_KEY}
+    thinking:
+      type: enabled
+    request_timeout: 540
+    parameters:
+      temperature:
+        default: 0.9
+        allow_override: false
+      top_p:
+        default: 0.95
+        allow_override: false
+  modules:
+    upstream:
+      enabled: true
+      response:
+      - swap_reasoning_content
+      swap_reasoning_content:
+        mode: reasoning_to_content
+        think_tag: think
+        think_open:
+          prefix: ''
+          suffix: ''
+        think_close:
+          prefix: ''
+          suffix: ''
+        include_newline: false
+- model_name: MiniMax-M2.1
+  protected: true
+  model_params:
+    api_type: openai
+    model: MiniMax-M2.1
+    api_base: https://api.minimax.io/v1
+    api_key: ${MINIMAX_API_KEY}
+    request_timeout: 540
+    parameters:
+      temperature:
+        default: 1.0
+        allow_override: false
+      top_p:
+        default: 0.95
+        allow_override: false
+      top_k:
+        default: 40
+        allow_override: false
+- model_name: MiniMax-M2-nano
+  protected: true
+  model_params:
+    api_type: openai
+    model: MiniMax-M2
+    api_base: https://nano-gpt.com/api/v1thinking
+    api_key: ${NANOGPT_API_KEY}
+    supports_reasoning: true
+    request_timeout: 540
+- model_name: Kimi-K2-Thinking-nano
+  model_params:
+    api_base: https://nano-gpt.com/api/v1thinking
+    model: moonshotai/kimi-k2-thinking
+    request_timeout: 540
+    api_type: openai
+    supports_reasoning: true
+    api_key: ${NANOGPT_API_KEY}
+  modules:
+    upstream:
+      enabled: true
+      response:
+      - parse_template
+      parse_template:
+        template_path: configs/jinja_templates/k2thinking.jinja
+        parse_thinking: false
+        parse_tool_calls: true
+        tool_format: auto
+  protected: true
 router_settings:
-  # Try the active model up to 2 times
   num_retries: 1
-
 proxy_settings:
   server:
     host: 127.0.0.1
     port: 7979
-  # Enable/disable experimental OpenAI Responses API support
   enable_responses_endpoint: false
   logging:
     log_parsed_response: true
     log_parsed_stream: true
-  # Global response modules (disabled by default; overridden per-model)
   modules:
     upstream:
       enabled: false
-      # Response module order (parse_unparsed runs before swap_reasoning_content if both enabled)
       response:
-        - parse_unparsed
-        - swap_reasoning_content
-      # Optional path filters (substring match); defaults to /chat/completions when empty
+      - parse_unparsed
+      - swap_reasoning_content
       paths:
-        - /chat/completions
-      # Module-specific configs
+      - /chat/completions
       parse_unparsed:
         parse_thinking: true
         parse_tool_calls: true
-        think_tag: "think"
-        tool_tag: "tool_call"
+        think_tag: think
+        tool_tag: tool_call
       parse_template:
         template_path: configs/jinja_templates/template_example.jinja
         parse_thinking: true
         parse_tool_calls: true
       swap_reasoning_content:
-        mode: "reasoning_to_content"
-        think_tag: "think"
+        mode: reasoning_to_content
+        think_tag: think
         think_open:
-          prefix: ""
-          suffix: ""
+          prefix: ''
+          suffix: ''
         think_close:
-          prefix: ""
-          suffix: ""
+          prefix: ''
+          suffix: ''
         include_newline: true
-    # Downstream -> upstream modules placeholder (no implementations yet)
     downstream:
       enabled: false
       request: []
-
 forwarder_settings:
   listen:
     host: 0.0.0.0
@@ -148,7 +133,6 @@ forwarder_settings:
   target:
     host: 127.0.0.1
     port: 7979
-
 http_forwarder_settings:
   preserve_host: true
   listen:
@@ -158,23 +142,16 @@ http_forwarder_settings:
     scheme: http
     host: 127.0.0.1
     port: 7979
-
-# Database settings for request logging and metrics
 database:
-  # Database backend: sqlite or postgres
   backend: sqlite
-  # Connection settings
   connection:
-    # SQLite-specific
     sqlite:
       path: logs/yaLLM.db
-    # PostgreSQL-specific
     postgres:
       host: localhost
       port: 5432
       database: yallm_proxy
       user: ${DB_USER}
       password: ${DB_PASSWORD}
-  # Pool settings
   pool_size: 5
   max_overflow: 10

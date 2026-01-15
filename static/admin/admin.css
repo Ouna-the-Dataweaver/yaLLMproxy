@@ -714,3 +714,39 @@
   background: rgba(59, 130, 246, 0.15);
   color: #2563eb;
 }
+
+/* Template picker styles */
+.template-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.template-picker .form-select {
+  flex: 1;
+}
+
+.template-upload-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.template-upload-group .btn-sm {
+  padding: 4px 10px;
+  font-size: 0.8rem;
+  min-height: auto;
+}
+
+.upload-status {
+  font-size: 0.8rem;
+  color: var(--ink-muted);
+}
+
+.upload-status.success {
+  color: #16a34a;
+}
+
+.upload-status.error {
+  color: #dc2626;
+}

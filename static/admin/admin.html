@@ -299,16 +299,32 @@
 
                             <div class="module-settings hidden" data-module="parse_unparsed">
                                 <div class="form-group">
-                                    <label class="form-label" for="parse_unparsed_think_tag">Think Tag</label>
-                                    <input type="text" id="parse_unparsed_think_tag" class="form-input" placeholder="think">
+                                    <label class="form-label" for="parse_unparsed_template_path">Template (optional)</label>
+                                    <div class="template-picker">
+                                        <select id="parse_unparsed_template_path" class="form-select">
+                                            <option value="">-- None (use manual tags) --</option>
+                                        </select>
+                                        <div class="template-upload-group">
+                                            <input type="file" id="parse_unparsed_template_upload_input" accept=".jinja,.j2,.jinja2" class="hidden">
+                                            <button type="button" id="parse_unparsed_template_upload_btn" class="btn btn-secondary btn-sm">Upload New</button>
+                                            <span id="parse_unparsed_template_upload_status" class="upload-status"></span>
+                                        </div>
+                                    </div>
+                                    <p class="form-hint">Auto-detect tags from template, or configure manually below</p>
                                 </div>
-                                <div class="form-group">
-                                    <label class="form-label" for="parse_unparsed_tool_tag">Tool Tag</label>
-                                    <input type="text" id="parse_unparsed_tool_tag" class="form-input" placeholder="tool_call">
-                                </div>
-                                <div class="form-group">
-                                    <label class="form-label" for="parse_unparsed_tool_buffer_limit">Tool Buffer Limit</label>
-                                    <input type="number" id="parse_unparsed_tool_buffer_limit" class="form-input" placeholder="200" min="0" step="1">
+                                <div class="module-settings-grid">
+                                    <div class="form-group">
+                                        <label class="form-label" for="parse_unparsed_think_tag">Think Tag</label>
+                                        <input type="text" id="parse_unparsed_think_tag" class="form-input" placeholder="think">
+                                    </div>
+                                    <div class="form-group">
+                                        <label class="form-label" for="parse_unparsed_tool_tag">Tool Tag</label>
+                                        <input type="text" id="parse_unparsed_tool_tag" class="form-input" placeholder="tool_call">
+                                    </div>
+                                    <div class="form-group">
+                                        <label class="form-label" for="parse_unparsed_tool_buffer_limit">Tool Buffer Limit</label>
+                                        <input type="number" id="parse_unparsed_tool_buffer_limit" class="form-input" placeholder="200" min="0" step="1">
+                                    </div>
                                 </div>
                                 <label class="form-checkbox-group compact">
                                     <input type="checkbox" id="parse_unparsed_parse_thinking" class="form-checkbox" checked>
@@ -328,9 +344,18 @@
 
                             <div class="module-settings hidden" data-module="parse_template">
                                 <div class="form-group">
-                                    <label class="form-label" for="parse_template_path">Template Path</label>
-                                    <input type="text" id="parse_template_path" class="form-input" placeholder="configs/jinja_templates/template.jinja">
-                                    <p class="form-hint">Required when Parse Template is enabled</p>
+                                    <label class="form-label" for="parse_template_path">Template</label>
+                                    <div class="template-picker">
+                                        <select id="parse_template_path" class="form-select">
+                                            <option value="">-- Select a template --</option>
+                                        </select>
+                                        <div class="template-upload-group">
+                                            <input type="file" id="template_upload_input" accept=".jinja,.j2,.jinja2" class="hidden">
+                                            <button type="button" id="template_upload_btn" class="btn btn-secondary btn-sm">Upload New</button>
+                                            <span id="template_upload_status" class="upload-status"></span>
+                                        </div>
+                                    </div>
+                                    <p class="form-hint">Select an existing template or upload a new one</p>
                                 </div>
                                 <div class="module-settings-grid">
                                     <div class="form-group">

@@ -198,6 +198,8 @@ app.get("/admin/models/{model_name}/dependents")(config_routes.get_model_depende
 app.delete("/admin/models/{model_name}")(config_routes.delete_model)
 app.post("/admin/models/copy")(config_routes.copy_model)
 app.get("/admin/")(config_routes.serve_admin_ui)
+app.get("/admin/templates")(config_routes.list_templates)
+app.post("/admin/templates")(config_routes.upload_template)
 
 # Usage statistics route
 app.get("/usage")(usage.usage_page)
