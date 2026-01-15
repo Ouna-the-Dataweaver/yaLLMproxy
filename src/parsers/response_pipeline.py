@@ -25,6 +25,83 @@ class ParserContext:
 ModuleContext = ParserContext
 
 
+@dataclass
+class ModuleLogEntry:
+    """A single log entry from a response module."""
+
+    module: str  # Module name (e.g., "parse_tags", "swap_reasoning_content")
+    event: str  # Event type (e.g., "reasoning_detected", "tool_call_parsed")
+    details: Optional[dict[str, Any]] = None  # Additional context
+    chunk_index: Optional[int] = None  # Stream chunk index if applicable
+
+    def to_dict(self) -> dict[str, Any]:
+        result: dict[str, Any] = {"module": self.module, "event": self.event}
+        if self.details:
+            result["details"] = self.details
+        if self.chunk_index is not None:
+            result["chunk"] = self.chunk_index
+        return result
+
+
+@dataclass
+class ModuleLogCollector:
+    """Collects log entries from response modules during processing."""
+
+    entries: list[ModuleLogEntry] = field(default_factory=list)
+    _chunk_counter: int = 0
+
+    def log(
+        self,
+        module: str,
+        event: str,
+        details: Optional[dict[str, Any]] = None,
+        chunk_index: Optional[int] = None,
+    ) -> None:
+        """Add a log entry."""
+        self.entries.append(
+            ModuleLogEntry(
+                module=module,
+                event=event,
+                details=details,
+                chunk_index=chunk_index if chunk_index is not None else self._chunk_counter,
+            )
+        )
+
+    def increment_chunk(self) -> int:
+        """Increment and return the current chunk counter."""
+        self._chunk_counter += 1
+        return self._chunk_counter
+
+    def get_summary(self) -> dict[str, Any]:
+        """Generate a summary of all logged events."""
+        if not self.entries:
+            return {}
+
+        # Group by module
+        by_module: dict[str, list[dict[str, Any]]] = {}
+        event_counts: dict[str, int] = {}
+
+        for entry in self.entries:
+            module_name = entry.module
+            if module_name not in by_module:
+                by_module[module_name] = []
+            by_module[module_name].append(entry.to_dict())
+
+            # Count events
+            event_key = f"{module_name}:{entry.event}"
+            event_counts[event_key] = event_counts.get(event_key, 0) + 1
+
+        return {
+            "total_events": len(self.entries),
+            "event_counts": event_counts,
+            "events": [e.to_dict() for e in self.entries],
+        }
+
+    def to_list(self) -> list[dict[str, Any]]:
+        """Return all entries as a list of dicts."""
+        return [e.to_dict() for e in self.entries]
+
+
 def _parse_bool(value: Any) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "yes", "on"}
@@ -498,10 +575,17 @@ def _build_tool_call(
 class ResponseParser:
     name = "base"
 
-    def apply_response(self, payload: dict[str, Any], ctx: ParserContext) -> dict[str, Any]:
+    def apply_response(
+        self,
+        payload: dict[str, Any],
+        ctx: ParserContext,
+        log_collector: Optional[ModuleLogCollector] = None,
+    ) -> dict[str, Any]:
         return payload
 
-    def create_stream_state(self) -> Any:
+    def create_stream_state(
+        self, log_collector: Optional[ModuleLogCollector] = None
+    ) -> Any:
         return None
 
     def apply_stream_event(
@@ -521,11 +605,14 @@ class ChoiceTagState:
     scanner: TagScanner
     next_tool_index: int = 0
     saw_tool_calls: bool = False
+    reasoning_chunks: int = 0  # Count of chunks with reasoning content
+    tool_calls_count: int = 0  # Total tool calls detected
 
 
 @dataclass
 class ParseTagsStreamState:
     choices: dict[int, ChoiceTagState] = field(default_factory=dict)
+    log_collector: Optional[ModuleLogCollector] = None
 
 
 @dataclass
@@ -771,8 +858,10 @@ class ParseTagsParser(ResponseParser):
 
         return payload
 
-    def create_stream_state(self) -> ParseTagsStreamState:
-        return ParseTagsStreamState()
+    def create_stream_state(
+        self, log_collector: Optional[ModuleLogCollector] = None
+    ) -> ParseTagsStreamState:
+        return ParseTagsStreamState(log_collector=log_collector)
 
     def _get_choice_state(self, state: ParseTagsStreamState, choice_index: int) -> ChoiceTagState:
         choice_state = state.choices.get(choice_index)
@@ -812,6 +901,18 @@ class ParseTagsParser(ResponseParser):
                     delta["reasoning_content"] = existing + result.reasoning
                 else:
                     delta["reasoning_content"] = result.reasoning
+                # Log reasoning detection
+                choice_state.reasoning_chunks += 1
+                if state.log_collector and choice_state.reasoning_chunks == 1:
+                    state.log_collector.log(
+                        module=self.name,
+                        event="reasoning_detected",
+                        details={
+                            "choice": choice_index,
+                            "think_tag": self.think_tag,
+                            "initial_length": len(result.reasoning),
+                        },
+                    )
 
             if result.tool_calls:
                 id_prefix = f"call_{choice_index}_"
@@ -825,6 +926,18 @@ class ParseTagsParser(ResponseParser):
                         )
                     )
                     choice_state.next_tool_index += 1
+                    choice_state.tool_calls_count += 1
+                    # Log each tool call detection
+                    if state.log_collector:
+                        state.log_collector.log(
+                            module=self.name,
+                            event="tool_call_parsed",
+                            details={
+                                "choice": choice_index,
+                                "tool_name": parsed.get("name"),
+                                "tool_index": choice_state.next_tool_index - 1,
+                            },
+                        )
                 if tool_payload:
                     delta["tool_calls"] = tool_payload
                     choice_state.saw_tool_calls = True
@@ -838,7 +951,13 @@ class ParseTagsParser(ResponseParser):
         self, state: ParseTagsStreamState, ctx: ParserContext
     ) -> list[dict[str, Any]]:
         events: list[dict[str, Any]] = []
+        total_reasoning_chunks = 0
+        total_tool_calls = 0
+
         for choice_index, choice_state in state.choices.items():
+            total_reasoning_chunks += choice_state.reasoning_chunks
+            total_tool_calls += choice_state.tool_calls_count
+
             flushed = choice_state.scanner.flush()
             if not (flushed.content or flushed.reasoning or flushed.tool_calls):
                 continue
@@ -847,6 +966,13 @@ class ParseTagsParser(ResponseParser):
                 delta["content"] = flushed.content
             if flushed.reasoning:
                 delta["reasoning_content"] = flushed.reasoning
+                # Log flushed reasoning
+                if state.log_collector:
+                    state.log_collector.log(
+                        module=self.name,
+                        event="reasoning_flushed",
+                        details={"choice": choice_index, "length": len(flushed.reasoning)},
+                    )
             if flushed.tool_calls:
                 id_prefix = f"call_{choice_index}_"
                 delta["tool_calls"] = [
@@ -855,7 +981,31 @@ class ParseTagsParser(ResponseParser):
                     )
                     for i, parsed in enumerate(flushed.tool_calls)
                 ]
+                total_tool_calls += len(flushed.tool_calls)
+                # Log flushed tool calls
+                if state.log_collector:
+                    for i, parsed in enumerate(flushed.tool_calls):
+                        state.log_collector.log(
+                            module=self.name,
+                            event="tool_call_flushed",
+                            details={
+                                "choice": choice_index,
+                                "tool_name": parsed.get("name"),
+                            },
+                        )
             events.append({"choices": [{"index": choice_index, "delta": delta}]})
+
+        # Log summary
+        if state.log_collector and (total_reasoning_chunks > 0 or total_tool_calls > 0):
+            state.log_collector.log(
+                module=self.name,
+                event="stream_complete",
+                details={
+                    "reasoning_chunks": total_reasoning_chunks,
+                    "tool_calls": total_tool_calls,
+                },
+            )
+
         return events
 
 
@@ -864,11 +1014,14 @@ class ReasoningChoiceState:
     inside_reasoning: bool = False
     scanner: Optional[TagScanner] = None
     mode: Optional[str] = None
+    swaps_to_content: int = 0  # Count of reasoning->content swaps
+    swaps_to_reasoning: int = 0  # Count of content->reasoning swaps
 
 
 @dataclass
 class ReasoningSwapStreamState:
     choices: dict[int, ReasoningChoiceState] = field(default_factory=dict)
+    log_collector: Optional[ModuleLogCollector] = None
 
 
 class ReasoningSwapParser(ResponseParser):
@@ -1008,8 +1161,10 @@ class ReasoningSwapParser(ResponseParser):
 
         return payload
 
-    def create_stream_state(self) -> ReasoningSwapStreamState:
-        return ReasoningSwapStreamState()
+    def create_stream_state(
+        self, log_collector: Optional[ModuleLogCollector] = None
+    ) -> ReasoningSwapStreamState:
+        return ReasoningSwapStreamState(log_collector=log_collector)
 
     def _get_choice_state(
         self, state: ReasoningSwapStreamState, choice_index: int
@@ -1042,8 +1197,22 @@ class ReasoningSwapParser(ResponseParser):
                 if choice_state.mode is None:
                     if delta and isinstance(delta.get("reasoning_content"), str):
                         choice_state.mode = "reasoning_to_content"
+                        # Log auto-detected mode
+                        if state.log_collector:
+                            state.log_collector.log(
+                                module=self.name,
+                                event="mode_auto_detected",
+                                details={"choice": choice_index, "mode": "reasoning_to_content"},
+                            )
                     elif delta:
                         choice_state.mode = "content_to_reasoning"
+                        # Log auto-detected mode
+                        if state.log_collector:
+                            state.log_collector.log(
+                                module=self.name,
+                                event="mode_auto_detected",
+                                details={"choice": choice_index, "mode": "content_to_reasoning"},
+                            )
                     else:
                         continue
                 mode = choice_state.mode or "reasoning_to_content"
@@ -1070,6 +1239,17 @@ class ReasoningSwapParser(ResponseParser):
                         new_content = f"{prefix}{reasoning}"
                         choice_state.inside_reasoning = True
                     delta.pop("reasoning_content", None)
+                    # Log swap to content
+                    choice_state.swaps_to_content += 1
+                    if state.log_collector and choice_state.swaps_to_content == 1:
+                        state.log_collector.log(
+                            module=self.name,
+                            event="reasoning_to_content_started",
+                            details={
+                                "choice": choice_index,
+                                "think_tag": self.think_tag,
+                            },
+                        )
 
                 if isinstance(content, str) and content and choice_state.inside_reasoning:
                     close_block = self._think_close()
@@ -1130,6 +1310,17 @@ class ReasoningSwapParser(ResponseParser):
                         delta["reasoning_content"] = existing + result.reasoning
                     else:
                         delta["reasoning_content"] = result.reasoning
+                    # Log swap to reasoning
+                    choice_state.swaps_to_reasoning += 1
+                    if state.log_collector and choice_state.swaps_to_reasoning == 1:
+                        state.log_collector.log(
+                            module=self.name,
+                            event="content_to_reasoning_started",
+                            details={
+                                "choice": choice_index,
+                                "think_tag": self.think_tag,
+                            },
+                        )
                 continue
 
         if split_choices:
@@ -1142,9 +1333,13 @@ class ReasoningSwapParser(ResponseParser):
         self, state: ReasoningSwapStreamState, ctx: ParserContext
     ) -> list[dict[str, Any]]:
         events: list[dict[str, Any]] = []
+        total_swaps_to_content = 0
+        total_swaps_to_reasoning = 0
+
         if self.mode == "reasoning_to_content":
             close_tag = self._think_close()
             for choice_index, choice_state in state.choices.items():
+                total_swaps_to_content += choice_state.swaps_to_content
                 if choice_state.inside_reasoning:
                     events.append(
                         {
@@ -1154,10 +1349,21 @@ class ReasoningSwapParser(ResponseParser):
                         }
                     )
                     choice_state.inside_reasoning = False
+            # Log summary
+            if state.log_collector and total_swaps_to_content > 0:
+                state.log_collector.log(
+                    module=self.name,
+                    event="stream_complete",
+                    details={
+                        "mode": "reasoning_to_content",
+                        "swaps_to_content": total_swaps_to_content,
+                    },
+                )
             return events
 
         if self.mode in {"content_to_reasoning", "auto"}:
             for choice_index, choice_state in state.choices.items():
+                total_swaps_to_reasoning += choice_state.swaps_to_reasoning
                 if choice_state.scanner is None:
                     continue
                 flushed = choice_state.scanner.flush()
@@ -1169,6 +1375,16 @@ class ReasoningSwapParser(ResponseParser):
                 if flushed.reasoning:
                     delta["reasoning_content"] = flushed.reasoning
                 events.append({"choices": [{"index": choice_index, "delta": delta}]})
+            # Log summary
+            if state.log_collector and total_swaps_to_reasoning > 0:
+                state.log_collector.log(
+                    module=self.name,
+                    event="stream_complete",
+                    details={
+                        "mode": self.mode,
+                        "swaps_to_reasoning": total_swaps_to_reasoning,
+                    },
+                )
         return events
 
 
@@ -1239,7 +1455,11 @@ class ResponseStreamParser:
         self.pipeline = pipeline
         self.ctx = ctx
         self.decoder = SSEDecoder()
-        self.states = [parser.create_stream_state() for parser in pipeline.parsers]
+        self.log_collector = ModuleLogCollector()
+        self.states = [
+            parser.create_stream_state(self.log_collector)
+            for parser in pipeline.parsers
+        ]
         self._last_envelope: Optional[dict[str, Any]] = None
         self._saw_done = False
         self.stop_reason: Optional[str] = None
@@ -1250,8 +1470,13 @@ class ResponseStreamParser:
     def feed_bytes(self, chunk: bytes) -> list[bytes]:
         output: list[bytes] = []
         for event in self.decoder.feed(chunk):
+            self.log_collector.increment_chunk()
             output.extend(self._process_event(event))
         return output
+
+    def get_module_logs(self) -> dict[str, Any]:
+        """Get the collected module logs summary."""
+        return self.log_collector.get_summary()
 
     def finish(self) -> list[bytes]:
         output: list[bytes] = []

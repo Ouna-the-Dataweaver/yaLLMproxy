@@ -384,6 +384,7 @@ class RequestLogRecorder:
         self._accumulated_reasoning_content: Optional[str] = None
         self._conversation_turn: Optional[int] = None
         self._is_tool_call: bool = False
+        self._modules_log: Optional[dict[str, Any]] = None
 
         self._log_parsed_response = bool(log_parsed_response)
         if log_parsed_stream is None:
@@ -718,6 +719,22 @@ class RequestLogRecorder:
         self._is_tool_call = True
         self._append_text("is_tool_call=true\n")
 
+    def record_modules_log(self, modules_log: dict[str, Any]) -> None:
+        """Record debug logs from response modules.
+
+        Args:
+            modules_log: Summary of module processing events (reasoning detection,
+                        tool calls, swaps, etc.)
+        """
+        if self._finalized:
+            return
+        if modules_log:
+            self._modules_log = modules_log
+            # Also append a summary to the text log
+            event_counts = modules_log.get("event_counts", {})
+            if event_counts:
+                self._append_text(f"modules_events={event_counts}\n")
+
     def _build_full_response(self) -> Optional[str]:
         """Build the complete concatenated response from accumulated parts.
 
@@ -785,6 +802,7 @@ class RequestLogRecorder:
                     full_response=full_response,
                     is_tool_call=self._is_tool_call,
                     conversation_turn=self._conversation_turn,
+                    modules_log=self._modules_log,
                 )
             except Exception as e:
                 logger.debug(f"Failed to save request to database: {e}")

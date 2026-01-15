@@ -9,6 +9,9 @@ from typing import Any, Iterable, Tuple
 
 STRING_RE = re.compile(r"(?P<quote>['\"])(?P<body>(?:\\.|(?!\1).)*)\1", re.DOTALL)
 EXPR_RE = re.compile(r"\{\{(.*?)\}\}", re.DOTALL)
+TAG_OPEN_RE = re.compile(r"<(?P<tag>[A-Za-z][\w:-]*)>")
+TAG_CLOSE_RE = re.compile(r"</(?P<tag>[A-Za-z][\w:-]*)>")
+THINK_TAG_PREFERENCE = ("think", "analysis", "reasoning", "thought")
 
 
 def _unescape(value: str) -> str:
@@ -52,6 +55,43 @@ def _pick_candidate(candidates: list[Tuple[str, str]]) -> Tuple[str, str]:
     return counter.most_common(1)[0][0]
 
 
+def _pick_tag_from_text(text: str, *, ignore: set[str]) -> str | None:
+    if not text:
+        return None
+    open_counts = Counter(match.group("tag") for match in TAG_OPEN_RE.finditer(text))
+    close_counts = Counter(match.group("tag") for match in TAG_CLOSE_RE.finditer(text))
+    candidates: dict[str, int] = {}
+    for tag, open_count in open_counts.items():
+        if tag in ignore:
+            continue
+        close_count = close_counts.get(tag)
+        if close_count:
+            candidates[tag] = min(open_count, close_count)
+    if not candidates:
+        return None
+    return max(candidates.items(), key=lambda item: item[1])[0]
+
+
+def detect_think_tag(template_text: str) -> str | None:
+    """Detect the most likely think tag from a template."""
+    ignore = {"tool_call", "function_call", "tool", "arg_key", "arg_value"}
+    for tag in THINK_TAG_PREFERENCE:
+        if f"<{tag}>" in template_text and f"</{tag}>" in template_text:
+            return tag
+
+    expr_literals: list[str] = []
+    for expr in EXPR_RE.findall(template_text):
+        if "reasoning_content" not in expr:
+            continue
+        expr_literals.extend(match.group("body") for match in STRING_RE.finditer(expr))
+    if expr_literals:
+        candidate = _pick_tag_from_text(" ".join(expr_literals), ignore=ignore)
+        if candidate:
+            return candidate
+
+    return _pick_tag_from_text(template_text, ignore=ignore)
+
+
 def _detect_include_newline(template_text: str) -> bool:
     content_pattern = re.compile(
         r"['\"][^'\"]*\\n[^'\"]*['\"]\s*\+\s*content(\.strip\(\))?",
@@ -60,8 +100,12 @@ def _detect_include_newline(template_text: str) -> bool:
     return content_pattern.search(template_text) is not None
 
 
-def analyze_template(template_text: str, think_tag: str = "think") -> dict[str, Any]:
+def analyze_template(template_text: str, think_tag: str | None = None) -> dict[str, Any]:
     """Analyze a Jinja template and return detailed analysis with candidates."""
+    detected_think_tag = None
+    if not think_tag:
+        detected_think_tag = detect_think_tag(template_text)
+        think_tag = detected_think_tag or "think"
     literals = [match.group("body") for match in STRING_RE.finditer(template_text)]
     expressions = [match.group(1) for match in EXPR_RE.finditer(template_text)]
 
@@ -128,6 +172,7 @@ def analyze_template(template_text: str, think_tag: str = "think") -> dict[str, 
     }
     return {
         "think_tag": think_tag,
+        "detected_think_tag": detected_think_tag,
         "open_candidates": open_candidates,
         "close_candidates": close_candidates,
         "render_open_candidates": render_open_candidates,
@@ -137,17 +182,17 @@ def analyze_template(template_text: str, think_tag: str = "think") -> dict[str, 
     }
 
 
-def extract_think_config(template_text: str, think_tag: str = "think") -> dict[str, Any]:
+def extract_think_config(template_text: str, think_tag: str | None = None) -> dict[str, Any]:
     """Extract only the suggested configuration from template analysis."""
     return analyze_template(template_text, think_tag=think_tag)["config"]
 
 
-def load_template_config(template_path: str, think_tag: str = "think") -> dict[str, Any]:
+def load_template_config(template_path: str, think_tag: str | None = None) -> dict[str, Any]:
     """Load a template file and extract think configuration.
 
     Args:
         template_path: Path to the Jinja template file.
-        think_tag: The think tag name to look for.
+        think_tag: The think tag name to look for. If omitted, attempt detection.
 
     Returns:
         Configuration dict with think_tag, think_open, think_close, include_newline.

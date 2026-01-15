@@ -869,6 +869,11 @@ async def _streaming_request(
                                 request_log.record_stop_reason(stop_reason)
                                 if stop_reason in ("tool_calls", "function_call", "tool_use"):
                                     request_log.mark_as_tool_call()
+                                # Record module logs on early stop
+                                if stream_parser:
+                                    modules_log = stream_parser.get_module_logs()
+                                    if modules_log:
+                                        request_log.record_modules_log(modules_log)
                             await close_stream()
                             for out_chunk in _stop_chunks(stop_reason):
                                 if request_log:
@@ -953,6 +958,16 @@ async def _streaming_request(
                                     usage,
                                 )
                                 request_log.record_usage_stats(usage)
+
+                    # Record module processing logs
+                    if stream_parser:
+                        modules_log = stream_parser.get_module_logs()
+                        if modules_log:
+                            logger.debug(
+                                "Recording module logs: %s events",
+                                modules_log.get("total_events", 0),
+                            )
+                            request_log.record_modules_log(modules_log)
 
         except asyncio.CancelledError as cancel_exc:
             logger.info(f"Streaming request to {url} cancelled by client")

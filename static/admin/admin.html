@@ -346,6 +346,20 @@
                             </div>
 
                             <div class="module-settings hidden" data-module="swap_reasoning_content">
+                                <div class="form-group">
+                                    <label class="form-label" for="swap_reasoning_template_path">Template (optional)</label>
+                                    <div class="template-picker">
+                                        <select id="swap_reasoning_template_path" class="form-select">
+                                            <option value="">-- None (use manual config) --</option>
+                                        </select>
+                                        <div class="template-upload-group">
+                                            <input type="file" id="swap_reasoning_template_upload_input" accept=".jinja,.j2,.jinja2" class="hidden">
+                                            <button type="button" id="swap_reasoning_template_upload_btn" class="btn btn-secondary btn-sm">Upload New</button>
+                                            <span id="swap_reasoning_template_upload_status" class="upload-status"></span>
+                                        </div>
+                                    </div>
+                                    <p class="form-hint">Auto-detect config from template, or configure manually below</p>
+                                </div>
                                 <div class="module-settings-grid">
                                     <div class="form-group">
                                         <label class="form-label" for="swap_reasoning_mode">Mode</label>

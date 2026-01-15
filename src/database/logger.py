@@ -78,6 +78,7 @@ class DatabaseLogRecorder:
         full_response: str | None = None,
         is_tool_call: bool = False,
         conversation_turn: int | None = None,
+        modules_log: dict[str, Any] | None = None,
     ) -> str:
         """Log a request event to the database.
 
@@ -101,6 +102,7 @@ class DatabaseLogRecorder:
             full_response: Concatenated complete response text.
             is_tool_call: Whether this request resulted in tool calls.
             conversation_turn: Turn number in agentic conversation sequence.
+            modules_log: Debug logs from response modules (reasoning detection, tool calls, etc.).
 
         Returns:
             The UUID of the created request log.
@@ -136,6 +138,7 @@ class DatabaseLogRecorder:
             full_response=full_response,
             is_tool_call=is_tool_call,
             conversation_turn=conversation_turn,
+            modules_log=modules_log,
         )
 
         # Capture the ID before starting async task

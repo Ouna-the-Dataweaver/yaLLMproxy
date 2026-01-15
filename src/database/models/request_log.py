@@ -152,6 +152,13 @@ class RequestLog(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         comment="Turn number in agentic conversation sequence"
     )
 
+    # Module processing debug logs
+    modules_log = Column(
+        JSON,
+        nullable=True,
+        comment="Debug logs from response modules (reasoning detection, tool calls, swaps, etc.)"
+    )
+
     @property
     def duration_seconds(self) -> Optional[float]:
         """Get duration in seconds."""
@@ -198,6 +205,7 @@ class RequestLog(Base, UUIDPrimaryKeyMixin, TimestampMixin):
             "full_response": self.full_response,
             "is_tool_call": self.is_tool_call,
             "conversation_turn": self.conversation_turn,
+            "modules_log": self.modules_log,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 

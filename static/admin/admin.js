@@ -82,10 +82,22 @@ const MODULE_IDS = {
     swap_reasoning_content: 'module_swap_reasoning'
 };
 
+const SWAP_REASONING_FIELD_IDS = [
+    'swap_reasoning_think_tag',
+    'swap_reasoning_open_prefix',
+    'swap_reasoning_open_suffix',
+    'swap_reasoning_close_prefix',
+    'swap_reasoning_close_suffix'
+];
+const SWAP_REASONING_CHECKBOX_IDS = ['swap_reasoning_include_newline'];
+
 let adminPassword = '';
 let currentParametersConfig = null;
 let currentParametersSource = 'model_params';
 let currentModulesConfig = null;
+let swapReasoningTemplateActive = false;
+let swapReasoningManualSnapshot = null;
+let swapReasoningTemplateRequestId = 0;
 
 function readStoredAdminPassword() {
     let stored = '';
@@ -683,6 +695,7 @@ function normalizeResponseNames(names) {
 }
 
 function resetModulesForm() {
+    resetSwapReasoningTemplateState();
     const override = document.getElementById('modules_override');
     const enabled = document.getElementById('modules_enabled');
     const paths = document.getElementById('modules_paths');
@@ -709,6 +722,7 @@ function resetModulesForm() {
     document.getElementById('parse_tags_parse_thinking').checked = true;
     document.getElementById('parse_tags_parse_tool_calls').checked = true;
 
+    document.getElementById('swap_reasoning_template_path').value = '';
     document.getElementById('swap_reasoning_mode').value = 'reasoning_to_content';
     document.getElementById('swap_reasoning_think_tag').value = 'think';
     document.getElementById('swap_reasoning_open_prefix').value = '';
@@ -718,9 +732,11 @@ function resetModulesForm() {
     document.getElementById('swap_reasoning_include_newline').checked = true;
 
     updateModulesVisibility();
+    updateSwapReasoningTemplateDerived();
 }
 
 function fillModulesForm(upstreamCfg) {
+    resetSwapReasoningTemplateState();
     const override = document.getElementById('modules_override');
     const enabled = document.getElementById('modules_enabled');
     const paths = document.getElementById('modules_paths');
@@ -769,16 +785,18 @@ function fillModulesForm(upstreamCfg) {
         parseTagsCfg.parse_tool_calls !== undefined ? Boolean(parseTagsCfg.parse_tool_calls) : true;
 
     const swapCfg = upstreamCfg?.swap_reasoning_content || upstreamCfg?.swap_reasoning || {};
+    populateTemplateSelect('swap_reasoning_template_path', swapCfg.template_path || '', '-- None (use manual config) --');
     document.getElementById('swap_reasoning_mode').value = swapCfg.mode || 'reasoning_to_content';
     document.getElementById('swap_reasoning_think_tag').value = swapCfg.think_tag || 'think';
-    document.getElementById('swap_reasoning_open_prefix').value = swapCfg.think_open?.prefix || '';
-    document.getElementById('swap_reasoning_open_suffix').value = swapCfg.think_open?.suffix || '';
-    document.getElementById('swap_reasoning_close_prefix').value = swapCfg.think_close?.prefix || '';
-    document.getElementById('swap_reasoning_close_suffix').value = swapCfg.think_close?.suffix || '';
+    document.getElementById('swap_reasoning_open_prefix').value = escapeNewlinesForDisplay(swapCfg.think_open?.prefix || '');
+    document.getElementById('swap_reasoning_open_suffix').value = escapeNewlinesForDisplay(swapCfg.think_open?.suffix || '');
+    document.getElementById('swap_reasoning_close_prefix').value = escapeNewlinesForDisplay(swapCfg.think_close?.prefix || '');
+    document.getElementById('swap_reasoning_close_suffix').value = escapeNewlinesForDisplay(swapCfg.think_close?.suffix || '');
     document.getElementById('swap_reasoning_include_newline').checked =
         swapCfg.include_newline !== undefined ? Boolean(swapCfg.include_newline) : true;
 
     updateModulesVisibility();
+    updateSwapReasoningTemplateDerived();
 }
 
 function updateModulesVisibility() {
@@ -860,20 +878,21 @@ function buildModulesConfig() {
 
     if (response.includes('swap_reasoning_content')) {
         const cfg = { ...(base.swap_reasoning_content || base.swap_reasoning || {}) };
+        setOptionalField(cfg, 'template_path', document.getElementById('swap_reasoning_template_path').value.trim() || undefined);
         setOptionalField(cfg, 'mode', document.getElementById('swap_reasoning_mode').value || undefined);
         setOptionalField(cfg, 'think_tag', document.getElementById('swap_reasoning_think_tag').value.trim() || undefined);
         cfg.include_newline = document.getElementById('swap_reasoning_include_newline').checked;
         const thinkOpen = { ...(cfg.think_open || {}) };
-        setOptionalField(thinkOpen, 'prefix', document.getElementById('swap_reasoning_open_prefix').value);
-        setOptionalField(thinkOpen, 'suffix', document.getElementById('swap_reasoning_open_suffix').value);
+        setOptionalField(thinkOpen, 'prefix', unescapeNewlinesFromDisplay(document.getElementById('swap_reasoning_open_prefix').value));
+        setOptionalField(thinkOpen, 'suffix', unescapeNewlinesFromDisplay(document.getElementById('swap_reasoning_open_suffix').value));
         if (Object.keys(thinkOpen).length) {
             cfg.think_open = thinkOpen;
         } else {
             delete cfg.think_open;
         }
         const thinkClose = { ...(cfg.think_close || {}) };
-        setOptionalField(thinkClose, 'prefix', document.getElementById('swap_reasoning_close_prefix').value);
-        setOptionalField(thinkClose, 'suffix', document.getElementById('swap_reasoning_close_suffix').value);
+        setOptionalField(thinkClose, 'prefix', unescapeNewlinesFromDisplay(document.getElementById('swap_reasoning_close_prefix').value));
+        setOptionalField(thinkClose, 'suffix', unescapeNewlinesFromDisplay(document.getElementById('swap_reasoning_close_suffix').value));
         if (Object.keys(thinkClose).length) {
             cfg.think_close = thinkClose;
         } else {
@@ -1440,6 +1459,159 @@ function populateTemplateSelect(selectId, selectedValue = null, placeholderText 
 
 function populateAllTemplateSelects() {
     populateTemplateSelect('parse_tags_template_path', null, '-- None (use manual config) --');
+    populateTemplateSelect('swap_reasoning_template_path', null, '-- None (use manual config) --');
+}
+
+function resetSwapReasoningTemplateState() {
+    swapReasoningTemplateActive = false;
+    swapReasoningManualSnapshot = null;
+    swapReasoningTemplateRequestId += 1;
+    setSwapReasoningFieldsDisabled(false);
+}
+
+function snapshotSwapReasoningFields() {
+    const values = {};
+    SWAP_REASONING_FIELD_IDS.forEach(id => {
+        const el = document.getElementById(id);
+        values[id] = el ? el.value : '';
+    });
+    SWAP_REASONING_CHECKBOX_IDS.forEach(id => {
+        const el = document.getElementById(id);
+        values[id] = el ? Boolean(el.checked) : false;
+    });
+    return values;
+}
+
+function restoreSwapReasoningFields(snapshot) {
+    if (!snapshot) {
+        return;
+    }
+    SWAP_REASONING_FIELD_IDS.forEach(id => {
+        const el = document.getElementById(id);
+        if (el && snapshot[id] !== undefined) {
+            el.value = snapshot[id];
+        }
+    });
+    SWAP_REASONING_CHECKBOX_IDS.forEach(id => {
+        const el = document.getElementById(id);
+        if (el && snapshot[id] !== undefined) {
+            el.checked = Boolean(snapshot[id]);
+        }
+    });
+}
+
+function setSwapReasoningFieldsDisabled(disabled) {
+    SWAP_REASONING_FIELD_IDS.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.disabled = disabled;
+        }
+    });
+    SWAP_REASONING_CHECKBOX_IDS.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.disabled = disabled;
+        }
+    });
+}
+
+function applySwapReasoningDerivedConfig(config) {
+    if (!config) {
+        return;
+    }
+    const thinkTag = config.think_tag || 'think';
+    const thinkOpen = config.think_open || {};
+    const thinkClose = config.think_close || {};
+
+    const thinkTagInput = document.getElementById('swap_reasoning_think_tag');
+    if (thinkTagInput) {
+        thinkTagInput.value = thinkTag;
+    }
+    const openPrefixInput = document.getElementById('swap_reasoning_open_prefix');
+    if (openPrefixInput) {
+        openPrefixInput.value = escapeNewlinesForDisplay(thinkOpen.prefix || '');
+    }
+    const openSuffixInput = document.getElementById('swap_reasoning_open_suffix');
+    if (openSuffixInput) {
+        openSuffixInput.value = escapeNewlinesForDisplay(thinkOpen.suffix || '');
+    }
+    const closePrefixInput = document.getElementById('swap_reasoning_close_prefix');
+    if (closePrefixInput) {
+        closePrefixInput.value = escapeNewlinesForDisplay(thinkClose.prefix || '');
+    }
+    const closeSuffixInput = document.getElementById('swap_reasoning_close_suffix');
+    if (closeSuffixInput) {
+        closeSuffixInput.value = escapeNewlinesForDisplay(thinkClose.suffix || '');
+    }
+    const includeNewlineInput = document.getElementById('swap_reasoning_include_newline');
+    // Set include_newline based on config, or derive from suffix containing newline
+    if (includeNewlineInput) {
+        if (config.include_newline !== undefined) {
+            includeNewlineInput.checked = Boolean(config.include_newline);
+        } else if (thinkClose.suffix && thinkClose.suffix.includes('\n')) {
+            // If suffix contains newline, that implies include_newline behavior
+            includeNewlineInput.checked = true;
+        }
+    }
+}
+
+function escapeNewlinesForDisplay(value) {
+    if (!value) return '';
+    return value.replace(/\n/g, '\\n').replace(/\r/g, '\\r');
+}
+
+function unescapeNewlinesFromDisplay(value) {
+    if (!value) return '';
+    return value.replace(/\\r\\n/g, '\r\n').replace(/\\n/g, '\n').replace(/\\r/g, '\r');
+}
+
+async function updateSwapReasoningTemplateDerived() {
+    const select = document.getElementById('swap_reasoning_template_path');
+    if (!select) {
+        return;
+    }
+    const templatePath = select.value.trim();
+    if (!templatePath) {
+        if (swapReasoningTemplateActive && swapReasoningManualSnapshot) {
+            restoreSwapReasoningFields(swapReasoningManualSnapshot);
+        }
+        swapReasoningTemplateActive = false;
+        swapReasoningManualSnapshot = null;
+        setSwapReasoningFieldsDisabled(false);
+        return;
+    }
+
+    if (!swapReasoningTemplateActive) {
+        swapReasoningManualSnapshot = snapshotSwapReasoningFields();
+    }
+    swapReasoningTemplateActive = true;
+    setSwapReasoningFieldsDisabled(true);
+
+    const requestId = ++swapReasoningTemplateRequestId;
+    const params = new URLSearchParams({ template_path: templatePath });
+    // Don't pass think_tag override - let the template fully determine the configuration
+
+    try {
+        const response = await fetch(`${API_BASE}/templates/inspect?${params.toString()}`);
+        if (requestId !== swapReasoningTemplateRequestId) {
+            return;
+        }
+        if (!response.ok) {
+            const error = await response.json().catch(() => ({}));
+            throw new Error(error.detail || 'Failed to analyze template');
+        }
+        const data = await response.json();
+        applySwapReasoningDerivedConfig(data.config || data);
+        setSwapReasoningFieldsDisabled(true);
+    } catch (error) {
+        if (requestId !== swapReasoningTemplateRequestId) {
+            return;
+        }
+        showNotification(`Template inspection failed: ${error.message}`, 'error');
+        swapReasoningTemplateActive = false;
+        swapReasoningManualSnapshot = null;
+        setSwapReasoningFieldsDisabled(false);
+    }
 }
 
 async function uploadTemplate(file, selectId, statusId) {
@@ -1470,6 +1642,10 @@ async function uploadTemplate(file, selectId, statusId) {
         populateAllTemplateSelects();
         // Select the uploaded template in the triggering select
         populateTemplateSelect(selectId, result.path, placeholderText);
+        const select = document.getElementById(selectId);
+        if (select) {
+            select.dispatchEvent(new Event('change'));
+        }
 
         statusEl.textContent = 'Uploaded!';
         statusEl.className = 'upload-status success';
@@ -1502,6 +1678,20 @@ function initTemplateUpload() {
         uploadInput.addEventListener('change', (e) => {
             if (e.target.files && e.target.files[0]) {
                 uploadTemplate(e.target.files[0], 'parse_tags_template_path', 'parse_tags_template_upload_status');
+                e.target.value = '';
+            }
+        });
+    }
+
+    // Swap Reasoning template upload
+    const swapUploadBtn = document.getElementById('swap_reasoning_template_upload_btn');
+    const swapUploadInput = document.getElementById('swap_reasoning_template_upload_input');
+
+    if (swapUploadBtn && swapUploadInput) {
+        swapUploadBtn.addEventListener('click', () => swapUploadInput.click());
+        swapUploadInput.addEventListener('change', (e) => {
+            if (e.target.files && e.target.files[0]) {
+                uploadTemplate(e.target.files[0], 'swap_reasoning_template_path', 'swap_reasoning_template_upload_status');
                 e.target.value = '';
             }
         });
@@ -1594,6 +1784,11 @@ function initAdminUi() {
     loadModels();
     loadTemplates();
     initTemplateUpload();
+
+    const swapTemplateSelect = document.getElementById('swap_reasoning_template_path');
+    if (swapTemplateSelect) {
+        swapTemplateSelect.addEventListener('change', updateSwapReasoningTemplateDerived);
+    }
 }
 
 // Initialize

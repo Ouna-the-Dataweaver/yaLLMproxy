@@ -9,6 +9,7 @@ from fastapi import HTTPException, Request
 from fastapi.responses import FileResponse
 
 from ...core.registry import get_router
+from ...parsers.template_analyzer import analyze_template
 from ...config_store import CONFIG_STORE, _normalize_protected
 
 logger = logging.getLogger("yallmp-proxy")
@@ -387,6 +388,35 @@ def _mask_sensitive_data(data: Any) -> Any:
 TEMPLATES_DIR = Path(__file__).parent.parent.parent.parent / "configs" / "jinja_templates"
 
 
+def _is_within(path: Path, base: Path) -> bool:
+    try:
+        path.relative_to(base.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _resolve_template_path(template_path: str) -> Path:
+    if not template_path:
+        raise HTTPException(status_code=400, detail="template_path is required")
+    raw_path = Path(template_path)
+    if raw_path.is_absolute():
+        resolved = raw_path.resolve()
+    else:
+        repo_root = TEMPLATES_DIR.parent.parent
+        resolved = (repo_root / raw_path).resolve()
+        if not _is_within(resolved, TEMPLATES_DIR):
+            candidate = (TEMPLATES_DIR / raw_path).resolve()
+            if candidate.exists():
+                resolved = candidate
+    if not _is_within(resolved, TEMPLATES_DIR):
+        raise HTTPException(
+            status_code=400,
+            detail="Template path must be inside configs/jinja_templates",
+        )
+    return resolved
+
+
 async def list_templates():
     """List available jinja templates.
 
@@ -459,4 +489,34 @@ async def upload_template(request: Request):
     return {
         "name": safe_name,
         "path": f"configs/jinja_templates/{safe_name}"
+    }
+
+
+async def inspect_template(template_path: str, think_tag: str | None = None):
+    """Inspect a template and return derived swap reasoning config.
+
+    GET /admin/templates/inspect
+
+    Query params:
+        template_path: Path to the template file (relative to repo).
+        think_tag: Optional explicit think tag to inspect.
+    """
+    resolved = _resolve_template_path(template_path)
+    if not resolved.exists() or not resolved.is_file():
+        raise HTTPException(status_code=404, detail="Template not found")
+
+    try:
+        template_text = resolved.read_text(encoding="utf-8")
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Failed to read template: {exc}",
+        ) from exc
+
+    tag_override = think_tag.strip() if think_tag else None
+    analysis = analyze_template(template_text, think_tag=tag_override or None)
+    return {
+        "template_path": template_path,
+        "config": analysis["config"],
+        "detected_think_tag": analysis.get("detected_think_tag"),
     }
