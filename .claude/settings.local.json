@@ -4,7 +4,11 @@
       "Bash(uv run pytest:*)",
       "Bash(uv run:*)",
       "Bash(task test)",
-      "Bash(python -m pytest:*)"
+      "Bash(python -m pytest:*)",
+      "WebSearch",
+      "WebFetch(domain:platform.openai.com)",
+      "Bash(task test:*)"
     ]
-  }
+  },
+  "outputStyle": "default"
 }

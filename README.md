@@ -9,6 +9,7 @@ Yet Another LLM Proxy - A lightweight, modular LLM proxy with OpenAI-compatible 
 - **Request/Response Logging**: Detailed logs of all requests and responses for debugging
 - **Database Support**: SQLite (default) or PostgreSQL for persistent logging with JSONB columns
 - **OpenAI Compatibility**: Works with OpenAI-compatible clients and tools
+- **Chat & Embeddings**: Supports both `/v1/chat/completions` and `/v1/embeddings` endpoints
 - **Runtime Registration**: Register new backends without restarting the proxy
 - **Environment Variable Support**: Configure via environment variables in YAML files
 - **Streaming Support**: Transparent handling of streaming responses with SSE error detection
@@ -80,6 +81,16 @@ task run:reload
 ```bash
 # List available models
 curl http://localhost:7979/v1/models
+
+# Chat completion
+curl http://localhost:7979/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model": "your-model", "messages": [{"role": "user", "content": "Hello!"}]}'
+
+# Embeddings
+curl http://localhost:7979/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -d '{"model": "your-embedding-model", "input": "Hello, world!"}'
 ```
 
 ### Configuration Structure

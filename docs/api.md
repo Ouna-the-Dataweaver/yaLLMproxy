@@ -53,6 +53,58 @@ OpenAI-compatible chat completions endpoint. Supports both streaming and non-str
 }
 ```
 
+### Embeddings
+
+```http
+POST /v1/embeddings
+```
+
+OpenAI-compatible embeddings endpoint. Generate vector representations of text for use in search, clustering, recommendations, and other ML tasks.
+
+**Request Body:**
+
+```json
+{
+  "model": "text-embedding-model",
+  "input": "Hello, world!",
+  "encoding_format": "float",
+  "dimensions": 1536
+}
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `model` | string | Yes | Model name to use for embeddings |
+| `input` | string or array | Yes | Text to embed (string or array of strings) |
+| `encoding_format` | string | No | Output format: `float` (default) or `base64` |
+| `dimensions` | integer | No | Output dimensions (model-dependent) |
+| `user` | string | No | End-user identifier for tracking |
+
+**Response:**
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "object": "embedding",
+      "index": 0,
+      "embedding": [0.0023064255, -0.009327292, ...]
+    }
+  ],
+  "model": "text-embedding-model",
+  "usage": {
+    "prompt_tokens": 9,
+    "total_tokens": 9
+  }
+}
+```
+
+**Notes:**
+- The same model configuration works for both chat and embeddings - the proxy routes based on the endpoint path
+- Configure embedding models the same way as chat models in `config.yaml`
+- Embeddings requests are never streaming
+
 ### Models List
 
 ```http
@@ -476,6 +528,6 @@ All endpoints return consistent error responses:
 |------|-------------|
 | `invalid_json` | Request body is not valid JSON |
 | `invalid_json_shape` | Request body is not an object |
-| `missing_parameter` | Required parameter is missing |
-| `missing_messages` | messages array is required for chat completions |
+| `missing_parameter` | Required parameter is missing (model, messages, input) |
+| `invalid_parameter` | Parameter has invalid type or value |
 | `model_not_found` | Requested model is not configured |

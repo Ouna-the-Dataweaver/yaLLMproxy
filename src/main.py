@@ -28,7 +28,7 @@ except ImportError:
 from .config_store import CONFIG_STORE
 from .core import ProxyRouter
 from .core.registry import set_router
-from .api.routes import chat_completions, list_models, register_model, responses, config as config_routes, usage, logs
+from .api.routes import chat_completions, embeddings, list_models, register_model, responses, config as config_routes, usage, logs
 
 # Load configuration
 config = CONFIG_STORE.get_runtime_config()
@@ -184,6 +184,7 @@ async def shutdown_event():
 
 # Register routes
 app.post("/v1/chat/completions")(chat_completions)
+app.post("/v1/embeddings")(embeddings)
 app.get("/v1/models")(list_models)
 app.post("/admin/models")(register_model)
 

@@ -2,11 +2,13 @@
 
 from .admin import register_model
 from .chat import chat_completions, handle_openai_request, responses
+from .embeddings import embeddings
 from .models import list_models
 from . import config
 
 __all__ = [
     "chat_completions",
+    "embeddings",
     "handle_openai_request",
     "list_models",
     "register_model",
