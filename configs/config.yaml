@@ -58,15 +58,6 @@ model_list:
       top_k:
         default: 40
         allow_override: false
-- model_name: GigaChat-2-Max
-  protected: true
-  model_params:
-    api_type: openai
-    model: GigaChat-2-Max
-    api_base: https://gigachat.ift.sberdevices.ru/v1
-    api_key: ${SBER_API_KEY}
-    request_timeout: 540
-
 - model_name: MiniMax-M2-nano
   protected: true
   model_params:
