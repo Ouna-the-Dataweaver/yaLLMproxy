@@ -236,6 +236,7 @@ class TagScanner:
         tool_parser: Optional[Callable[[str], Optional[dict[str, Any]]]] = None,
         drop_tags: Optional[Iterable[str]] = None,
         tool_buffer_limit: Optional[int] = None,
+        drop_after_tool_call: bool = False,
     ) -> None:
         self.parse_thinking = parse_thinking
         self.parse_tool_calls = parse_tool_calls
@@ -262,6 +263,8 @@ class TagScanner:
         self.tool_buffer_limit = (
             tool_buffer_limit if tool_buffer_limit and tool_buffer_limit > 0 else None
         )
+        self.drop_after_tool_call = drop_after_tool_call
+        self._tool_calls_started = False
 
     def feed(self, text: str) -> TagScanResult:
         if not text:
@@ -273,6 +276,8 @@ class TagScanner:
 
         def _emit_literal(value: str, mode: str) -> None:
             if not value:
+                return
+            if self.drop_after_tool_call and self._tool_calls_started:
                 return
             if mode == "think":
                 out_reasoning.append(value)
@@ -289,11 +294,11 @@ class TagScanner:
             if self.mode == "text":
                 idx = self.buffer.find("<")
                 if idx == -1:
-                    out_content.append(self.buffer)
+                    _emit_literal(self.buffer, "text")
                     self.buffer = ""
                     break
                 if idx > 0:
-                    out_content.append(self.buffer[:idx])
+                    _emit_literal(self.buffer[:idx], "text")
                     self.buffer = self.buffer[idx:]
                 if self.parse_thinking and self.buffer.startswith(self.think_open):
                     self.buffer = self.buffer[len(self.think_open):]
@@ -313,7 +318,7 @@ class TagScanner:
                         continue
                 if self._open_tags and any(tag.startswith(self.buffer) for tag in self._open_tags):
                     break
-                out_content.append(self.buffer[0])
+                _emit_literal(self.buffer[0], "text")
                 self.buffer = self.buffer[1:]
                 continue
 
@@ -360,18 +365,18 @@ class TagScanner:
                         tags.extend(self.drop_tags)
                     head, tail = _split_tail_for_prefixes(self.buffer, tags)
                     if head:
-                        out_reasoning.append(head)
+                        _emit_literal(head, "think")
                     self.buffer = tail
                     break
                 if next_idx > 0:
-                    out_reasoning.append(self.buffer[:next_idx])
+                    _emit_literal(self.buffer[:next_idx], "think")
                     self.buffer = self.buffer[next_idx:]
                     continue
                 if next_drop:
                     self.buffer = self.buffer[len(next_drop):]
                     continue
                 # Fallback: treat the current char as reasoning content.
-                out_reasoning.append(self.buffer[0])
+                _emit_literal(self.buffer[0], "think")
                 self.buffer = self.buffer[1:]
                 continue
 
@@ -397,6 +402,8 @@ class TagScanner:
                 parsed = self.tool_parser(self.tool_buffer)
                 if parsed:
                     out_tool_calls.append(parsed)
+                    if self.drop_after_tool_call:
+                        self._tool_calls_started = True
                 else:
                     _emit_literal(
                         self.tool_open + self.tool_buffer + self.tool_close, self.tool_parent_mode
@@ -413,6 +420,11 @@ class TagScanner:
 
     def flush(self) -> TagScanResult:
         out = TagScanResult()
+        if self.drop_after_tool_call and self._tool_calls_started:
+            self.buffer = ""
+            self.tool_buffer = ""
+            self.mode = "text"
+            return out
         if self.mode == "text":
             out.content = self.buffer
         elif self.mode == "think":
@@ -516,50 +528,193 @@ class ParseTagsStreamState:
     choices: dict[int, ChoiceTagState] = field(default_factory=dict)
 
 
+@dataclass
+class DerivedTagConfig:
+    """Configuration derived from template analysis."""
+
+    think_tag: Optional[str] = None
+    tool_tag: Optional[str] = None
+    tool_arg_format: Optional[str] = None  # "xml" or "json"
+    tool_open: Optional[str] = None
+    tool_close: Optional[str] = None
+    tool_arg_separator: Optional[str] = None  # For JSON format
+    drop_tags: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        if self.think_tag:
+            result["think_tag"] = self.think_tag
+        if self.tool_tag:
+            result["tool_tag"] = self.tool_tag
+        if self.tool_arg_format:
+            result["tool_arg_format"] = self.tool_arg_format
+        if self.tool_open:
+            result["tool_open"] = self.tool_open
+        if self.tool_close:
+            result["tool_close"] = self.tool_close
+        if self.tool_arg_separator:
+            result["tool_arg_separator"] = self.tool_arg_separator
+        if self.drop_tags:
+            result["drop_tags"] = self.drop_tags
+        return result
+
+
 class ParseTagsParser(ResponseParser):
-    name = "parse_unparsed"
+    name = "parse_tags"
 
     def __init__(self, config: Mapping[str, Any]) -> None:
+        self.template_path = str(config.get("template_path") or "").strip()
+        self.derived_config: Optional[DerivedTagConfig] = None
+
+        # Load template-derived config first
+        if self.template_path:
+            self.derived_config = self._load_template_config()
+
+        # Determine effective values (explicit config overrides derived)
+        def _get(key: str, default: Any) -> Any:
+            if key in config and config.get(key) is not None:
+                return config.get(key)
+            if self.derived_config:
+                derived_val = getattr(self.derived_config, key, None)
+                if derived_val is not None:
+                    return derived_val
+            return default
+
         self.parse_thinking = _parse_bool(config.get("parse_thinking", True))
         self.parse_tool_calls = _parse_bool(config.get("parse_tool_calls", True))
-        self.think_tag = str(config.get("think_tag") or "think")
-        self.tool_tag = str(config.get("tool_tag") or "tool_call")
+        self.think_tag = str(_get("think_tag", "think"))
+        self.tool_tag = str(_get("tool_tag", "tool_call"))
         self.tool_buffer_limit = _parse_int(config.get("tool_buffer_limit"))
-        self.template_path = str(config.get("template_path") or "").strip()
 
-        # Load template overrides if template_path provided
-        tool_tag_explicit = "tool_tag" in config and config.get("tool_tag") is not None
-        think_tag_explicit = "think_tag" in config and config.get("think_tag") is not None
-        if self.template_path:
-            self._load_template_overrides(tool_tag_explicit, think_tag_explicit)
+        # Tool format configuration
+        self.tool_arg_format = str(_get("tool_arg_format", "xml")).strip().lower()
+        if self.tool_arg_format not in {"xml", "json"}:
+            logger.warning(
+                "Unknown tool_arg_format '%s'; defaulting to xml", self.tool_arg_format
+            )
+            self.tool_arg_format = "xml"
 
-    def _load_template_overrides(self, tool_tag_explicit: bool, think_tag_explicit: bool) -> None:
-        """Load think_tag and tool_tag from template file if not explicitly set."""
+        # Custom delimiters (default to XML-style based on tool_tag)
+        default_tool_open = f"<{self.tool_tag}>"
+        default_tool_close = f"</{self.tool_tag}>"
+        if self.tool_arg_format == "json" and self.derived_config:
+            # Use K2-style defaults if derived from template
+            default_tool_open = self.derived_config.tool_open or K2_TOOL_MARKERS["call_open"]
+            default_tool_close = self.derived_config.tool_close or K2_TOOL_MARKERS["call_close"]
+
+        self.tool_open = str(_get("tool_open", default_tool_open))
+        self.tool_close = str(_get("tool_close", default_tool_close))
+        self.tool_arg_separator = str(_get("tool_arg_separator", K2_TOOL_MARKERS["arg_open"]))
+        self.drop_tags = list(_get("drop_tags", []))
+
+        # Log effective config if derived from template
+        if self.derived_config and self.template_path:
+            logger.info(
+                "parse_tags loaded from template %s: think_tag=%s, tool_arg_format=%s, "
+                "tool_open=%s, tool_close=%s",
+                self.template_path,
+                self.think_tag,
+                self.tool_arg_format,
+                self.tool_open,
+                self.tool_close,
+            )
+
+    def _load_template_config(self) -> Optional[DerivedTagConfig]:
+        """Load configuration by analyzing template file."""
         path = Path(self.template_path)
         try:
             template_text = path.read_text(encoding="utf-8")
         except FileNotFoundError:
             logger.warning(
-                "Template file not found for parse_unparsed: %s. Using defaults.",
+                "Template file not found for parse_tags: %s. Using defaults.",
                 self.template_path,
             )
-            return
+            return None
         except Exception as exc:
             logger.warning(
-                "Failed to load template for parse_unparsed: %s. Error: %s.",
+                "Failed to load template for parse_tags: %s. Error: %s.",
                 self.template_path,
                 exc,
             )
-            return
+            return None
 
-        if not tool_tag_explicit:
+        derived = DerivedTagConfig()
+
+        # Detect think tag
+        detected_think = _detect_think_tag(template_text)
+        if detected_think:
+            derived.think_tag = detected_think
+
+        # Detect tool format and configuration
+        detected_format = _detect_tool_call_format(template_text)
+        if detected_format == "k2":
+            derived.tool_arg_format = "json"
+            derived.tool_open = K2_TOOL_MARKERS["call_open"]
+            derived.tool_close = K2_TOOL_MARKERS["call_close"]
+            derived.tool_arg_separator = K2_TOOL_MARKERS["arg_open"]
+            derived.drop_tags = [K2_TOOL_MARKERS["section_open"], K2_TOOL_MARKERS["section_close"]]
+        elif detected_format == "xml":
+            derived.tool_arg_format = "xml"
             detected_tag = _detect_tool_call_tag(template_text)
             if detected_tag:
-                self.tool_tag = detected_tag
-        if self.parse_thinking and not think_tag_explicit:
-            detected_think = _detect_think_tag(template_text)
-            if detected_think:
-                self.think_tag = detected_think
+                derived.tool_tag = detected_tag
+
+        return derived
+
+    def get_effective_config(self) -> dict[str, Any]:
+        """Return the effective configuration (for inspection/debugging)."""
+        return {
+            "template_path": self.template_path or None,
+            "derived_from_template": self.derived_config.to_dict() if self.derived_config else None,
+            "effective": {
+                "parse_thinking": self.parse_thinking,
+                "parse_tool_calls": self.parse_tool_calls,
+                "think_tag": self.think_tag,
+                "tool_tag": self.tool_tag,
+                "tool_arg_format": self.tool_arg_format,
+                "tool_open": self.tool_open,
+                "tool_close": self.tool_close,
+                "tool_arg_separator": self.tool_arg_separator,
+                "drop_tags": self.drop_tags,
+                "tool_buffer_limit": self.tool_buffer_limit,
+            },
+        }
+
+    def _build_scanner(
+        self,
+        *,
+        parse_thinking: Optional[bool] = None,
+        parse_tool_calls: Optional[bool] = None,
+    ) -> TagScanner:
+        """Build a TagScanner with current configuration."""
+        effective_parse_thinking = (
+            parse_thinking if parse_thinking is not None else self.parse_thinking
+        )
+        effective_parse_tool_calls = (
+            parse_tool_calls if parse_tool_calls is not None else self.parse_tool_calls
+        )
+
+        tool_parser: Optional[Callable[[str], Optional[dict[str, Any]]]] = None
+        tool_open: Optional[str] = None
+        tool_close: Optional[str] = None
+
+        if self.tool_arg_format == "json":
+            tool_parser = _k2_tool_call_parser_factory(self.tool_arg_separator)
+            tool_open = self.tool_open
+            tool_close = self.tool_close
+
+        return TagScanner(
+            think_tag=self.think_tag,
+            tool_tag=self.tool_tag,
+            parse_thinking=effective_parse_thinking,
+            parse_tool_calls=effective_parse_tool_calls,
+            tool_open=tool_open,
+            tool_close=tool_close,
+            tool_parser=tool_parser,
+            drop_tags=self.drop_tags if self.drop_tags else None,
+            tool_buffer_limit=self.tool_buffer_limit,
+            drop_after_tool_call=effective_parse_tool_calls,
+        )
 
     def apply_response(self, payload: dict[str, Any], ctx: ParserContext) -> dict[str, Any]:
         choices = payload.get("choices")
@@ -578,12 +733,9 @@ class ParseTagsParser(ResponseParser):
             parse_thinking = self.parse_thinking and not message.get("reasoning_content")
             parse_tool_calls = self.parse_tool_calls and not message.get("tool_calls")
 
-            scanner = TagScanner(
-                think_tag=self.think_tag,
-                tool_tag=self.tool_tag,
+            scanner = self._build_scanner(
                 parse_thinking=parse_thinking,
                 parse_tool_calls=parse_tool_calls,
-                tool_buffer_limit=self.tool_buffer_limit,
             )
             scanned = scanner.feed(content)
             flushed = scanner.flush()
@@ -625,13 +777,7 @@ class ParseTagsParser(ResponseParser):
     def _get_choice_state(self, state: ParseTagsStreamState, choice_index: int) -> ChoiceTagState:
         choice_state = state.choices.get(choice_index)
         if choice_state is None:
-            scanner = TagScanner(
-                think_tag=self.think_tag,
-                tool_tag=self.tool_tag,
-                parse_thinking=self.parse_thinking,
-                parse_tool_calls=self.parse_tool_calls,
-                tool_buffer_limit=self.tool_buffer_limit,
-            )
+            scanner = self._build_scanner()
             choice_state = ChoiceTagState(scanner=scanner)
             state.choices[choice_index] = choice_state
         return choice_state
@@ -708,247 +854,6 @@ class ParseTagsParser(ResponseParser):
                         parsed, index=i + choice_state.next_tool_index, id_prefix=id_prefix
                     )
                     for i, parsed in enumerate(flushed.tool_calls)
-                ]
-            events.append({"choices": [{"index": choice_index, "delta": delta}]})
-        return events
-
-
-@dataclass
-class TemplateTagsStreamState:
-    choices: dict[int, ChoiceTagState] = field(default_factory=dict)
-
-
-class TemplateParseParser(ResponseParser):
-    name = "parse_template"
-
-    def __init__(self, config: Mapping[str, Any]) -> None:
-        self.parse_thinking = _parse_bool(config.get("parse_thinking", True))
-        self.parse_tool_calls = _parse_bool(config.get("parse_tool_calls", True))
-        self.think_tag = str(config.get("think_tag") or "think")
-        self.tool_tag = str(config.get("tool_tag") or "tool_call")
-        self.tool_format = str(config.get("tool_format") or "auto").strip().lower()
-        self.template_path = str(config.get("template_path") or "").strip()
-        self.tool_buffer_limit = _parse_int(config.get("tool_buffer_limit"))
-
-        self.k2_call_open = str(config.get("tool_call_open") or K2_TOOL_MARKERS["call_open"])
-        self.k2_call_close = str(config.get("tool_call_close") or K2_TOOL_MARKERS["call_close"])
-        self.k2_arg_open = str(config.get("tool_call_arg_open") or K2_TOOL_MARKERS["arg_open"])
-        self.k2_section_open = str(
-            config.get("tool_call_section_open") or K2_TOOL_MARKERS["section_open"]
-        )
-        self.k2_section_close = str(
-            config.get("tool_call_section_close") or K2_TOOL_MARKERS["section_close"]
-        )
-
-        tool_tag_explicit = "tool_tag" in config and config.get("tool_tag") is not None
-        think_tag_explicit = "think_tag" in config and config.get("think_tag") is not None
-        if self.template_path:
-            self._load_template_overrides(tool_tag_explicit, think_tag_explicit)
-
-        if self.tool_format == "auto":
-            self.tool_format = "xml"
-        if self.tool_format not in {"xml", "k2"}:
-            logger.warning(
-                "Unknown tool_format '%s' for parse_template; defaulting to xml",
-                self.tool_format,
-            )
-            self.tool_format = "xml"
-
-    def _load_template_overrides(self, tool_tag_explicit: bool, think_tag_explicit: bool) -> None:
-        path = Path(self.template_path)
-        try:
-            template_text = path.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            logger.warning(
-                "Template file not found for parse_template: %s. Using defaults.",
-                self.template_path,
-            )
-            return
-        except Exception as exc:
-            logger.warning(
-                "Failed to load template for parse_template: %s. Error: %s.",
-                self.template_path,
-                exc,
-            )
-            return
-
-        detected_format = _detect_tool_call_format(template_text)
-        if self.tool_format == "auto" and detected_format:
-            self.tool_format = detected_format
-        if self.tool_format == "xml" and not tool_tag_explicit:
-            detected_tag = _detect_tool_call_tag(template_text)
-            if detected_tag:
-                self.tool_tag = detected_tag
-        if self.parse_thinking and not think_tag_explicit:
-            detected_think = _detect_think_tag(template_text)
-            if detected_think:
-                self.think_tag = detected_think
-
-    def _build_scanner(self) -> TagScanner:
-        tool_open = None
-        tool_close = None
-        tool_parser = None
-        drop_tags: list[str] = []
-
-        if self.parse_tool_calls and self.tool_format == "k2":
-            tool_open = self.k2_call_open
-            tool_close = self.k2_call_close
-            tool_parser = _k2_tool_call_parser_factory(self.k2_arg_open)
-            drop_tags = [self.k2_section_open, self.k2_section_close]
-
-        return TagScanner(
-            think_tag=self.think_tag,
-            tool_tag=self.tool_tag,
-            parse_thinking=self.parse_thinking,
-            parse_tool_calls=self.parse_tool_calls,
-            tool_open=tool_open,
-            tool_close=tool_close,
-            tool_parser=tool_parser,
-            drop_tags=drop_tags,
-            tool_buffer_limit=self.tool_buffer_limit,
-        )
-
-    def _scan_text(self, content: str) -> TagScanResult:
-        scanner = self._build_scanner()
-        result = scanner.feed(content)
-        flushed = scanner.flush()
-        return TagScanResult(
-            content=result.content + flushed.content,
-            reasoning=result.reasoning + flushed.reasoning,
-            tool_calls=result.tool_calls + flushed.tool_calls,
-        )
-
-    def apply_response(self, payload: dict[str, Any], ctx: ParserContext) -> dict[str, Any]:
-        choices = payload.get("choices")
-        if not isinstance(choices, list):
-            return payload
-        for choice in choices:
-            message = choice.get("message")
-            if not isinstance(message, dict):
-                continue
-            if message.get("role") not in {None, "assistant"}:
-                continue
-            content = message.get("content")
-            if not isinstance(content, str) or not content:
-                continue
-
-            parsed = self._scan_text(content)
-
-            if (
-                self.parse_thinking
-                and parsed.reasoning
-                and not message.get("reasoning_content")
-            ):
-                message["reasoning_content"] = parsed.reasoning
-
-            tool_calls: list[dict[str, Any]] = []
-            if self.parse_tool_calls and not message.get("tool_calls"):
-                tool_calls = parsed.tool_calls
-
-            if tool_calls:
-                id_prefix = f"call_{choice.get('index', 0)}_"
-                tool_payload = [
-                    _build_tool_call(parsed_call, index=i, id_prefix=id_prefix)
-                    for i, parsed_call in enumerate(tool_calls)
-                ]
-                message["tool_calls"] = tool_payload
-                finish_reason = choice.get("finish_reason")
-                if finish_reason in {None, "stop"}:
-                    choice["finish_reason"] = "tool_calls"
-
-            if isinstance(parsed.content, str):
-                if parsed.content.strip():
-                    message["content"] = parsed.content
-                else:
-                    message["content"] = None
-
-        return payload
-
-    def create_stream_state(self) -> TemplateTagsStreamState:
-        return TemplateTagsStreamState()
-
-    def _get_choice_state(
-        self, state: TemplateTagsStreamState, choice_index: int
-    ) -> ChoiceTagState:
-        choice_state = state.choices.get(choice_index)
-        if choice_state is None:
-            scanner = self._build_scanner()
-            choice_state = ChoiceTagState(scanner=scanner)
-            state.choices[choice_index] = choice_state
-        return choice_state
-
-    def apply_stream_event(
-        self, event: dict[str, Any], state: TemplateTagsStreamState, ctx: ParserContext
-    ) -> dict[str, Any]:
-        choices = event.get("choices")
-        if not isinstance(choices, list):
-            return event
-
-        for choice in choices:
-            delta = choice.get("delta")
-            if not isinstance(delta, dict):
-                continue
-            content = delta.get("content")
-            if not isinstance(content, str) or not content:
-                continue
-
-            choice_index = int(choice.get("index", 0))
-            choice_state = self._get_choice_state(state, choice_index)
-            result = choice_state.scanner.feed(content)
-
-            if result.content:
-                delta["content"] = result.content
-            else:
-                delta.pop("content", None)
-
-            if result.reasoning:
-                existing = delta.get("reasoning_content")
-                if isinstance(existing, str):
-                    delta["reasoning_content"] = existing + result.reasoning
-                else:
-                    delta["reasoning_content"] = result.reasoning
-
-            if result.tool_calls:
-                id_prefix = f"call_{choice_index}_"
-                tool_payload = []
-                for parsed_call in result.tool_calls:
-                    tool_payload.append(
-                        _build_tool_call(
-                            parsed_call,
-                            index=choice_state.next_tool_index,
-                            id_prefix=id_prefix,
-                        )
-                    )
-                    choice_state.next_tool_index += 1
-                if tool_payload:
-                    delta["tool_calls"] = tool_payload
-                    choice_state.saw_tool_calls = True
-
-            if choice_state.saw_tool_calls and choice.get("finish_reason") in {None, "stop"}:
-                choice["finish_reason"] = "tool_calls"
-
-        return event
-
-    def finalize_stream(
-        self, state: TemplateTagsStreamState, ctx: ParserContext
-    ) -> list[dict[str, Any]]:
-        events: list[dict[str, Any]] = []
-        for choice_index, choice_state in state.choices.items():
-            flushed = choice_state.scanner.flush()
-            if not (flushed.content or flushed.reasoning or flushed.tool_calls):
-                continue
-            delta: dict[str, Any] = {}
-            if flushed.content:
-                delta["content"] = flushed.content
-            if flushed.reasoning:
-                delta["reasoning_content"] = flushed.reasoning
-            if flushed.tool_calls:
-                id_prefix = f"call_{choice_index}_"
-                delta["tool_calls"] = [
-                    _build_tool_call(
-                        parsed_call, index=i + choice_state.next_tool_index, id_prefix=id_prefix
-                    )
-                    for i, parsed_call in enumerate(flushed.tool_calls)
                 ]
             events.append({"choices": [{"index": choice_index, "delta": delta}]})
         return events
@@ -1337,6 +1242,10 @@ class ResponseStreamParser:
         self.states = [parser.create_stream_state() for parser in pipeline.parsers]
         self._last_envelope: Optional[dict[str, Any]] = None
         self._saw_done = False
+        self.stop_reason: Optional[str] = None
+        self.stop_requested = False
+        self._last_finish_reason: Optional[str] = None
+        self._choice_indices: set[int] = set()
 
     def feed_bytes(self, chunk: bytes) -> list[bytes]:
         output: list[bytes] = []
@@ -1400,6 +1309,79 @@ class ResponseStreamParser:
         sse_event = SSEEvent(data=data)
         return sse_event.encode()
 
+    def _record_choice_indices(self, event: Mapping[str, Any]) -> None:
+        choices = event.get("choices")
+        if not isinstance(choices, list):
+            return
+        for choice in choices:
+            if not isinstance(choice, dict):
+                continue
+            idx = choice.get("index")
+            try:
+                idx_int = int(idx) if idx is not None else None
+            except (TypeError, ValueError):
+                idx_int = None
+            if idx_int is not None:
+                self._choice_indices.add(idx_int)
+
+    @staticmethod
+    def _extract_finish_reason(choice: Mapping[str, Any]) -> Optional[str]:
+        finish_reason = (
+            choice.get("finish_reason")
+            or choice.get("stop_reason")
+            or choice.get("reason")
+        )
+        if isinstance(finish_reason, str) and finish_reason:
+            return finish_reason
+        return None
+
+    @staticmethod
+    def _choice_has_tool_calls(choice: Mapping[str, Any]) -> bool:
+        delta = choice.get("delta")
+        if isinstance(delta, dict):
+            tool_calls = delta.get("tool_calls")
+            if isinstance(tool_calls, list) and tool_calls:
+                return True
+        message = choice.get("message")
+        if isinstance(message, dict):
+            tool_calls = message.get("tool_calls")
+            if isinstance(tool_calls, list) and tool_calls:
+                return True
+        tool_calls = choice.get("tool_calls")
+        if isinstance(tool_calls, list) and tool_calls:
+            return True
+        return False
+
+    def _track_event(self, event: Mapping[str, Any]) -> None:
+        self._record_choice_indices(event)
+        choices = event.get("choices")
+        if not isinstance(choices, list):
+            return
+        for choice in choices:
+            if not isinstance(choice, dict):
+                continue
+            finish_reason = self._extract_finish_reason(choice)
+            if finish_reason:
+                self._last_finish_reason = finish_reason
+                if finish_reason == "tool_calls":
+                    self.stop_reason = self.stop_reason or finish_reason
+                    self.stop_requested = True
+            if not self.stop_requested and self._choice_has_tool_calls(choice):
+                self.stop_reason = self.stop_reason or "tool_calls"
+                self.stop_requested = True
+
+    def should_emit_finish_event(self, reason: str) -> bool:
+        return self._last_finish_reason != reason
+
+    def build_finish_event(self, reason: str) -> bytes:
+        indices = sorted(self._choice_indices) or [0]
+        choices = [
+            {"index": idx, "delta": {}, "finish_reason": reason} for idx in indices
+        ]
+        event = {"choices": choices}
+        merged = self._merge_envelope(event)
+        return self._encode_event_json(merged)
+
     def _process_event(self, event: SSEEvent) -> list[bytes]:
         data = event.data
         if data is None:
@@ -1428,6 +1410,7 @@ class ResponseStreamParser:
             if not isinstance(updated, dict):
                 output.append(event.encode())
                 continue
+            self._track_event(updated)
             merged = self._merge_envelope(updated)
             envelope = dict(merged)
             envelope.pop("choices", None)
@@ -1549,11 +1532,14 @@ def build_response_module_pipeline(
         return ResponseParserPipeline([], [])
 
     available = {
+        # Primary name
+        "parse_tags": ParseTagsParser,
+        # Legacy aliases (all point to unified ParseTagsParser)
         "parse_unparsed": ParseTagsParser,
         "parse_unparsed_tags": ParseTagsParser,
-        "parse_tags": ParseTagsParser,
-        "parse_template": TemplateParseParser,
-        "parse_unparsed_template": TemplateParseParser,
+        "parse_template": ParseTagsParser,
+        "parse_unparsed_template": ParseTagsParser,
+        # Swap module
         "swap_reasoning_content": ReasoningSwapParser,
         "swap_reasoning": ReasoningSwapParser,
     }
@@ -1567,13 +1553,11 @@ def build_response_module_pipeline(
         parser_config = modules_cfg.get(name) or {}
         parsed_parsers.append(parser_cls(parser_config))
 
-    # Enforce ordering: parse tags before swap if both enabled.
+    # Enforce ordering: parse_tags before swap if both enabled.
     names = [p.name for p in parsed_parsers]
     if "swap_reasoning_content" in names:
         parse_candidates = [
-            idx
-            for idx, name in enumerate(names)
-            if name in {"parse_unparsed", "parse_template"}
+            idx for idx, name in enumerate(names) if name == "parse_tags"
         ]
         if parse_candidates:
             swap_index = names.index("swap_reasoning_content")
@@ -1581,7 +1565,7 @@ def build_response_module_pipeline(
             if swap_index < last_parse_index:
                 parsed_parsers.insert(last_parse_index, parsed_parsers.pop(swap_index))
                 logger.info(
-                    "Reordered response modules to run parse_unparsed/parse_template before swap_reasoning_content"
+                    "Reordered response modules to run parse_tags before swap_reasoning_content"
                 )
 
     paths = _ensure_list(modules_cfg.get("paths"))

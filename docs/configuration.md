@@ -57,13 +57,14 @@ model_list:
     modules:                               # Response module config
       enabled: true
       response:
-        - parse_unparsed
+        - parse_tags
         - swap_reasoning_content
-      parse_unparsed:
+      parse_tags:
         parse_thinking: true
         parse_tool_calls: true
         think_tag: "think"
-        tool_tag: "tool_call"
+        tool_arg_format: "xml"             # xml | json (for K2-style)
+        tool_tag: "tool_call"              # For xml format
       swap_reasoning_content:
         mode: "reasoning_to_content"       # reasoning_to_content | content_to_reasoning | auto
         think_tag: "think"
@@ -91,15 +92,16 @@ proxy_settings:
     parsers:                               # Response module config (legacy name, use "modules")
       enabled: false                         # Global parser enabled
     response:
-      - parse_unparsed
+      - parse_tags
       - swap_reasoning_content
     paths:
       - /chat/completions                  # Paths to apply parsers
-    parse_unparsed:
+    parse_tags:
       parse_thinking: true
       parse_tool_calls: true
       think_tag: "think"
-      tool_tag: "tool_call"
+      tool_arg_format: "xml"               # xml | json (for K2-style)
+      tool_tag: "tool_call"                # For xml format
     swap_reasoning_content:
       mode: "reasoning_to_content"
       think_tag: "think"
@@ -197,7 +199,7 @@ model_list:
     modules:
       enabled: true
       response:
-        - parse_unparsed
+        - parse_tags
         - swap_reasoning_content
 ```
 
@@ -266,7 +268,7 @@ model_list:
     extends: GLM-4.7
     modules:
       response:
-        - parse_unparsed
+        - parse_tags
         - swap_reasoning_content
 ```
 
@@ -330,28 +332,66 @@ curl -X POST "http://localhost:7979/admin/models/copy?source=GLM-4.7&target=GLM-
 
 The proxy uses a modular pipeline system for processing responses. Modules can be applied globally or per-model.
 
-1. **parse_unparsed** - Extract tool calls and thinking content from raw responses
+1. **parse_tags** - Extract tool calls and thinking content from raw responses
 2. **swap_reasoning_content** - Swap reasoning content with main content
-3. **parse_template** - Use Jinja2 templates for custom response parsing
 
 ### Module Configuration
 
-#### parse_unparsed
+#### parse_tags
+
+Parses `<think>` and `<tool_call>` tags (or custom delimiters) from response content into structured fields (`reasoning_content`, `tool_calls`).
 
 ```yaml
-parse_unparsed:
-  parse_thinking: true         # Extract thinking tags
-  parse_tool_calls: true       # Extract tool calls
-  think_tag: "think"           # Tag name for thinking content
-  tool_tag: "tool_call"        # Tag name for tool calls
-  tool_buffer_limit: 200       # Optional: max buffered chars before treating as literal
+parse_tags:
+  # Optional: auto-detect config from Jinja template
+  template_path: configs/jinja_templates/template_example.jinja
+
+  # Parsing options
+  parse_thinking: true           # Extract thinking tags
+  parse_tool_calls: true         # Extract tool calls
+  think_tag: "think"             # Tag name for thinking content
+
+  # Tool argument format
+  tool_arg_format: "xml"         # xml | json
+
+  # For xml format (default):
+  tool_tag: "tool_call"          # Tag name: <tool_call>...</tool_call>
+
+  # For json format (K2-style models):
+  tool_open: "<|tool_call_begin|>"       # Custom open delimiter
+  tool_close: "<|tool_call_end|>"        # Custom close delimiter
+  tool_arg_separator: "<|tool_call_argument_begin|>"  # Separates name from JSON args
+  drop_tags:                             # Tags to strip (e.g., section markers)
+    - "<|tool_calls_section_begin|>"
+    - "<|tool_calls_section_end|>"
+
+  tool_buffer_limit: 200         # Optional: max buffered chars before treating as literal
 ```
 
-Notes:
-- Uses the same tag scanner for non-stream and stream responses.
-- Tool calls can appear inside thinking blocks; tool parsing has higher priority than think parsing.
-- Tool calls are emitted only after a full, parseable block is confirmed.
-- If `tool_buffer_limit` is set and the buffer exceeds the limit without closing, the tag is treated as literal text.
+**Tool Argument Formats:**
+
+- **xml** (default): Tool calls use XML-style argument encoding
+  ```xml
+  <tool_call>function_name<arg_key>param</arg_key><arg_value>value</arg_value></tool_call>
+  ```
+
+- **json**: Tool calls use JSON arguments (K2-style models like Kimi)
+  ```
+  <|tool_call_begin|>function_name<|tool_call_argument_begin|>{"param": "value"}<|tool_call_end|>
+  ```
+
+**Template Auto-Detection:**
+
+When `template_path` is provided, the module automatically detects:
+- Think tag name from template expressions using `reasoning_content`
+- Tool argument format (xml vs json/K2) from template markers
+- Custom delimiters for K2-style tool calls
+
+**Notes:**
+- Uses incremental streaming parser for both stream and non-stream responses
+- Tool calls can appear inside thinking blocks; tool parsing has higher priority
+- Tool calls are emitted only after a full, parseable block is confirmed
+- If `tool_buffer_limit` is exceeded without closing, the tag is treated as literal text
 
 #### swap_reasoning_content
 
@@ -372,33 +412,6 @@ swap_reasoning_content:
 - `reasoning_to_content`: Move thinking content to message content
 - `content_to_reasoning`: Move content to thinking
 - `auto`: Auto-detect based on tags
-
-#### parse_template
-
-```yaml
-parse_template:
-  template_path: configs/jinja_templates/template_example.jinja
-  parse_thinking: true
-  parse_tool_calls: true
-  think_tag: "think"            # Optional override (auto-detected from template if omitted)
-  tool_tag: "tool_call"         # Optional override (auto-detected from template if omitted)
-  tool_format: "auto"           # auto | xml | k2
-  tool_buffer_limit: 200        # Optional: max buffered chars before treating as literal
-```
-
-**Parameters:**
-- `template_path`: Path to Jinja2 template file (required)
-- `parse_thinking`: Extract thinking content from template tags (default: true)
-- `parse_tool_calls`: Extract tool calls from template tags (default: true)
-- `think_tag`: Thinking tag name (default: auto-detect from template, fallback "think")
-- `tool_tag`: Tool tag name for xml format (default: auto-detect from template)
-- `tool_format`: Tool call format (auto-detect k2 vs xml, fallback "xml")
-- `tool_buffer_limit`: Max buffered chars before falling back to literal text (optional)
-
-**Use Cases:**
-- Custom parsing for models with non-standard output formats
-- Handling model-specific response structures
-- Extracting structured data from free-form responses
 
 ### Per-Model Module Overrides
 

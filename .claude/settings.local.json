@@ -3,7 +3,8 @@
     "allow": [
       "Bash(uv run pytest:*)",
       "Bash(uv run:*)",
-      "Bash(task test)"
+      "Bash(task test)",
+      "Bash(python -m pytest:*)"
     ]
   }
 }

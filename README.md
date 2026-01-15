@@ -23,7 +23,29 @@ Yet Another LLM Proxy - A lightweight, modular LLM proxy with OpenAI-compatible 
 
 - Python 3.10+
 - [uv](https://github.com/astral-sh/uv) package manager
-- [Taskfile](https://taskfile.dev/) for running tasks
+- [task](https://taskfile.dev/) for running automation tasks
+
+Install `task` on your platform:
+
+**Linux/macOS:**
+```bash
+sh -c "$(curl -sSL https://taskfile.dev/install.sh)"
+```
+
+**Windows (winget):**
+```bash
+winget install go-task.go-task
+```
+OR
+```bash
+choco install go-task
+```
+
+**macOS (Homebrew):**
+```bash
+brew install go-task
+```
+
 ### Install with uv
 
 ```bash
@@ -90,15 +112,19 @@ proxy_settings:
   parsers:                         # Response parser pipeline (optional)
     enabled: false
     response:                      # Ordered response parsers
-      - parse_unparsed
+      - parse_tags
       - swap_reasoning_content
     paths:                         # Apply to paths containing any of these strings
       - /chat/completions
-    parse_unparsed:                # Parse <think> / <tool_call> tags into structured fields
+    parse_tags:                    # Parse <think> / <tool_call> tags into structured fields
+      template_path: ""            # Optional: auto-detect config from Jinja template
       parse_thinking: true
       parse_tool_calls: true
       think_tag: think
-      tool_tag: tool_call
+      tool_arg_format: xml         # xml | json (for K2-style JSON arguments)
+      tool_tag: tool_call          # For xml format
+      tool_open: "<tool_call>"     # Custom open delimiter (auto-set for json format)
+      tool_close: "</tool_call>"   # Custom close delimiter (auto-set for json format)
       tool_buffer_limit: 200       # Optional: max buffered chars before treating as literal
     swap_reasoning_content:        # Swap reasoning_content <-> content
       mode: reasoning_to_content   # reasoning_to_content | content_to_reasoning | auto
@@ -137,9 +163,11 @@ When present, they replace the global `proxy_settings.parsers` config for that m
 If `enabled` is omitted, per-model parsers default to enabled (set `enabled: false`
 to explicitly disable parsing on that model).
 
-Parsing notes: `parse_template` can auto-detect think/tool tags and tool format from
-the provided Jinja template. Tool parsing buffers until a full block is parsed; if
-`tool_buffer_limit` is set and exceeded, the tag is treated as literal text.
+Parsing notes: `parse_tags` can auto-detect think/tool tags and argument format from
+a Jinja template when `template_path` is provided. Use `tool_arg_format: json` for
+K2-style models that output JSON arguments (e.g., `<|tool_call_begin|>func<|arg|>{"key":"val"}`).
+Tool parsing buffers until a full block is parsed; if `tool_buffer_limit` is set and
+exceeded, the tag is treated as literal text.
 
 To help align formatting with a Jinja chat template, you can inspect a template
 and print suggested `think_open`/`think_close` prefixes and suffixes:

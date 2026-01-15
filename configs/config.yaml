@@ -58,6 +58,15 @@ model_list:
       top_k:
         default: 40
         allow_override: false
+- model_name: GigaChat-2-Max
+  protected: true
+  model_params:
+    api_type: openai
+    model: GigaChat-2-Max
+    api_base: https://gigachat.ift.sberdevices.ru/v1
+    api_key: ${SBER_API_KEY}
+    request_timeout: 540
+
 - model_name: MiniMax-M2-nano
   protected: true
   model_params:
@@ -79,12 +88,12 @@ model_list:
     upstream:
       enabled: true
       response:
-      - parse_template
-      parse_template:
+      - parse_tags
+      parse_tags:
         template_path: configs/jinja_templates/k2thinking.jinja
         parse_thinking: false
         parse_tool_calls: true
-        tool_format: auto
+        # tool_arg_format auto-detected from template (json for K2)
   protected: true
 router_settings:
   num_retries: 1
@@ -100,19 +109,17 @@ proxy_settings:
     upstream:
       enabled: false
       response:
-      - parse_unparsed
+      - parse_tags
       - swap_reasoning_content
       paths:
       - /chat/completions
-      parse_unparsed:
+      parse_tags:
+        # template_path: configs/jinja_templates/template_example.jinja  # Optional: auto-detect from template
         parse_thinking: true
         parse_tool_calls: true
         think_tag: think
-        tool_tag: tool_call
-      parse_template:
-        template_path: configs/jinja_templates/template_example.jinja
-        parse_thinking: true
-        parse_tool_calls: true
+        tool_arg_format: xml       # xml | json (for K2-style JSON arguments)
+        tool_tag: tool_call        # For xml format
       swap_reasoning_content:
         mode: reasoning_to_content
         think_tag: think

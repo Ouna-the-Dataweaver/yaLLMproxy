@@ -29,6 +29,7 @@ from ..modules import (
     build_response_module_overrides,
     build_response_module_pipeline,
 )
+from .upstream_transport import get_upstream_transport
 
 DEFAULT_TIMEOUT = 30
 
@@ -410,8 +411,12 @@ class ProxyRouter:
                 raise
 
         logger.debug(f"Initiating non-streaming request to {url}")
+        transport = get_upstream_transport(url)
+
         async def _post(http2_enabled: bool) -> httpx.Response:
-            async with httpx.AsyncClient(timeout=timeout, http2=http2_enabled) as client:
+            async with httpx.AsyncClient(
+                timeout=timeout, http2=http2_enabled, transport=transport
+            ) as client:
                 return await client.post(
                     url, headers=outbound_headers, content=outbound_body
                 )
@@ -597,7 +602,8 @@ async def _streaming_request(
     stream_timeout = httpx.Timeout(
         connect=timeout, read=None, write=timeout, pool=timeout
     )
-    client = httpx.AsyncClient(timeout=stream_timeout, http2=http2)
+    transport = get_upstream_transport(url)
+    client = httpx.AsyncClient(timeout=stream_timeout, http2=http2, transport=transport)
     try:  # TODO: use context manager 'with httpx.AsyncClient'
         request = client.build_request("POST", url, headers=headers, content=body)
 
@@ -743,6 +749,8 @@ async def _streaming_request(
         last_finish_reason: Optional[str] = None
         last_usage_stats: Optional[dict[str, Any]] = None
         sse_decoder = SSEJSONDecoder() if request_log else None
+        stop_early = False
+        stop_reason: Optional[str] = None
 
         def _extract_finish_reason(choice: Mapping[str, Any]) -> Optional[str]:
             finish_reason = (
@@ -794,6 +802,15 @@ async def _streaming_request(
                 finish_reason = _extract_finish_reason(choice)
                 if finish_reason:
                     last_finish_reason = finish_reason
+
+        def _stop_chunks(reason: str) -> list[bytes]:
+            chunks: list[bytes] = []
+            if stream_parser and stream_parser.should_emit_finish_event(reason):
+                finish_chunk = stream_parser.build_finish_event(reason)
+                chunks.append(finish_chunk)
+            chunks.append(b"data: [DONE]\n\n")
+            return chunks
+
         try:
             chunk_count = 0
 
@@ -806,9 +823,23 @@ async def _streaming_request(
                         _handle_payload(payload, chunk_count)
                 for out_chunk in _process_chunk(chunk):
                     yield out_chunk
+                if stream_parser and stream_parser.stop_requested and not stop_early:
+                    stop_reason = stream_parser.stop_reason or "tool_calls"
+                    stop_early = True
+                    last_finish_reason = stop_reason
+                    if request_log:
+                        request_log.record_stop_reason(stop_reason)
+                        if stop_reason in ("tool_calls", "function_call", "tool_use"):
+                            request_log.mark_as_tool_call()
+                    await close_stream()
+                    for out_chunk in _stop_chunks(stop_reason):
+                        if request_log:
+                            request_log.record_parsed_stream_chunk(out_chunk)
+                        yield out_chunk
+                    break
 
             # Then continue with the rest of the stream
-            if not stream_exhausted:
+            if not stream_exhausted and not stop_early:
                 while True:
                     if disconnect_checker and await disconnect_checker():
                         raise asyncio.CancelledError("client disconnected")
@@ -830,81 +861,98 @@ async def _streaming_request(
                             request_log.record_stream_chunk(chunk)
                         for out_chunk in _process_chunk(chunk):
                             yield out_chunk
+                        if stream_parser and stream_parser.stop_requested and not stop_early:
+                            stop_reason = stream_parser.stop_reason or "tool_calls"
+                            stop_early = True
+                            last_finish_reason = stop_reason
+                            if request_log:
+                                request_log.record_stop_reason(stop_reason)
+                                if stop_reason in ("tool_calls", "function_call", "tool_use"):
+                                    request_log.mark_as_tool_call()
+                            await close_stream()
+                            for out_chunk in _stop_chunks(stop_reason):
+                                if request_log:
+                                    request_log.record_parsed_stream_chunk(out_chunk)
+                                yield out_chunk
+                            break
+                    if stop_early:
+                        break
 
-            # Finalize stream parser and get any final events
-            if stream_parser:
-                for out_chunk in stream_parser.finish():
-                    # Parse final events to extract stop_reason
-                    if request_log and last_chunk_data is None:
-                        try:
-                            event_data = json.loads(out_chunk.decode("utf-8"))
-                            if isinstance(event_data, dict):
-                                last_chunk_data = event_data
-                        except (json.JSONDecodeError, UnicodeDecodeError):
-                            pass
-                    if request_log:
-                        request_log.record_parsed_stream_chunk(out_chunk)
-                    yield out_chunk
+            if not stop_early:
+                # Finalize stream parser and get any final events
+                if stream_parser:
+                    for out_chunk in stream_parser.finish():
+                        # Parse final events to extract stop_reason
+                        if request_log and last_chunk_data is None:
+                            try:
+                                event_data = json.loads(out_chunk.decode("utf-8"))
+                                if isinstance(event_data, dict):
+                                    last_chunk_data = event_data
+                            except (json.JSONDecodeError, UnicodeDecodeError):
+                                pass
+                        if request_log:
+                            request_log.record_parsed_stream_chunk(out_chunk)
+                        yield out_chunk
 
-            # Extract stop_reason and usage from the final chunk
-            if request_log:
-                finish_reason = last_finish_reason
-                choice_for_debug: Optional[Mapping[str, Any]] = None
-                if not finish_reason:
-                    source_payload = last_choice_data or last_chunk_data
-                    choices = (
-                        source_payload.get("choices")
-                        if isinstance(source_payload, dict)
-                        else None
-                    )
-                    if choices and isinstance(choices, list) and len(choices) > 0:
-                        choice = choices[0]
-                        if isinstance(choice, dict):
-                            choice_for_debug = choice
-                            finish_reason = _extract_finish_reason(choice)
+                # Extract stop_reason and usage from the final chunk
+                if request_log:
+                    finish_reason = last_finish_reason
+                    choice_for_debug: Optional[Mapping[str, Any]] = None
+                    if not finish_reason:
+                        source_payload = last_choice_data or last_chunk_data
+                        choices = (
+                            source_payload.get("choices")
+                            if isinstance(source_payload, dict)
+                            else None
+                        )
+                        if choices and isinstance(choices, list) and len(choices) > 0:
+                            choice = choices[0]
+                            if isinstance(choice, dict):
+                                choice_for_debug = choice
+                                finish_reason = _extract_finish_reason(choice)
 
-                if finish_reason:
-                    if choice_for_debug:
+                    if finish_reason:
+                        if choice_for_debug:
+                            logger.debug(
+                                "Extracted stop_reason: %s from choice fields: %s",
+                                finish_reason,
+                                list(choice_for_debug.keys()),
+                            )
+                        request_log.record_stop_reason(finish_reason)
+                        # Also mark as tool call if the reason indicates tool usage
+                        if finish_reason in ("tool_calls", "function_call", "tool_use"):
+                            request_log.mark_as_tool_call()
+                    elif choice_for_debug:
+                        # Log all available fields when no stop reason found
                         logger.debug(
-                            "Extracted stop_reason: %s from choice fields: %s",
-                            finish_reason,
+                            "No stop_reason found in choice. Available fields: %s",
                             list(choice_for_debug.keys()),
                         )
-                    request_log.record_stop_reason(finish_reason)
-                    # Also mark as tool call if the reason indicates tool usage
-                    if finish_reason in ("tool_calls", "function_call", "tool_use"):
-                        request_log.mark_as_tool_call()
-                elif choice_for_debug:
-                    # Log all available fields when no stop reason found
-                    logger.debug(
-                        "No stop_reason found in choice. Available fields: %s",
-                        list(choice_for_debug.keys()),
-                    )
-                    for key in choice_for_debug.keys():
-                        if "stop" in key.lower() or "finish" in key.lower():
-                            logger.debug(
-                                "Field '%s' has value: %s",
-                                key,
-                                choice_for_debug.get(key),
-                            )
+                        for key in choice_for_debug.keys():
+                            if "stop" in key.lower() or "finish" in key.lower():
+                                logger.debug(
+                                    "Field '%s' has value: %s",
+                                    key,
+                                    choice_for_debug.get(key),
+                                )
 
-                # Record usage stats from the final chunk
-                if last_usage_stats:
-                    logger.debug(
-                        "Recording usage stats from stream: %s",
-                        last_usage_stats,
-                    )
-                    request_log.record_usage_stats(last_usage_stats)
-                else:
-                    # Try to extract usage from the last payload as fallback
-                    if last_chunk_data and isinstance(last_chunk_data, dict) and "usage" in last_chunk_data:
-                        usage = last_chunk_data.get("usage")
-                        if isinstance(usage, dict):
-                            logger.debug(
-                                "Recording usage stats from last chunk: %s",
-                                usage,
-                            )
-                            request_log.record_usage_stats(usage)
+                    # Record usage stats from the final chunk
+                    if last_usage_stats:
+                        logger.debug(
+                            "Recording usage stats from stream: %s",
+                            last_usage_stats,
+                        )
+                        request_log.record_usage_stats(last_usage_stats)
+                    else:
+                        # Try to extract usage from the last payload as fallback
+                        if last_chunk_data and isinstance(last_chunk_data, dict) and "usage" in last_chunk_data:
+                            usage = last_chunk_data.get("usage")
+                            if isinstance(usage, dict):
+                                logger.debug(
+                                    "Recording usage stats from last chunk: %s",
+                                    usage,
+                                )
+                                request_log.record_usage_stats(usage)
 
         except asyncio.CancelledError as cancel_exc:
             logger.info(f"Streaming request to {url} cancelled by client")

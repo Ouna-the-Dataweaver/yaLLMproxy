@@ -129,8 +129,8 @@ def test_parse_template_tool_inside_think_non_stream() -> None:
     ))
     message = updated["choices"][0]["message"]
 
-    assert message["reasoning_content"] == "beforeafter"
-    assert message["content"] == "Answer"
+    assert message["reasoning_content"] == "before"
+    assert message["content"] is None
     assert message["tool_calls"][0]["function"]["name"] == "lookup"
     assert message["tool_calls"][0]["function"]["arguments"] == "{\"q\": \"x\"}"
 

@@ -548,10 +548,33 @@
   border: 1px solid var(--border);
   padding: 14px;
   border-radius: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
 }
 
 .param-card .form-group {
-  margin-bottom: 12px;
+  flex: 1;
+  min-width: 100px;
+  margin-bottom: 0;
+}
+
+.param-card .form-checkbox-group {
+  flex: 1.2;
+  min-width: 180px;
+  margin: 0;
+  padding: 8px 12px;
+}
+
+.param-card .form-checkbox-label {
+  flex-direction: row;
+  gap: 6px;
+  align-items: center;
+}
+
+.param-card .form-checkbox-label span:last-child {
+  font-size: 0.75rem;
 }
 
 .modules-config {

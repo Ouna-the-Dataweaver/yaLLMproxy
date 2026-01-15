@@ -67,17 +67,18 @@ const PARAMETER_FIELDS = [
     { name: 'top_k', inputId: 'param_top_k', overrideId: 'param_top_k_override', parser: (value) => parseInt(value, 10) }
 ];
 
-const RESPONSE_MODULES = ['parse_unparsed', 'parse_template', 'swap_reasoning_content'];
+const RESPONSE_MODULES = ['parse_tags', 'swap_reasoning_content'];
 const RESPONSE_ALIASES = {
-    parse_unparsed_tags: 'parse_unparsed',
-    parse_tags: 'parse_unparsed',
-    parse_unparsed_template: 'parse_template',
+    // Legacy aliases all map to parse_tags
+    parse_unparsed: 'parse_tags',
+    parse_unparsed_tags: 'parse_tags',
+    parse_template: 'parse_tags',
+    parse_unparsed_template: 'parse_tags',
     swap_reasoning: 'swap_reasoning_content'
 };
 
 const MODULE_IDS = {
-    parse_unparsed: 'module_parse_unparsed',
-    parse_template: 'module_parse_template',
+    parse_tags: 'module_parse_tags',
     swap_reasoning_content: 'module_swap_reasoning'
 };
 
@@ -700,19 +701,13 @@ function resetModulesForm() {
             checkbox.checked = false;
         }
     });
-    document.getElementById('parse_unparsed_think_tag').value = 'think';
-    document.getElementById('parse_unparsed_tool_tag').value = 'tool_call';
-    document.getElementById('parse_unparsed_tool_buffer_limit').value = '';
-    document.getElementById('parse_unparsed_parse_thinking').checked = true;
-    document.getElementById('parse_unparsed_parse_tool_calls').checked = true;
-
-    document.getElementById('parse_template_path').value = '';
-    document.getElementById('parse_template_think_tag').value = '';
-    document.getElementById('parse_template_tool_tag').value = '';
-    document.getElementById('parse_template_tool_format').value = 'auto';
-    document.getElementById('parse_template_tool_buffer_limit').value = '';
-    document.getElementById('parse_template_parse_thinking').checked = true;
-    document.getElementById('parse_template_parse_tool_calls').checked = true;
+    document.getElementById('parse_tags_template_path').value = '';
+    document.getElementById('parse_tags_think_tag').value = 'think';
+    document.getElementById('parse_tags_tool_arg_format').value = 'xml';
+    document.getElementById('parse_tags_tool_tag').value = 'tool_call';
+    document.getElementById('parse_tags_tool_buffer_limit').value = '';
+    document.getElementById('parse_tags_parse_thinking').checked = true;
+    document.getElementById('parse_tags_parse_tool_calls').checked = true;
 
     document.getElementById('swap_reasoning_mode').value = 'reasoning_to_content';
     document.getElementById('swap_reasoning_think_tag').value = 'think';
@@ -747,35 +742,31 @@ function fillModulesForm(upstreamCfg) {
         }
     });
 
-    const parseUnparsedCfg =
+    // Unified parse_tags config (merge legacy configs for backwards compatibility)
+    const parseTagsCfg =
+        upstreamCfg?.parse_tags ||
         upstreamCfg?.parse_unparsed ||
         upstreamCfg?.parse_unparsed_tags ||
-        upstreamCfg?.parse_tags ||
-        {};
-    populateTemplateSelect('parse_unparsed_template_path', parseUnparsedCfg.template_path || '', '-- None (use manual tags) --');
-    document.getElementById('parse_unparsed_think_tag').value = parseUnparsedCfg.think_tag || 'think';
-    document.getElementById('parse_unparsed_tool_tag').value = parseUnparsedCfg.tool_tag || 'tool_call';
-    document.getElementById('parse_unparsed_tool_buffer_limit').value =
-        parseUnparsedCfg.tool_buffer_limit ?? '';
-    document.getElementById('parse_unparsed_parse_thinking').checked =
-        parseUnparsedCfg.parse_thinking !== undefined ? Boolean(parseUnparsedCfg.parse_thinking) : true;
-    document.getElementById('parse_unparsed_parse_tool_calls').checked =
-        parseUnparsedCfg.parse_tool_calls !== undefined ? Boolean(parseUnparsedCfg.parse_tool_calls) : true;
-
-    const parseTemplateCfg =
         upstreamCfg?.parse_template ||
         upstreamCfg?.parse_unparsed_template ||
         {};
-    populateTemplateSelect('parse_template_path', parseTemplateCfg.template_path || '', '-- Select a template --');
-    document.getElementById('parse_template_think_tag').value = parseTemplateCfg.think_tag || '';
-    document.getElementById('parse_template_tool_tag').value = parseTemplateCfg.tool_tag || '';
-    document.getElementById('parse_template_tool_format').value = parseTemplateCfg.tool_format || 'auto';
-    document.getElementById('parse_template_tool_buffer_limit').value =
-        parseTemplateCfg.tool_buffer_limit ?? '';
-    document.getElementById('parse_template_parse_thinking').checked =
-        parseTemplateCfg.parse_thinking !== undefined ? Boolean(parseTemplateCfg.parse_thinking) : true;
-    document.getElementById('parse_template_parse_tool_calls').checked =
-        parseTemplateCfg.parse_tool_calls !== undefined ? Boolean(parseTemplateCfg.parse_tool_calls) : true;
+    populateTemplateSelect('parse_tags_template_path', parseTagsCfg.template_path || '', '-- None (use manual config) --');
+    document.getElementById('parse_tags_think_tag').value = parseTagsCfg.think_tag || 'think';
+    // Handle legacy tool_format -> tool_arg_format conversion
+    let toolArgFormat = parseTagsCfg.tool_arg_format || 'xml';
+    if (parseTagsCfg.tool_format === 'k2') {
+        toolArgFormat = 'json';
+    } else if (parseTagsCfg.tool_format === 'xml') {
+        toolArgFormat = 'xml';
+    }
+    document.getElementById('parse_tags_tool_arg_format').value = toolArgFormat;
+    document.getElementById('parse_tags_tool_tag').value = parseTagsCfg.tool_tag || 'tool_call';
+    document.getElementById('parse_tags_tool_buffer_limit').value =
+        parseTagsCfg.tool_buffer_limit ?? '';
+    document.getElementById('parse_tags_parse_thinking').checked =
+        parseTagsCfg.parse_thinking !== undefined ? Boolean(parseTagsCfg.parse_thinking) : true;
+    document.getElementById('parse_tags_parse_tool_calls').checked =
+        parseTagsCfg.parse_tool_calls !== undefined ? Boolean(parseTagsCfg.parse_tool_calls) : true;
 
     const swapCfg = upstreamCfg?.swap_reasoning_content || upstreamCfg?.swap_reasoning || {};
     document.getElementById('swap_reasoning_mode').value = swapCfg.mode || 'reasoning_to_content';
@@ -838,48 +829,31 @@ function buildModulesConfig() {
         delete base.paths;
     }
 
-    if (response.includes('parse_unparsed')) {
-        const cfg = { ...(base.parse_unparsed || base.parse_unparsed_tags || base.parse_tags || {}) };
-        setOptionalField(cfg, 'template_path', document.getElementById('parse_unparsed_template_path').value.trim() || undefined);
-        setOptionalField(cfg, 'think_tag', document.getElementById('parse_unparsed_think_tag').value.trim() || undefined);
-        setOptionalField(cfg, 'tool_tag', document.getElementById('parse_unparsed_tool_tag').value.trim() || undefined);
+    if (response.includes('parse_tags')) {
+        const cfg = { ...(base.parse_tags || base.parse_unparsed || base.parse_unparsed_tags || base.parse_template || {}) };
+        setOptionalField(cfg, 'template_path', document.getElementById('parse_tags_template_path').value.trim() || undefined);
+        setOptionalField(cfg, 'think_tag', document.getElementById('parse_tags_think_tag').value.trim() || undefined);
+        setOptionalField(cfg, 'tool_arg_format', document.getElementById('parse_tags_tool_arg_format').value || undefined);
+        setOptionalField(cfg, 'tool_tag', document.getElementById('parse_tags_tool_tag').value.trim() || undefined);
         const bufferLimit = parseNumber(
-            document.getElementById('parse_unparsed_tool_buffer_limit').value,
+            document.getElementById('parse_tags_tool_buffer_limit').value,
             (value) => parseInt(value, 10)
         );
         setOptionalField(cfg, 'tool_buffer_limit', bufferLimit);
-        cfg.parse_thinking = document.getElementById('parse_unparsed_parse_thinking').checked;
-        cfg.parse_tool_calls = document.getElementById('parse_unparsed_parse_tool_calls').checked;
-        base.parse_unparsed = cfg;
-        delete base.parse_unparsed_tags;
-        delete base.parse_tags;
-    } else {
+        cfg.parse_thinking = document.getElementById('parse_tags_parse_thinking').checked;
+        cfg.parse_tool_calls = document.getElementById('parse_tags_parse_tool_calls').checked;
+        // Clean up legacy fields
+        delete cfg.tool_format;
+        base.parse_tags = cfg;
+        // Remove legacy keys
         delete base.parse_unparsed;
         delete base.parse_unparsed_tags;
-        delete base.parse_tags;
-    }
-
-    if (response.includes('parse_template')) {
-        const cfg = { ...(base.parse_template || base.parse_unparsed_template || {}) };
-        const templatePath = document.getElementById('parse_template_path').value.trim();
-        if (!templatePath) {
-            showNotification('Template path is required when Parse Template is enabled', 'error');
-            return null;
-        }
-        cfg.template_path = templatePath;
-        setOptionalField(cfg, 'think_tag', document.getElementById('parse_template_think_tag').value.trim() || undefined);
-        setOptionalField(cfg, 'tool_tag', document.getElementById('parse_template_tool_tag').value.trim() || undefined);
-        setOptionalField(cfg, 'tool_format', document.getElementById('parse_template_tool_format').value || undefined);
-        const bufferLimit = parseNumber(
-            document.getElementById('parse_template_tool_buffer_limit').value,
-            (value) => parseInt(value, 10)
-        );
-        setOptionalField(cfg, 'tool_buffer_limit', bufferLimit);
-        cfg.parse_thinking = document.getElementById('parse_template_parse_thinking').checked;
-        cfg.parse_tool_calls = document.getElementById('parse_template_parse_tool_calls').checked;
-        base.parse_template = cfg;
+        delete base.parse_template;
         delete base.parse_unparsed_template;
     } else {
+        delete base.parse_tags;
+        delete base.parse_unparsed;
+        delete base.parse_unparsed_tags;
         delete base.parse_template;
         delete base.parse_unparsed_template;
     }
@@ -1465,15 +1439,12 @@ function populateTemplateSelect(selectId, selectedValue = null, placeholderText 
 }
 
 function populateAllTemplateSelects() {
-    populateTemplateSelect('parse_template_path', null, '-- Select a template --');
-    populateTemplateSelect('parse_unparsed_template_path', null, '-- None (use manual tags) --');
+    populateTemplateSelect('parse_tags_template_path', null, '-- None (use manual config) --');
 }
 
 async function uploadTemplate(file, selectId, statusId) {
     const statusEl = document.getElementById(statusId);
-    const placeholderText = selectId === 'parse_template_path'
-        ? '-- Select a template --'
-        : '-- None (use manual tags) --';
+    const placeholderText = '-- None (use manual config) --';
 
     try {
         statusEl.textContent = 'Uploading...';
@@ -1522,29 +1493,15 @@ async function uploadTemplate(file, selectId, statusId) {
 }
 
 function initTemplateUpload() {
-    // Parse Template upload
-    const uploadBtn = document.getElementById('template_upload_btn');
-    const uploadInput = document.getElementById('template_upload_input');
+    // Parse Tags template upload
+    const uploadBtn = document.getElementById('parse_tags_template_upload_btn');
+    const uploadInput = document.getElementById('parse_tags_template_upload_input');
 
     if (uploadBtn && uploadInput) {
         uploadBtn.addEventListener('click', () => uploadInput.click());
         uploadInput.addEventListener('change', (e) => {
             if (e.target.files && e.target.files[0]) {
-                uploadTemplate(e.target.files[0], 'parse_template_path', 'template_upload_status');
-                e.target.value = '';
-            }
-        });
-    }
-
-    // Parse Unparsed upload
-    const unparsedUploadBtn = document.getElementById('parse_unparsed_template_upload_btn');
-    const unparsedUploadInput = document.getElementById('parse_unparsed_template_upload_input');
-
-    if (unparsedUploadBtn && unparsedUploadInput) {
-        unparsedUploadBtn.addEventListener('click', () => unparsedUploadInput.click());
-        unparsedUploadInput.addEventListener('change', (e) => {
-            if (e.target.files && e.target.files[0]) {
-                uploadTemplate(e.target.files[0], 'parse_unparsed_template_path', 'parse_unparsed_template_upload_status');
+                uploadTemplate(e.target.files[0], 'parse_tags_template_path', 'parse_tags_template_upload_status');
                 e.target.value = '';
             }
         });

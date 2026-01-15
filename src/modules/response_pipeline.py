@@ -12,7 +12,6 @@ from ..parsers.response_pipeline import (
     ResponseParserPipeline,
     ResponseStreamParser,
     ParseTagsParser,
-    TemplateParseParser,
     ReasoningSwapParser,
     SSEDecoder,
     SSEEvent,
@@ -21,6 +20,9 @@ from ..parsers.response_pipeline import (
     build_response_parser_pipeline,
     build_response_parser_overrides,
 )
+
+# Legacy alias - TemplateParseParser is now unified into ParseTagsParser
+TemplateParseParser = ParseTagsParser
 
 __all__ = [
     "ModuleContext",
@@ -32,7 +34,7 @@ __all__ = [
     "ResponseParserPipeline",
     "ResponseStreamParser",
     "ParseTagsParser",
-    "TemplateParseParser",
+    "TemplateParseParser",  # Legacy alias
     "ReasoningSwapParser",
     "SSEDecoder",
     "SSEEvent",

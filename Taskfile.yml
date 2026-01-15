@@ -56,6 +56,11 @@ tasks:
     cmds:
       - uv run pytest tests -v
 
+  simulate:
+    desc: Run proxy simulation harness (see scripts/simulate_proxy.py)
+    cmds:
+      - uv run python scripts/simulate_proxy.py {{.CLI_ARGS}}
+
   clean:
     desc: Clear all logs (deletes all files in logs directory except database)
     cmds:
