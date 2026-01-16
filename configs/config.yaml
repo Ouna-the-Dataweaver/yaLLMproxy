@@ -171,11 +171,11 @@ database:
   connection:
     sqlite:
       path: logs/yaLLM.db
-    postgres:
-      host: localhost
-      port: 5432
-      database: yallm_proxy
-      user: ${DB_USER}
-      password: ${DB_PASSWORD}
+    #postgres:
+    #  host: localhost
+    #  port: 5432
+    #  database: yallm_proxy
+    #  user: ${DB_USER}
+    #  password: ${DB_PASSWORD}
   pool_size: 5
   max_overflow: 10
