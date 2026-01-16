@@ -415,7 +415,7 @@ class ProxyRouter:
 
         async def _post(http2_enabled: bool) -> httpx.Response:
             async with httpx.AsyncClient(
-                timeout=timeout, http2=http2_enabled, transport=transport
+                timeout=timeout, http2=http2_enabled, transport=transport, follow_redirects=True
             ) as client:
                 return await client.post(
                     url, headers=outbound_headers, content=outbound_body
@@ -605,7 +605,7 @@ async def _streaming_request(
         connect=timeout, read=None, write=timeout, pool=timeout
     )
     transport = get_upstream_transport(url)
-    client = httpx.AsyncClient(timeout=stream_timeout, http2=http2, transport=transport)
+    client = httpx.AsyncClient(timeout=stream_timeout, http2=http2, transport=transport, follow_redirects=True)
     try:  # TODO: use context manager 'with httpx.AsyncClient'
         request = client.build_request("POST", url, headers=headers, content=body)
 
