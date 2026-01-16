@@ -95,6 +95,7 @@ let adminPassword = '';
 let currentParametersConfig = null;
 let currentParametersSource = 'model_params';
 let currentModulesConfig = null;
+let customParameters = [];
 let swapReasoningTemplateActive = false;
 let swapReasoningManualSnapshot = null;
 let swapReasoningTemplateRequestId = 0;
@@ -554,6 +555,129 @@ function parseCommaList(value) {
         .filter(Boolean);
 }
 
+// Custom parameters management
+function parseCustomParamValue(value) {
+    const trimmed = (value || '').trim();
+    if (!trimmed) return undefined;
+
+    // Try to parse as number
+    const asNumber = parseFloat(trimmed);
+    if (!Number.isNaN(asNumber) && trimmed === String(asNumber)) {
+        return asNumber;
+    }
+
+    // Try to parse as boolean
+    if (trimmed.toLowerCase() === 'true') return true;
+    if (trimmed.toLowerCase() === 'false') return false;
+
+    // Try to parse as JSON (for arrays/objects)
+    try {
+        const parsed = JSON.parse(trimmed);
+        if (typeof parsed === 'object') return parsed;
+    } catch (e) {
+        // Not valid JSON, treat as string
+    }
+
+    // Return as string
+    return trimmed;
+}
+
+function formatCustomParamValue(value) {
+    if (value === null || value === undefined) return '';
+    if (typeof value === 'object') return JSON.stringify(value);
+    return String(value);
+}
+
+function renderCustomParams() {
+    const container = document.getElementById('customParamsList');
+    if (!container) return;
+
+    if (customParameters.length === 0) {
+        container.innerHTML = '';
+        return;
+    }
+
+    container.innerHTML = customParameters.map((param, index) => `
+        <div class="custom-param-item" data-index="${index}">
+            <div class="custom-param-info">
+                <span class="custom-param-name">${escapeHtml(param.name)}</span>
+                <span class="custom-param-value">${escapeHtml(formatCustomParamValue(param.default))}</span>
+                <span class="custom-param-override-badge ${param.allow_override ? 'override-allowed' : 'override-blocked'}">
+                    ${param.allow_override ? 'Override allowed' : 'Override blocked'}
+                </span>
+            </div>
+            <button type="button" class="btn btn-danger btn-icon btn-sm" data-action="delete-custom-param" data-index="${index}" title="Remove parameter">
+                ${Icons.trash}
+            </button>
+        </div>
+    `).join('');
+}
+
+function addCustomParam() {
+    const nameInput = document.getElementById('custom_param_name');
+    const valueInput = document.getElementById('custom_param_value');
+    const overrideCheckbox = document.getElementById('custom_param_override');
+
+    const name = (nameInput.value || '').trim();
+    const rawValue = valueInput.value;
+    const allowOverride = overrideCheckbox.checked;
+
+    if (!name) {
+        showNotification('Parameter name is required', 'error');
+        nameInput.focus();
+        return;
+    }
+
+    // Check for reserved parameter names
+    const reservedNames = PARAMETER_FIELDS.map(f => f.name);
+    if (reservedNames.includes(name)) {
+        showNotification(`"${name}" is a built-in parameter, use the field above`, 'error');
+        nameInput.focus();
+        return;
+    }
+
+    // Check for duplicates
+    if (customParameters.some(p => p.name === name)) {
+        showNotification(`Parameter "${name}" already exists`, 'error');
+        nameInput.focus();
+        return;
+    }
+
+    const value = parseCustomParamValue(rawValue);
+
+    customParameters.push({
+        name: name,
+        default: value,
+        allow_override: allowOverride
+    });
+
+    // Clear inputs
+    nameInput.value = '';
+    valueInput.value = '';
+    overrideCheckbox.checked = true;
+
+    renderCustomParams();
+    nameInput.focus();
+}
+
+function deleteCustomParam(index) {
+    if (index >= 0 && index < customParameters.length) {
+        customParameters.splice(index, 1);
+        renderCustomParams();
+    }
+}
+
+function handleCustomParamsClick(event) {
+    const target = event.target.closest('[data-action]');
+    if (!target) return;
+
+    const action = target.dataset.action;
+    if (action === 'delete-custom-param') {
+        const index = parseInt(target.dataset.index, 10);
+        deleteCustomParam(index);
+    }
+}
+
 function setOptionalField(obj, key, value) {
     if (!obj) {
         return;
@@ -590,6 +714,9 @@ function resetParametersForm() {
             toggle.checked = true;
         }
     });
+    // Clear custom parameters
+    customParameters = [];
+    renderCustomParams();
 }
 
 function fillParametersForm(parameters) {
@@ -612,6 +739,25 @@ function fillParametersForm(parameters) {
             }
         }
     });
+
+    // Fill custom parameters (parameters not in PARAMETER_FIELDS)
+    customParameters = [];
+    if (parameters && typeof parameters === 'object') {
+        const builtInNames = PARAMETER_FIELDS.map(f => f.name);
+        Object.keys(parameters).forEach(paramName => {
+            if (!builtInNames.includes(paramName)) {
+                const config = parameters[paramName];
+                if (config && typeof config === 'object') {
+                    customParameters.push({
+                        name: paramName,
+                        default: config.default,
+                        allow_override: config.allow_override !== false
+                    });
+                }
+            }
+        });
+    }
+    renderCustomParams();
 }
 
 function buildParameterOverrides() {
@@ -636,6 +782,23 @@ function buildParameterOverrides() {
             allow_override: toggle.checked
         };
     });
+
+    // Add custom parameters
+    const builtInNames = PARAMETER_FIELDS.map(f => f.name);
+    // First, remove any custom parameters that were deleted
+    Object.keys(base).forEach(key => {
+        if (!builtInNames.includes(key) && !customParameters.some(p => p.name === key)) {
+            delete base[key];
+        }
+    });
+    // Then add/update custom parameters
+    customParameters.forEach(param => {
+        base[param.name] = {
+            default: param.default,
+            allow_override: param.allow_override
+        };
+    });
+
     Object.keys(base).forEach(key => {
         const cfg = base[key];
         if (!cfg || typeof cfg !== 'object' || Object.keys(cfg).length === 0) {
@@ -1789,6 +1952,31 @@ function initAdminUi() {
     if (swapTemplateSelect) {
         swapTemplateSelect.addEventListener('change', updateSwapReasoningTemplateDerived);
     }
+
+    // Custom parameters event listeners
+    const addCustomParamBtn = document.getElementById('addCustomParamBtn');
+    if (addCustomParamBtn) {
+        addCustomParamBtn.addEventListener('click', addCustomParam);
+    }
+
+    const customParamsList = document.getElementById('customParamsList');
+    if (customParamsList) {
+        customParamsList.addEventListener('click', handleCustomParamsClick);
+    }
+
+    // Allow adding custom param by pressing Enter in the inputs
+    const customParamNameInput = document.getElementById('custom_param_name');
+    const customParamValueInput = document.getElementById('custom_param_value');
+    [customParamNameInput, customParamValueInput].forEach(input => {
+        if (input) {
+            input.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    addCustomParam();
+                }
+            });
+        }
+    });
 }
 
 // Initialize

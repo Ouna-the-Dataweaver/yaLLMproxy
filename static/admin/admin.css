@@ -773,3 +773,138 @@
 .upload-status.error {
   color: #dc2626;
 }
+
+/* Custom Parameters Section */
+.custom-params-section {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px dashed rgba(30, 27, 22, 0.15);
+}
+
+[data-theme="dark"] .custom-params-section {
+  border-top-color: rgba(230, 237, 243, 0.15);
+}
+
+.custom-params-header {
+  margin-bottom: 12px;
+}
+
+.custom-params-title {
+  font-family: 'Bricolage Grotesque', sans-serif;
+  font-size: 0.95rem;
+  margin-bottom: 2px;
+  color: var(--ink-soft);
+}
+
+.custom-params-subtitle {
+  font-size: 0.82rem;
+  color: var(--ink-muted);
+}
+
+.custom-params-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.custom-param-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  background: var(--surface-strong);
+  border: 1px solid var(--border);
+}
+
+.custom-param-info {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+}
+
+.custom-param-name {
+  font-family: 'Space Mono', monospace;
+  font-weight: 600;
+  color: var(--accent);
+  font-size: 0.9rem;
+}
+
+.custom-param-value {
+  font-family: 'Space Mono', monospace;
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+  background: rgba(30, 27, 22, 0.05);
+  padding: 2px 8px;
+  border-radius: 2px;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+[data-theme="dark"] .custom-param-value {
+  background: rgba(230, 237, 243, 0.08);
+}
+
+.custom-param-override-badge {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 2px 6px;
+  font-weight: 600;
+}
+
+.custom-param-override-badge.override-allowed {
+  background: rgba(16, 185, 129, 0.15);
+  color: #0f766e;
+}
+
+.custom-param-override-badge.override-blocked {
+  background: rgba(107, 114, 128, 0.15);
+  color: #6b7280;
+}
+
+.custom-param-add-form {
+  background: var(--surface-strong);
+  border: 1px dashed var(--border);
+  padding: 14px;
+}
+
+.custom-param-add-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.custom-param-add-row .form-group {
+  flex: 1;
+  min-width: 120px;
+  margin-bottom: 0;
+}
+
+.custom-param-add-row .custom-param-override {
+  flex: 0 0 auto;
+  min-width: auto;
+  padding: 8px 12px;
+}
+
+.custom-param-add-row .btn {
+  flex: 0 0 auto;
+  min-height: 42px;
+}
+
+.btn-sm {
+  padding: 4px 8px;
+  min-height: auto;
+}
+
+.btn-sm svg {
+  width: 14px;
+  height: 14px;
+}

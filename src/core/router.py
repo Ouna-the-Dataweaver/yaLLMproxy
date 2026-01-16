@@ -515,6 +515,7 @@ class ProxyRouter:
             target_model = extract_target_model(params, api_type)
 
             supports_reasoning = bool(params.get("supports_reasoning"))
+            supports_responses_api = _parse_bool(params.get("supports_responses_api"))
             http2 = _parse_bool(params.get("http2"))
             editable = _parse_bool(entry.get("editable"))
 
@@ -543,6 +544,7 @@ class ProxyRouter:
                 target_model=target_model,
                 api_type=api_type,
                 supports_reasoning=supports_reasoning,
+                supports_responses_api=supports_responses_api,
                 http2=http2,
                 editable=editable,
                 parameters=param_configs,

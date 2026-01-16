@@ -255,6 +255,39 @@
                                 </label>
                             </div>
                         </div>
+
+                        <div class="custom-params-section">
+                            <div class="custom-params-header">
+                                <h4 class="custom-params-title">Custom Parameters</h4>
+                                <p class="custom-params-subtitle">Add arbitrary parameters not listed above.</p>
+                            </div>
+                            <div id="customParamsList" class="custom-params-list"></div>
+                            <div class="custom-param-add-form">
+                                <div class="custom-param-add-row">
+                                    <div class="form-group">
+                                        <label class="form-label" for="custom_param_name">Parameter Name</label>
+                                        <input type="text" id="custom_param_name" class="form-input" placeholder="e.g., max_tokens">
+                                    </div>
+                                    <div class="form-group">
+                                        <label class="form-label" for="custom_param_value">Default Value</label>
+                                        <input type="text" id="custom_param_value" class="form-input" placeholder="e.g., 4096">
+                                    </div>
+                                    <label class="form-checkbox-group compact custom-param-override">
+                                        <input type="checkbox" id="custom_param_override" class="form-checkbox" checked>
+                                        <span class="form-checkbox-label">
+                                            <span>Allow override</span>
+                                        </span>
+                                    </label>
+                                    <button type="button" class="btn btn-secondary" id="addCustomParamBtn">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                            <line x1="12" y1="5" x2="12" y2="19"/>
+                                            <line x1="5" y1="12" x2="19" y2="12"/>
+                                        </svg>
+                                        Add
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
                     </div>
 
                     <div class="form-section">

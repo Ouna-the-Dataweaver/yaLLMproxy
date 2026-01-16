@@ -43,6 +43,7 @@ class Backend:
     target_model: Optional[str]
     api_type: str = "openai"
     supports_reasoning: bool = False
+    supports_responses_api: bool = False  # Backend natively supports /v1/responses
     http2: bool = False
     editable: bool = False
     parameters: dict[str, ParameterConfig] = field(default_factory=dict)

@@ -14,7 +14,8 @@
       "WebFetch(domain:community.openai.com)",
       "WebFetch(domain:hackmd.io)",
       "WebFetch(domain:blog.robino.dev)",
-      "WebFetch(domain:www.openresponses.org)"
+      "WebFetch(domain:www.openresponses.org)",
+      "Bash(python -c:*)"
     ]
   },
   "outputStyle": "default"

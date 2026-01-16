@@ -28,7 +28,8 @@ except ImportError:
 from .config_store import CONFIG_STORE
 from .core import ProxyRouter
 from .core.registry import set_router
-from .api.routes import chat_completions, embeddings, list_models, register_model, responses, config as config_routes, usage, logs
+from .api.routes import chat_completions, embeddings, list_models, register_model, config as config_routes, usage, logs
+from .api.routes.responses import responses_endpoint
 
 # Load configuration
 config = CONFIG_STORE.get_runtime_config()
@@ -214,7 +215,7 @@ app.include_router(logs.router, prefix="/api")
 
 # Conditionally register responses endpoint
 if enable_responses_endpoint:
-    app.post("/v1/responses")(responses)
+    app.post("/v1/responses")(responses_endpoint)
     logger.info("Responses endpoint enabled")
 else:
     logger.info("Responses endpoint is disabled in configuration")

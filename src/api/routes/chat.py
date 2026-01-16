@@ -202,17 +202,8 @@ async def handle_openai_request(request: Request) -> Response:
 
 async def chat_completions(request: Request) -> Response:
     """Chat completions endpoint - OpenAI compatible.
-    
+
     POST /v1/chat/completions
     """
     logger.info("Received chat completions request")
-    return await handle_openai_request(request)
-
-
-async def responses(request: Request) -> Response:
-    """Responses endpoint - OpenAI compatible (if enabled).
-    
-    POST /v1/responses
-    """
-    logger.info("Received responses request")
     return await handle_openai_request(request)
