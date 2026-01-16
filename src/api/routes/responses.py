@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from ...auth.app_key import get_app_key_validator
 from ...core import normalize_request_model
 from ...core.registry import get_router
+from ...logging import RequestLogRecorder, resolve_db_log_target
 from ...responses import (
     ResponseStateStore,
     get_state_store,
@@ -43,6 +44,16 @@ async def responses_endpoint(request: Request) -> Response:
     """
     logger.info("Received Responses API request")
     router = get_router()
+    known_models = set(router.backends.keys())
+
+    def _db_log_target_for(model: str) -> Any:
+        return resolve_db_log_target(
+            model_name=model or "unknown",
+            headers=request.headers,
+            known_models=known_models,
+        )
+
+    request_log: Optional[RequestLogRecorder] = None
 
     # Parse request body
     try:
@@ -50,6 +61,15 @@ async def responses_endpoint(request: Request) -> Response:
         payload = json.loads(body or b"{}")
     except json.JSONDecodeError as exc:
         logger.error(f"Invalid JSON in Responses request: {exc}")
+        request_log = RequestLogRecorder(
+            "unknown",
+            False,
+            request.url.path,
+            db_log_target=_db_log_target_for("unknown"),
+        )
+        request_log.record_request(request.method, request.url.query, request.headers, body)
+        request_log.record_error(f"invalid json: {exc}")
+        request_log.finalize("error")
         raise HTTPException(
             status_code=400,
             detail={
@@ -63,6 +83,15 @@ async def responses_endpoint(request: Request) -> Response:
 
     # Validate required fields
     if not isinstance(payload, dict):
+        request_log = request_log or RequestLogRecorder(
+            "unknown",
+            False,
+            request.url.path,
+            db_log_target=_db_log_target_for("unknown"),
+        )
+        request_log.record_request(request.method, request.url.query, request.headers, body)
+        request_log.record_error("payload must be a JSON object")
+        request_log.finalize("error")
         raise HTTPException(
             status_code=400,
             detail={
@@ -76,6 +105,15 @@ async def responses_endpoint(request: Request) -> Response:
 
     raw_model_name = payload.get("model")
     if not isinstance(raw_model_name, str) or not raw_model_name:
+        request_log = request_log or RequestLogRecorder(
+            "unknown",
+            False,
+            request.url.path,
+            db_log_target=_db_log_target_for("unknown"),
+        )
+        request_log.record_request(request.method, request.url.query, request.headers, body)
+        request_log.record_error("missing model parameter")
+        request_log.finalize("error")
         raise HTTPException(
             status_code=400,
             detail={
@@ -90,6 +128,15 @@ async def responses_endpoint(request: Request) -> Response:
 
     input_data = payload.get("input")
     if input_data is None:
+        request_log = request_log or RequestLogRecorder(
+            "unknown",
+            False,
+            request.url.path,
+            db_log_target=_db_log_target_for("unknown"),
+        )
+        request_log.record_request(request.method, request.url.query, request.headers, body)
+        request_log.record_error("missing input parameter")
+        request_log.finalize("error")
         raise HTTPException(
             status_code=400,
             detail={
@@ -105,11 +152,20 @@ async def responses_endpoint(request: Request) -> Response:
     model_name = normalize_request_model(raw_model_name)
 
     # Validate app key authentication and model access
-    get_app_key_validator().validate_request(request, model_name)
+    app_key_ctx = get_app_key_validator().validate_request(request, model_name)
 
     backend = router.backends.get(model_name)
 
     if not backend:
+        request_log = request_log or RequestLogRecorder(
+            model_name,
+            False,
+            request.url.path,
+            db_log_target=_db_log_target_for(model_name),
+        )
+        request_log.record_request(request.method, request.url.query, request.headers, body)
+        request_log.record_error("model not found")
+        request_log.finalize("error")
         raise HTTPException(
             status_code=400,
             detail={
@@ -126,6 +182,15 @@ async def responses_endpoint(request: Request) -> Response:
     store = bool(payload.get("store", False))
     previous_response_id = payload.get("previous_response_id")
 
+    request_log = request_log or RequestLogRecorder(
+        model_name,
+        is_stream,
+        request.url.path,
+        db_log_target=_db_log_target_for(model_name),
+    )
+    request_log.record_request(request.method, request.url.query, request.headers, body)
+    request_log.set_app_key(app_key_ctx.key_id)
+
     # Generate response ID upfront
     response_id = generate_response_id()
     logger.info(
@@ -136,7 +201,7 @@ async def responses_endpoint(request: Request) -> Response:
     # Check if backend natively supports Responses API
     if getattr(backend, "supports_responses_api", False):
         logger.info(f"Using pass-through mode for {model_name}")
-        return await _forward_responses_request(
+        response = await _forward_responses_request(
             request=request,
             router=router,
             model_name=model_name,
@@ -145,11 +210,19 @@ async def responses_endpoint(request: Request) -> Response:
             is_stream=is_stream,
             store=store,
             response_id=response_id,
+            request_log=request_log,
         )
+        if request_log and not request_log.finalized and not isinstance(response, StreamingResponse):
+            if response.status_code >= 400:
+                request_log.record_error(f"responses error status {response.status_code}")
+                request_log.finalize("error")
+            else:
+                request_log.finalize("success")
+        return response
 
     # Simulation mode: translate to chat completions
     logger.info(f"Using simulation mode for {model_name}")
-    return await _simulate_responses_request(
+    response = await _simulate_responses_request(
         request=request,
         router=router,
         model_name=model_name,
@@ -158,7 +231,15 @@ async def responses_endpoint(request: Request) -> Response:
         store=store,
         response_id=response_id,
         previous_response_id=previous_response_id,
+        request_log=request_log,
     )
+    if request_log and not request_log.finalized and not isinstance(response, StreamingResponse):
+        if response.status_code >= 400:
+            request_log.record_error(f"responses error status {response.status_code}")
+            request_log.finalize("error")
+        else:
+            request_log.finalize("success")
+    return response
 
 
 async def _forward_responses_request(
@@ -170,6 +251,7 @@ async def _forward_responses_request(
     is_stream: bool,
     store: bool,
     response_id: str,
+    request_log: Optional[RequestLogRecorder] = None,
 ) -> Response:
     """Forward request to backend that natively supports Responses API.
 
@@ -195,6 +277,7 @@ async def _forward_responses_request(
             payload=payload,
             is_stream=is_stream,
             headers=request.headers,
+            request_log=request_log,
         )
 
         # TODO: Handle store=True for pass-through mode
@@ -225,6 +308,7 @@ async def _simulate_responses_request(
     store: bool,
     response_id: str,
     previous_response_id: Optional[str],
+    request_log: Optional[RequestLogRecorder] = None,
 ) -> Response:
     """Simulate Responses API by translating to/from Chat Completions.
 
@@ -262,6 +346,9 @@ async def _simulate_responses_request(
         )
     except Exception as e:
         logger.error(f"Error translating Responses request: {e}")
+        if request_log and not request_log.finalized:
+            request_log.record_error(f"translation error: {e}")
+            request_log.finalize("error")
         error_response = build_error_response(
             response_id=response_id,
             error_type="server_error",
@@ -284,6 +371,7 @@ async def _simulate_responses_request(
             response_id=response_id,
             store=store,
             state_store=state_store,
+            request_log=request_log,
         )
     else:
         return await _handle_non_streaming_simulation(
@@ -296,6 +384,7 @@ async def _simulate_responses_request(
             response_id=response_id,
             store=store,
             state_store=state_store,
+            request_log=request_log,
         )
 
 
@@ -309,6 +398,7 @@ async def _handle_non_streaming_simulation(
     response_id: str,
     store: bool,
     state_store: ResponseStateStore,
+    request_log: Optional[RequestLogRecorder] = None,
 ) -> Response:
     """Handle non-streaming simulation mode.
 
@@ -335,6 +425,7 @@ async def _handle_non_streaming_simulation(
             payload=chat_request,
             is_stream=False,
             headers=request.headers,
+            request_log=request_log,
         )
 
         # Parse the chat completion response
@@ -342,6 +433,9 @@ async def _handle_non_streaming_simulation(
             chat_completion = json.loads(chat_response.body)
         except (json.JSONDecodeError, AttributeError) as e:
             logger.error(f"Failed to parse chat completion response: {e}")
+            if request_log and not request_log.finalized:
+                request_log.record_error(f"parse error: {e}")
+                request_log.finalize("error")
             error_response = build_error_response(
                 response_id=response_id,
                 error_type="server_error",
@@ -354,6 +448,9 @@ async def _handle_non_streaming_simulation(
         # Check for error response from backend
         if "error" in chat_completion:
             error = chat_completion["error"]
+            if request_log and not request_log.finalized:
+                request_log.record_error(error.get("message", "backend error"))
+                request_log.finalize("error")
             error_response = build_error_response(
                 response_id=response_id,
                 error_type="model_error",
@@ -385,6 +482,9 @@ async def _handle_non_streaming_simulation(
         raise
     except Exception as e:
         logger.error(f"Error in non-streaming simulation: {e}")
+        if request_log and not request_log.finalized:
+            request_log.record_error(f"simulation error: {e}")
+            request_log.finalize("error")
         error_response = build_error_response(
             response_id=response_id,
             error_type="server_error",
@@ -405,6 +505,7 @@ async def _handle_streaming_simulation(
     response_id: str,
     store: bool,
     state_store: ResponseStateStore,
+    request_log: Optional[RequestLogRecorder] = None,
 ) -> Response:
     """Handle streaming simulation mode.
 
@@ -433,6 +534,7 @@ async def _handle_streaming_simulation(
             is_stream=True,
             headers=request.headers,
             disconnect_checker=request.is_disconnected,
+            request_log=request_log,
         )
 
         if not isinstance(chat_response, StreamingResponse):
@@ -477,6 +579,9 @@ async def _handle_streaming_simulation(
         raise
     except Exception as e:
         logger.error(f"Error in streaming simulation: {e}")
+        if request_log and not request_log.finalized:
+            request_log.record_error(f"simulation error: {e}")
+            request_log.finalize("error")
         error_response = build_error_response(
             response_id=response_id,
             error_type="server_error",

@@ -209,7 +209,7 @@ def resolve_db_log_target(
         return DbLogTarget(enabled=False)
     base_config = _resolve_base_db_config(db_config)
     testing_cfg = base_config.get("testing") or {}
-    testing_enabled = _parse_bool(testing_cfg.get("enabled", True), default=True)
+    testing_enabled = _parse_bool(testing_cfg.get("enabled"), default=False)
     if not testing_enabled:
         return DbLogTarget()
 

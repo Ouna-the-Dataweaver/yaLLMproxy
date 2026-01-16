@@ -79,6 +79,7 @@ class DatabaseLogRecorder:
         is_tool_call: bool = False,
         conversation_turn: int | None = None,
         modules_log: dict[str, Any] | None = None,
+        app_key_id: str | None = None,
     ) -> str:
         """Log a request event to the database.
 
@@ -103,6 +104,7 @@ class DatabaseLogRecorder:
             is_tool_call: Whether this request resulted in tool calls.
             conversation_turn: Turn number in agentic conversation sequence.
             modules_log: Debug logs from response modules (reasoning detection, tool calls, etc.).
+            app_key_id: Optional app key identifier (reserved for future persistence).
 
         Returns:
             The UUID of the created request log.

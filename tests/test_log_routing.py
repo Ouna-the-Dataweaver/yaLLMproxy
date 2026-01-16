@@ -32,6 +32,7 @@ def _postgres_config() -> dict[str, object]:
 def test_unknown_model_routes_to_test_db() -> None:
     set_db_logging_enabled(True)
     config = _sqlite_config("logs/yaLLM.db")
+    config["testing"] = {"enabled": True}
     target = resolve_db_log_target(
         model_name="unknown/alpha",
         headers={},
@@ -47,6 +48,7 @@ def test_unknown_model_routes_to_test_db() -> None:
 def test_header_forces_testing_route() -> None:
     set_db_logging_enabled(True)
     config = _sqlite_config()
+    config["testing"] = {"enabled": True}
     target = resolve_db_log_target(
         model_name="gpt-4",
         headers={"x-yallmp-test": "1"},
@@ -74,6 +76,7 @@ def test_testing_disabled_skips_routing() -> None:
 def test_postgres_without_override_disables_test_db() -> None:
     set_db_logging_enabled(True)
     config = _postgres_config()
+    config["testing"] = {"enabled": True}
     target = resolve_db_log_target(
         model_name="unknown",
         headers={},

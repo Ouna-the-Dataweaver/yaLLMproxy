@@ -286,6 +286,7 @@ Useful for applying config changes without interrupting active requests. Note: C
 ## Database Configuration
 
 yaLLMproxy supports SQLite (default) and PostgreSQL databases for persistent logging.
+Database request logging is enabled by default when the database module is configured and reachable.
 
 ### SQLite (Default)
 
@@ -297,6 +298,8 @@ database:
   connection:
     sqlite:
       path: logs/yaLLM.db
+  pool_size: 5                  # Connection pool size (PostgreSQL; ignored for file-based SQLite)
+  max_overflow: 10              # Extra overflow connections above pool_size (PostgreSQL)
 ```
 
 ### PostgreSQL
@@ -313,6 +316,8 @@ database:
       database: yallm_proxy
       user: ${DB_USER}
       password: ${DB_PASSWORD}
+  pool_size: 5                  # Base pool size for PostgreSQL connections
+  max_overflow: 10              # Extra overflow connections above pool_size
 ```
 
 Add credentials to your `.env` file:

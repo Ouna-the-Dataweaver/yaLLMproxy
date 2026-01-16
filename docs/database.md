@@ -1,6 +1,7 @@
 # Database Support
 
 yaLLMproxy supports SQLite (default) and PostgreSQL databases for persistent logging and usage tracking.
+Database request logging is enabled by default when the database module is configured and reachable.
 
 ## Overview
 
@@ -37,6 +38,11 @@ database:
   pool_size: 5
   max_overflow: 10
 ```
+
+**Pool settings notes:**
+- `pool_size`: Base number of open connections in the pool (applies to PostgreSQL).  
+- `max_overflow`: Extra connections allowed above `pool_size` during bursts (PostgreSQL).  
+- For file-based SQLite, these values are ignored (SQLite uses a NullPool by default).
 
 ### Environment Variables
 
