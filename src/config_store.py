@@ -739,6 +739,169 @@ class ConfigStore:
         with self._lock:
             return self._model_tree
 
+    # -------------------------------------------------------------------------
+    # App Keys Management
+    # -------------------------------------------------------------------------
+
+    def get_app_keys_config(self) -> dict[str, Any]:
+        """Get the full app_keys configuration section with env vars resolved.
+
+        Returns:
+            The app_keys config dict, or empty dict if not configured.
+        """
+        with self._lock:
+            cfg = _substitute_env_vars(
+                copy.deepcopy(self._raw),
+                self._env,
+                warn_on_missing=False,
+            )
+            return _ensure_dict(cfg.get("app_keys"))
+
+    def list_app_keys(self, mask_secrets: bool = True) -> list[dict[str, Any]]:
+        """List all configured app keys.
+
+        Args:
+            mask_secrets: If True, remove secret values from the response.
+
+        Returns:
+            List of app key entries.
+        """
+        with self._lock:
+            cfg = _substitute_env_vars(
+                copy.deepcopy(self._raw),
+                self._env,
+                warn_on_missing=False,
+            )
+            app_keys = _ensure_dict(cfg.get("app_keys"))
+            keys = _ensure_list(app_keys.get("keys"))
+
+            result: list[dict[str, Any]] = []
+            for key_entry in keys:
+                if not isinstance(key_entry, dict):
+                    continue
+                entry = copy.deepcopy(key_entry)
+                if mask_secrets:
+                    entry.pop("secret", None)
+                result.append(entry)
+            return result
+
+    def get_app_key(self, key_id: str, mask_secret: bool = True) -> dict[str, Any] | None:
+        """Get a specific app key by ID.
+
+        Args:
+            key_id: The key ID to find.
+            mask_secret: If True, remove the secret from the response.
+
+        Returns:
+            The key entry if found, None otherwise.
+        """
+        with self._lock:
+            cfg = _substitute_env_vars(
+                copy.deepcopy(self._raw),
+                self._env,
+                warn_on_missing=False,
+            )
+            app_keys = _ensure_dict(cfg.get("app_keys"))
+            keys = _ensure_list(app_keys.get("keys"))
+
+            for key_entry in keys:
+                if not isinstance(key_entry, dict):
+                    continue
+                if key_entry.get("key_id") == key_id:
+                    entry = copy.deepcopy(key_entry)
+                    if mask_secret:
+                        entry.pop("secret", None)
+                    return entry
+            return None
+
+    def upsert_app_key(self, key_entry: dict[str, Any]) -> bool:
+        """Create or update an app key.
+
+        Args:
+            key_entry: The key configuration to upsert. Must have 'key_id' and 'secret'.
+
+        Returns:
+            True if an existing key was replaced, False if a new key was added.
+
+        Raises:
+            ValueError: If key_id is missing.
+        """
+        key_id = key_entry.get("key_id")
+        if not key_id:
+            raise ValueError("key_id is required")
+
+        with self._lock:
+            cfg = copy.deepcopy(self._raw)
+            app_keys = _ensure_dict(cfg.get("app_keys"))
+            keys = _ensure_list(app_keys.get("keys"))
+
+            # Find existing key
+            replaced = False
+            for idx, existing in enumerate(keys):
+                if isinstance(existing, dict) and existing.get("key_id") == key_id:
+                    # Preserve secret if not provided in update
+                    if "secret" not in key_entry and "secret" in existing:
+                        key_entry = copy.deepcopy(key_entry)
+                        key_entry["secret"] = existing["secret"]
+                    keys[idx] = key_entry
+                    replaced = True
+                    break
+
+            if not replaced:
+                keys.append(key_entry)
+
+            app_keys["keys"] = keys
+            cfg["app_keys"] = app_keys
+            self._write_config(self.config_path, cfg)
+            self._raw = cfg
+            logger.info("Upserted app key '%s' (replaced=%s)", key_id, replaced)
+            return replaced
+
+    def delete_app_key(self, key_id: str) -> bool:
+        """Delete an app key by ID.
+
+        Args:
+            key_id: The key ID to delete.
+
+        Returns:
+            True if the key was found and deleted, False otherwise.
+        """
+        with self._lock:
+            cfg = copy.deepcopy(self._raw)
+            app_keys = _ensure_dict(cfg.get("app_keys"))
+            keys = _ensure_list(app_keys.get("keys"))
+
+            original_len = len(keys)
+            keys = [
+                k for k in keys
+                if not (isinstance(k, dict) and k.get("key_id") == key_id)
+            ]
+
+            if len(keys) == original_len:
+                return False
+
+            app_keys["keys"] = keys
+            cfg["app_keys"] = app_keys
+            self._write_config(self.config_path, cfg)
+            self._raw = cfg
+            logger.info("Deleted app key '%s'", key_id)
+            return True
+
+    def set_app_keys_enabled(self, enabled: bool) -> None:
+        """Enable or disable app key authentication.
+
+        Args:
+            enabled: True to enable, False to disable.
+        """
+        with self._lock:
+            cfg = copy.deepcopy(self._raw)
+            app_keys = _ensure_dict(cfg.get("app_keys"))
+            app_keys["enabled"] = enabled
+            cfg["app_keys"] = app_keys
+            self._write_config(self.config_path, cfg)
+            self._raw = cfg
+            logger.info("App key authentication %s", "enabled" if enabled else "disabled")
+
     @staticmethod
     def _write_config(path: Path, data: dict[str, Any]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)

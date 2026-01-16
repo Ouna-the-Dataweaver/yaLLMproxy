@@ -29,6 +29,7 @@ from .config_store import CONFIG_STORE
 from .core import ProxyRouter
 from .core.registry import set_router
 from .api.routes import chat_completions, embeddings, list_models, register_model, config as config_routes, usage, logs
+from .api.routes import keys as key_routes
 from .api.routes.responses import responses_endpoint
 
 # Load configuration
@@ -203,6 +204,15 @@ app.get("/admin/")(config_routes.serve_admin_ui)
 app.get("/admin/templates")(config_routes.list_templates)
 app.post("/admin/templates")(config_routes.upload_template)
 app.get("/admin/templates/inspect")(config_routes.inspect_template)
+
+# App key management routes
+app.get("/admin/keys")(key_routes.list_app_keys)
+app.post("/admin/keys")(key_routes.create_app_key)
+app.get("/admin/keys/{key_id}")(key_routes.get_app_key)
+app.put("/admin/keys/{key_id}")(key_routes.update_app_key)
+app.delete("/admin/keys/{key_id}")(key_routes.delete_app_key)
+app.post("/admin/keys/{key_id}/regenerate")(key_routes.regenerate_app_key)
+app.post("/admin/keys/config")(key_routes.set_app_keys_enabled)
 
 # Usage statistics route
 app.get("/usage")(usage.usage_page)

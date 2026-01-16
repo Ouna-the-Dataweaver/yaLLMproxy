@@ -124,6 +124,32 @@ proxy_settings:
     downstream:
       enabled: false
       request: []
+
+# App Key Authentication (optional)
+# Uncomment and configure to require API keys for proxy access
+# app_keys:
+#   enabled: false                    # Set to true to enable app key authentication
+#   header_name: x-api-key            # Header name for API key (also accepts Authorization: Bearer)
+#   allow_unauthenticated: false      # Allow requests without a key when enabled
+#   keys:
+#     - key_id: "app-dev-001"
+#       secret: "${APP_KEY_DEV}"      # Use env var for secrets
+#       name: "Development"
+#       description: "Development team access"
+#       enabled: true
+#       # FUTURE (not yet implemented):
+#       # rate_limits:
+#       #   requests_per_minute: 100
+#       #   tokens_per_day: 1000000
+#       # priority: normal            # low, normal, high, critical
+#
+# Per-model access control (add to model_list entries):
+#   access_control:
+#     allowed_keys: all               # "all" (default), "none", or list of key_ids
+#     # allowed_keys:
+#     #   - app-prod-001
+#     #   - app-dev-001
+
 forwarder_settings:
   listen:
     host: 0.0.0.0

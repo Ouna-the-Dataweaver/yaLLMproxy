@@ -342,6 +342,7 @@ class TagScanner:
         )
         self.drop_after_tool_call = drop_after_tool_call
         self._tool_calls_started = False
+        self.dropped_content: str = ""  # Track content dropped after tool calls
 
     def feed(self, text: str) -> TagScanResult:
         if not text:
@@ -355,6 +356,7 @@ class TagScanner:
             if not value:
                 return
             if self.drop_after_tool_call and self._tool_calls_started:
+                self.dropped_content += value  # Track dropped content for logging
                 return
             if mode == "think":
                 out_reasoning.append(value)
@@ -517,6 +519,14 @@ class TagScanner:
         self.mode = "text"
         return out
 
+    def get_dropped_content(self) -> str:
+        """Return content that was dropped after tool calls started."""
+        return self.dropped_content
+
+    def has_dropped_non_whitespace(self) -> bool:
+        """Check if non-whitespace content was dropped after tool calls."""
+        return bool(self.dropped_content.strip())
+
 
 def _extract_think_block(text: str, think_tag: str) -> tuple[Optional[str], str]:
     open_tag = f"<{think_tag}>"
@@ -607,6 +617,7 @@ class ChoiceTagState:
     saw_tool_calls: bool = False
     reasoning_chunks: int = 0  # Count of chunks with reasoning content
     tool_calls_count: int = 0  # Total tool calls detected
+    dropped_after_tools: str = ""  # Content dropped after tool calls started
 
 
 @dataclass
@@ -942,7 +953,9 @@ class ParseTagsParser(ResponseParser):
                     delta["tool_calls"] = tool_payload
                     choice_state.saw_tool_calls = True
 
-            if choice_state.saw_tool_calls and choice.get("finish_reason") in {None, "stop"}:
+            # Only change finish_reason to "tool_calls" when upstream sends "stop"
+            # Don't change it during streaming (when it's None) to avoid premature stop
+            if choice_state.saw_tool_calls and choice.get("finish_reason") == "stop":
                 choice["finish_reason"] = "tool_calls"
 
         return event
@@ -953,10 +966,28 @@ class ParseTagsParser(ResponseParser):
         events: list[dict[str, Any]] = []
         total_reasoning_chunks = 0
         total_tool_calls = 0
+        total_dropped_content = ""
 
         for choice_index, choice_state in state.choices.items():
             total_reasoning_chunks += choice_state.reasoning_chunks
             total_tool_calls += choice_state.tool_calls_count
+
+            # Collect dropped content from scanner
+            dropped = choice_state.scanner.get_dropped_content()
+            if dropped:
+                total_dropped_content += dropped
+                # Log dropped content for this choice
+                if state.log_collector:
+                    state.log_collector.log(
+                        module=self.name,
+                        event="content_dropped_after_tools",
+                        details={
+                            "choice": choice_index,
+                            "dropped_length": len(dropped),
+                            "dropped_preview": dropped[:500] if len(dropped) > 500 else dropped,
+                            "has_non_whitespace": bool(dropped.strip()),
+                        },
+                    )
 
             flushed = choice_state.scanner.flush()
             if not (flushed.content or flushed.reasoning or flushed.tool_calls):
@@ -995,14 +1026,31 @@ class ParseTagsParser(ResponseParser):
                         )
             events.append({"choices": [{"index": choice_index, "delta": delta}]})
 
+        # If we saw tool calls, emit a finish event with finish_reason="tool_calls"
+        # This ensures parity between streaming and non-streaming parsing
+        saw_tool_calls = any(cs.saw_tool_calls for cs in state.choices.values())
+        if saw_tool_calls:
+            # Emit finish_reason for each choice that saw tool calls
+            for choice_index, choice_state in state.choices.items():
+                if choice_state.saw_tool_calls:
+                    events.append({
+                        "choices": [{
+                            "index": choice_index,
+                            "delta": {},
+                            "finish_reason": "tool_calls",
+                        }]
+                    })
+
         # Log summary
-        if state.log_collector and (total_reasoning_chunks > 0 or total_tool_calls > 0):
+        if state.log_collector and (total_reasoning_chunks > 0 or total_tool_calls > 0 or total_dropped_content):
             state.log_collector.log(
                 module=self.name,
                 event="stream_complete",
                 details={
                     "reasoning_chunks": total_reasoning_chunks,
                     "tool_calls": total_tool_calls,
+                    "dropped_content_length": len(total_dropped_content),
+                    "dropped_non_whitespace": bool(total_dropped_content.strip()),
                 },
             )
 
@@ -1466,6 +1514,8 @@ class ResponseStreamParser:
         self.stop_requested = False
         self._last_finish_reason: Optional[str] = None
         self._choice_indices: set[int] = set()
+        self._saw_tool_calls = False  # Track if we've seen any tool calls
+        self.stop_source: Optional[str] = None  # "upstream" or "proxy"
 
     def feed_bytes(self, chunk: bytes) -> list[bytes]:
         output: list[bytes] = []
@@ -1588,12 +1638,17 @@ class ResponseStreamParser:
             finish_reason = self._extract_finish_reason(choice)
             if finish_reason:
                 self._last_finish_reason = finish_reason
+                # Set stop_requested on any finish_reason from upstream
+                # This indicates the stream is naturally ending
+                self.stop_requested = True
+                self.stop_source = self.stop_source or "upstream"
                 if finish_reason == "tool_calls":
                     self.stop_reason = self.stop_reason or finish_reason
-                    self.stop_requested = True
-            if not self.stop_requested and self._choice_has_tool_calls(choice):
+            # Track tool calls for stop_reason, but DON'T immediately set stop_requested
+            # This allows us to continue receiving more tool calls from upstream
+            if self._choice_has_tool_calls(choice):
+                self._saw_tool_calls = True
                 self.stop_reason = self.stop_reason or "tool_calls"
-                self.stop_requested = True
 
     def should_emit_finish_event(self, reason: str) -> bool:
         return self._last_finish_reason != reason

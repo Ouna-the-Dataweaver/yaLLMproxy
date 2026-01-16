@@ -14,6 +14,7 @@ from typing import Any, AsyncIterator, Optional
 from fastapi import HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from ...auth.app_key import get_app_key_validator
 from ...core import normalize_request_model
 from ...core.registry import get_router
 from ...responses import (
@@ -102,6 +103,10 @@ async def responses_endpoint(request: Request) -> Response:
         )
 
     model_name = normalize_request_model(raw_model_name)
+
+    # Validate app key authentication and model access
+    get_app_key_validator().validate_request(request, model_name)
+
     backend = router.backends.get(model_name)
 
     if not backend:

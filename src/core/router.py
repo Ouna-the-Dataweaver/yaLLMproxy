@@ -829,6 +829,11 @@ async def _streaming_request(
                     stop_reason = stream_parser.stop_reason or "tool_calls"
                     stop_early = True
                     last_finish_reason = stop_reason
+                    logger.debug(
+                        "Stream stop triggered. stop_source=%s, stop_reason=%s",
+                        stream_parser.stop_source,
+                        stop_reason,
+                    )
                     if request_log:
                         request_log.record_stop_reason(stop_reason)
                         if stop_reason in ("tool_calls", "function_call", "tool_use"):
@@ -867,6 +872,11 @@ async def _streaming_request(
                             stop_reason = stream_parser.stop_reason or "tool_calls"
                             stop_early = True
                             last_finish_reason = stop_reason
+                            logger.debug(
+                                "Stream stop triggered. stop_source=%s, stop_reason=%s",
+                                stream_parser.stop_source,
+                                stop_reason,
+                            )
                             if request_log:
                                 request_log.record_stop_reason(stop_reason)
                                 if stop_reason in ("tool_calls", "function_call", "tool_use"):
@@ -900,6 +910,31 @@ async def _streaming_request(
                         if request_log:
                             request_log.record_parsed_stream_chunk(out_chunk)
                         yield out_chunk
+
+                    # If we saw tool calls but finish_reason wasn't already emitted,
+                    # emit a finish event with tool_calls
+                    if stream_parser.stop_reason == "tool_calls":
+                        if stream_parser.should_emit_finish_event("tool_calls"):
+                            finish_chunk = stream_parser.build_finish_event("tool_calls")
+                            if request_log:
+                                request_log.record_parsed_stream_chunk(finish_chunk)
+                            yield finish_chunk
+                        # Emit [DONE] if upstream didn't send it
+                        if not stream_parser._saw_done:
+                            done_chunk = b"data: [DONE]\n\n"
+                            if request_log:
+                                request_log.record_parsed_stream_chunk(done_chunk)
+                            yield done_chunk
+                        # Update last_finish_reason for logging
+                        last_finish_reason = "tool_calls"
+
+                    # Log stop_source for debugging
+                    if stream_parser.stop_source:
+                        logger.debug(
+                            "Stream ended. stop_source=%s, stop_reason=%s",
+                            stream_parser.stop_source,
+                            stream_parser.stop_reason,
+                        )
 
                 # Extract stop_reason and usage from the final chunk
                 if request_log:

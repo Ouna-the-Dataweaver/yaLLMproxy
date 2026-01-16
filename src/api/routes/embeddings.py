@@ -6,6 +6,7 @@ from typing import Any, Mapping, Optional
 
 from fastapi import HTTPException, Request, Response
 
+from ...auth.app_key import get_app_key_validator
 from ...core import normalize_request_model
 from ...core.registry import get_router
 from ...logging import RequestLogRecorder, resolve_db_log_target
@@ -124,6 +125,9 @@ async def embeddings(request: Request) -> Response:
 
     model_name = normalize_request_model(raw_model_name)
 
+    # Validate app key authentication and model access
+    app_key_ctx = get_app_key_validator().validate_request(request, model_name)
+
     # Validate input field for embeddings
     input_text = payload.get("input")
     if input_text is None:
@@ -183,6 +187,7 @@ async def embeddings(request: Request) -> Response:
         db_log_target=_db_log_target_for(model_name),
     )
     request_log.record_request(request.method, query, request.headers, body)
+    request_log.set_app_key(app_key_ctx.key_id)
     logger.info(f"Processing embeddings request for model {model_name}")
 
     backend_path = request.url.path

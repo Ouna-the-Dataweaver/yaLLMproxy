@@ -392,6 +392,10 @@ class RequestLogRecorder:
         else:
             self._log_parsed_stream = bool(log_parsed_stream)
         self._parsed_initialized = False
+
+        # App key tracking
+        self._app_key_id: Optional[str] = None
+
         REQUEST_LOG_DIR.mkdir(parents=True, exist_ok=True)
         self._append_text(f"log_start={self._started}\n")
 
@@ -735,6 +739,23 @@ class RequestLogRecorder:
             if event_counts:
                 self._append_text(f"modules_events={event_counts}\n")
 
+    def set_app_key(self, key_id: Optional[str]) -> None:
+        """Set the app key ID for this request.
+
+        Args:
+            key_id: The app key ID used for authentication, or None if unauthenticated.
+        """
+        if self._finalized:
+            return
+        self._app_key_id = key_id
+        if key_id:
+            self._append_text(f"app_key_id={key_id}\n")
+
+    @property
+    def app_key_id(self) -> Optional[str]:
+        """Get the app key ID for this request."""
+        return self._app_key_id
+
     def _build_full_response(self) -> Optional[str]:
         """Build the complete concatenated response from accumulated parts.
 
@@ -803,6 +824,8 @@ class RequestLogRecorder:
                     is_tool_call=self._is_tool_call,
                     conversation_turn=self._conversation_turn,
                     modules_log=self._modules_log,
+                    # App key tracking
+                    app_key_id=self._app_key_id,
                 )
             except Exception as e:
                 logger.debug(f"Failed to save request to database: {e}")
