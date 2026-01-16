@@ -168,34 +168,97 @@ const renderHistorical = (historical) => {
         }
     }
 
-    // Render usage trends
+    // Render usage trends as vertical bar chart (time on X, usage on Y)
     const trends = historical.usage_trends || [];
     const trendsEl = document.getElementById('usage-trends');
     if (trendsEl) {
-        if (trends.length === 0) {
-            trendsEl.innerHTML = '<p style="color: var(--ink-muted);">No trend data available</p>';
-        } else {
-            const maxCount = Math.max(...trends.map(t => t.count || 0), 1);
-            trendsEl.innerHTML = `
-                <div class="usage-trends">
-                    ${trends.map(item => {
-                        const timestamp = item.timestamp ? new Date(item.timestamp) : null;
-                        const timeStr = timestamp ? formatTime(timestamp) : '--';
-                        const count = item.count || 0;
-                        const width = maxCount > 0 ? (count / maxCount) * 100 : 0;
-                        return `
-                            <div class="trend-bar">
-                                <span class="trend-time">${timeStr}</span>
-                                <div class="trend-track">
-                                    <div class="trend-fill" style="width: ${width}%"></div>
-                                </div>
-                                <span class="trend-count">${formatNumber(count)}</span>
-                            </div>
-                        `;
-                    }).join('')}
-                </div>
-            `;
+        // Always render 48 slots for consistent bar width
+        const SLOT_COUNT = 48;
+
+        // Build a map of existing data by truncated hour (in UTC)
+        const dataByHour = new Map();
+        for (const item of trends) {
+            if (item.timestamp) {
+                // Parse timestamp - append Z if no timezone to treat as UTC
+                let ts = item.timestamp;
+                if (!ts.endsWith('Z') && !ts.includes('+') && !ts.includes('-', 10)) {
+                    ts = ts.replace(' ', 'T') + 'Z';
+                }
+                const date = new Date(ts);
+                // Truncate to hour in UTC for matching
+                date.setUTCMinutes(0, 0, 0);
+                dataByHour.set(date.getTime(), item.count || 0);
+            }
         }
+
+        // Generate 48 hourly slots from now going back (in UTC)
+        const now = new Date();
+        now.setUTCMinutes(0, 0, 0); // Truncate to current hour in UTC
+        const slots = [];
+        for (let i = SLOT_COUNT - 1; i >= 0; i--) {
+            const slotTime = new Date(now.getTime() - i * 60 * 60 * 1000);
+            const count = dataByHour.get(slotTime.getTime()) || 0;
+            slots.push({ timestamp: slotTime.toISOString(), count });
+        }
+
+        const maxCount = Math.max(...slots.map(t => t.count || 0), 1);
+
+        // Format hour label - show sparingly to avoid clutter
+        const formatHourLabel = (timestamp, index, all) => {
+            if (!timestamp) return '';
+            const date = new Date(timestamp);
+            if (Number.isNaN(date.getTime())) return '';
+            const hours = date.getHours();
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
+
+            // Show date on first bar
+            if (index === 0) {
+                return `${month}/${day}`;
+            }
+            // Check if day changed from previous
+            if (index > 0 && all[index - 1]?.timestamp) {
+                const prevDate = new Date(all[index - 1].timestamp);
+                if (date.getDate() !== prevDate.getDate()) {
+                    return `${month}/${day}`;
+                }
+            }
+            // Show label every 6 hours (00:00, 06:00, 12:00, 18:00)
+            if (hours % 6 === 0) {
+                return `${String(hours).padStart(2, '0')}:00`;
+            }
+            return '';
+        };
+
+        trendsEl.innerHTML = `
+            <div class="usage-chart">
+                <div class="chart-y-axis">
+                    <span class="y-label">${formatNumber(maxCount)}</span>
+                    <span class="y-label">${formatNumber(Math.round(maxCount / 2))}</span>
+                    <span class="y-label">0</span>
+                </div>
+                <div class="chart-area">
+                    <div class="chart-grid-lines">
+                        <div class="grid-line"></div>
+                        <div class="grid-line"></div>
+                        <div class="grid-line"></div>
+                    </div>
+                    <div class="chart-bars">
+                        ${slots.map((item, idx) => {
+                            const count = item.count || 0;
+                            const height = maxCount > 0 ? (count / maxCount) * 100 : 0;
+                            const label = formatHourLabel(item.timestamp, idx, slots);
+                            return `
+                                <div class="chart-bar-container" title="${formatTime(item.timestamp)}: ${formatNumber(count)} requests">
+                                    <div class="chart-bar" style="height: ${height}%"></div>
+                                    <span class="chart-bar-label">${label}</span>
+                                </div>
+                            `;
+                        }).join('')}
+                    </div>
+                </div>
+            </div>
+        `;
     }
 
     // Render stop reason breakdown

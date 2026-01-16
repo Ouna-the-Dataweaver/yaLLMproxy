@@ -163,44 +163,87 @@
   text-align: right;
 }
 
-.usage-trends {
+/* Vertical bar chart for usage trends */
+.usage-chart {
+  display: flex;
+  gap: 8px;
+  height: 200px;
+  padding-bottom: 24px;
+}
+
+.chart-y-axis {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-}
-
-.trend-bar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.trend-time {
-  width: 140px;
-  font-size: 0.85rem;
-  color: var(--ink-muted);
+  justify-content: space-between;
+  align-items: flex-end;
   flex-shrink: 0;
 }
 
-.trend-track {
-  flex: 1;
-  height: 24px;
-  background: var(--surface-strong);
-  border: 1px solid var(--border);
-  overflow: hidden;
-  position: relative;
-  border-radius: 0;
-}
-
-.trend-fill {
-  height: 100%;
-  background: var(--accent);
-  transition: width 0.3s ease;
-}
-
-.trend-count {
-  width: 80px;
-  text-align: right;
+.y-label {
   font-family: 'Space Mono', monospace;
-  font-size: 0.85rem;
+  font-size: 0.7rem;
+  color: var(--ink-muted);
+  line-height: 1;
+}
+
+.chart-area {
+  flex: 1;
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.chart-grid-lines {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  pointer-events: none;
+}
+
+.grid-line {
+  border-top: 1px dashed var(--border);
+  width: 100%;
+}
+
+.chart-bars {
+  display: flex;
+  align-items: flex-end;
+  height: 100%;
+  gap: 2px;
+}
+
+.chart-bar-container {
+  flex: 1 1 0;
+  min-width: 3px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  height: 100%;
+  justify-content: flex-end;
+  cursor: default;
+  position: relative;
+}
+
+.chart-bar {
+  width: 100%;
+  background: var(--accent);
+  transition: height 0.3s ease;
+  min-height: 1px;
+}
+
+.chart-bar-container:hover .chart-bar {
+  opacity: 0.8;
+}
+
+.chart-bar-label {
+  font-size: 0.65rem;
+  font-family: 'Space Mono', monospace;
+  color: var(--ink-muted);
+  position: absolute;
+  bottom: -20px;
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
 }

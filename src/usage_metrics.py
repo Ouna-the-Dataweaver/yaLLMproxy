@@ -93,6 +93,8 @@ def build_usage_snapshot() -> dict[str, Any]:
             repository = get_usage_repository()
             end_time = datetime.now(timezone.utc)
             start_time = end_time - timedelta(days=1)
+            # For trends, we want 48 hours of data
+            trends_start_time = end_time - timedelta(days=2)
             total_stats = repository.get_total_stats(
                 start_time=start_time,
                 end_time=end_time,
@@ -113,10 +115,10 @@ def build_usage_snapshot() -> dict[str, Any]:
                 end_time=end_time,
             )
             usage_trends = repository.get_usage_trends(
-                start_time=start_time,
+                start_time=trends_start_time,
                 end_time=end_time,
                 interval="hour",
-                limit=24,
+                limit=48,
             )
 
             # Get stop reason breakdown from logs repository
