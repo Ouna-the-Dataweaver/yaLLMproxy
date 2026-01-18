@@ -17,6 +17,7 @@ from ..types.responses import (
     ResponseUsage,
     OutputItem,
     MessageItem,
+    OutputContent,
     FunctionCallItem,
     OutputText,
     InputItem,
@@ -174,6 +175,16 @@ def _convert_item_to_message(item: dict[str, Any]) -> Optional[dict[str, Any]]:
                         "type": "text",
                         "text": part.get("text", ""),
                     })
+                elif part_type == "refusal":
+                    parts.append({
+                        "type": "text",
+                        "text": part.get("refusal") or part.get("text", ""),
+                    })
+                elif part_type in ("summary_text", "reasoning_text"):
+                    parts.append({
+                        "type": "text",
+                        "text": part.get("text", ""),
+                    })
                 elif part_type == "input_image":
                     parts.append({
                         "type": "image_url",
@@ -238,6 +249,84 @@ def _convert_tools(tools: list[dict]) -> list[dict]:
     return converted
 
 
+def _convert_chat_content_to_output(
+    content: Any,
+    refusal: Optional[str] = None,
+) -> tuple[list[OutputContent], list[str]]:
+    """Convert chat completion message content to Responses output content."""
+    output_content: list[OutputContent] = []
+    output_text_parts: list[str] = []
+    saw_refusal = False
+
+    def _add_output_text(text: Optional[str], annotations: Optional[list] = None) -> None:
+        if not text:
+            return
+        output_content.append({
+            "type": "output_text",
+            "text": text,
+            "annotations": annotations or [],
+        })
+        output_text_parts.append(text)
+
+    def _add_refusal(text: Optional[str]) -> None:
+        nonlocal saw_refusal
+        if not text:
+            return
+        output_content.append({
+            "type": "refusal",
+            "refusal": text,
+        })
+        saw_refusal = True
+
+    def _handle_part(part: Any) -> None:
+        if isinstance(part, str):
+            _add_output_text(part)
+            return
+        if not isinstance(part, dict):
+            return
+
+        part_type = part.get("type")
+        if part_type in ("text", "output_text"):
+            _add_output_text(part.get("text", ""), part.get("annotations"))
+            return
+        if part_type == "refusal":
+            _add_refusal(part.get("refusal") or part.get("text", ""))
+            return
+        if part_type == "summary_text":
+            output_content.append({
+                "type": "summary_text",
+                "text": part.get("text", ""),
+            })
+            return
+        if part_type == "reasoning_text":
+            output_content.append({
+                "type": "reasoning_text",
+                "text": part.get("text", ""),
+            })
+            return
+        if "text" in part:
+            _add_output_text(part.get("text", ""), part.get("annotations"))
+            return
+
+        logger.debug(
+            "Translator: Skipping unsupported chat content part type=%s",
+            part_type,
+        )
+
+    if isinstance(content, list):
+        for part in content:
+            _handle_part(part)
+    elif isinstance(content, dict):
+        _handle_part(content)
+    elif isinstance(content, str):
+        _add_output_text(content)
+
+    if refusal and not saw_refusal:
+        _add_refusal(refusal)
+
+    return output_content, output_text_parts
+
+
 # =============================================================================
 # Chat Completions → Responses API
 # =============================================================================
@@ -270,21 +359,22 @@ def chat_completion_to_response(
 
         # Handle text content
         content = message.get("content")
-        if content:
+        refusal = message.get("refusal")
+        content_parts, content_text_parts = _convert_chat_content_to_output(
+            content,
+            refusal=refusal,
+        )
+        if content_parts:
             msg_id = generate_message_id()
             message_item: MessageItem = {
                 "id": msg_id,
                 "type": "message",
                 "role": "assistant",
                 "status": "completed",
-                "content": [{
-                    "type": "output_text",
-                    "text": content,
-                    "annotations": [],
-                }],
+                "content": content_parts,
             }
             output.append(message_item)
-            output_text_parts.append(content)
+            output_text_parts.extend(content_text_parts)
 
         # Handle tool calls
         tool_calls = message.get("tool_calls", [])

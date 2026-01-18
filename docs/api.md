@@ -207,6 +207,27 @@ Update runtime configuration. Body format same as GET response.
 
 Protected models require the admin password via `x-admin-password` header (or `admin_password` in the request body/query).
 
+### Reload Configuration
+
+```http
+POST /admin/config/reload
+```
+
+Reload configuration from disk without restarting the proxy. This will:
+1. Reload config files from disk
+2. Re-parse all models and backends
+3. Update the router's runtime state
+
+**Response:**
+
+```json
+{
+  "status": "ok",
+  "message": "Configuration reloaded successfully",
+  "models_count": 5
+}
+```
+
 ### List Models
 
 ```http
@@ -328,7 +349,248 @@ POST /admin/models/copy?source={source}&target={target}
 
 Copy an existing model to a new model name. Protected source models require the admin password.
 
-### Serve Admin UI
+---
+
+## Template Management
+
+### List Templates
+
+```http
+GET /admin/templates
+```
+
+List available Jinja templates in `configs/jinja_templates`.
+
+**Response:**
+
+```json
+{
+  "templates": [
+    {"name": "glm_4.5_air.jinja", "path": "configs/jinja_templates/glm_4.5_air.jinja"}
+  ]
+}
+```
+
+### Upload Template
+
+```http
+POST /admin/templates
+```
+
+Upload a new Jinja template file.
+
+**Request Body (multipart/form-data):**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `file` | file | The template file to upload |
+
+**Response:**
+
+```json
+{
+  "name": "my_template.jinja",
+  "path": "configs/jinja_templates/my_template.jinja"
+}
+```
+
+### Inspect Template
+
+```http
+GET /admin/templates/inspect?template_path={path}&think_tag={tag}
+```
+
+Inspect a template and return derived swap reasoning configuration.
+
+**Query Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `template_path` | string | Path to the template file (relative to repo or in templates directory) |
+| `think_tag` | string | Optional explicit think tag to inspect |
+
+**Response:**
+
+```json
+{
+  "template_path": "configs/jinja_templates/my_template.jinja",
+  "config": {
+    "enabled": true,
+    "think_tag": "think",
+    "block_params": true,
+    "block_output": false
+  },
+  "detected_think_tag": "think"
+}
+```
+
+---
+
+## App Key Management
+
+### List App Keys
+
+```http
+GET /admin/keys
+```
+
+List all configured app keys with secrets masked.
+
+**Response:**
+
+```json
+{
+  "enabled": true,
+  "header_name": "x-api-key",
+  "allow_unauthenticated": false,
+  "keys": [
+    {
+      "key_id": "key-abc123",
+      "name": "My App Key",
+      "description": "API key for my application",
+      "enabled": true
+    }
+  ]
+}
+```
+
+### Create App Key
+
+```http
+POST /admin/keys
+```
+
+Create a new app key. Requires admin password.
+
+**Request Body:**
+
+```json
+{
+  "key_id": "optional-key-id",
+  "secret": "optional-secret",
+  "name": "My App Key",
+  "description": "Description of the key",
+  "enabled": true
+}
+```
+
+**Response:**
+
+```json
+{
+  "status": "ok",
+  "key_id": "key-abc123",
+  "secret": "sk-live-xyz...",
+  "message": "Store this secret securely - it will not be shown again"
+}
+```
+
+### Get App Key
+
+```http
+GET /admin/keys/{key_id}
+```
+
+Get a specific app key by ID.
+
+**Response:**
+
+```json
+{
+  "key_id": "key-abc123",
+  "name": "My App Key",
+  "description": "Description",
+  "enabled": true
+}
+```
+
+### Update App Key
+
+```http
+PUT /admin/keys/{key_id}
+```
+
+Update an app key's metadata (not the secret). Requires admin password.
+
+**Request Body:**
+
+```json
+{
+  "name": "Updated Name",
+  "description": "Updated description",
+  "enabled": false
+}
+```
+
+### Regenerate App Key Secret
+
+```http
+POST /admin/keys/{key_id}/regenerate
+```
+
+Regenerate the secret for an existing app key. Requires admin password.
+
+**Response:**
+
+```json
+{
+  "status": "ok",
+  "key_id": "key-abc123",
+  "secret": "sk-live-new...",
+  "message": "Store this secret securely - it will not be shown again"
+}
+```
+
+### Delete App Key
+
+```http
+DELETE /admin/keys/{key_id}
+```
+
+Delete an app key. Requires admin password.
+
+**Response:**
+
+```json
+{
+  "status": "ok",
+  "key_id": "key-abc123",
+  "message": "App key 'key-abc123' deleted"
+}
+```
+
+### Configure App Key Authentication
+
+```http
+POST /admin/keys/config
+```
+
+Enable or disable app key authentication. Requires admin password.
+
+**Request Body:**
+
+```json
+{
+  "enabled": true,
+  "header_name": "x-api-key",
+  "allow_unauthenticated": false
+}
+```
+
+**Response:**
+
+```json
+{
+  "status": "ok",
+  "enabled": true,
+  "header_name": "x-api-key",
+  "allow_unauthenticated": false
+}
+```
+
+---
+
+## Serve Admin UI
 
 ```http
 GET /admin/

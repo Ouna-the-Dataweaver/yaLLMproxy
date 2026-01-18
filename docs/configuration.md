@@ -17,6 +17,7 @@ Complete reference for yaLLMproxy configuration options.
   - [Per-Model Module Overrides](#per-model-module-overrides)
   - [Template-Based Parsing](#template-based-parsing)
 - [Environment Variables](#environment-variables)
+- [App Key Authentication](#app-key-authentication)
 - [Router Settings](#router-settings)
 - [Logging Configuration](#logging-configuration)
 - [Template Inspection](#template-inspection)
@@ -47,7 +48,9 @@ model_list:
       api_key: ${NANOGPT_API_KEY}          # API key (from .env)
       supports_reasoning: true             # Supports reasoning content
       request_timeout: 540                 # Request timeout (seconds)
-        parameters:                          # Parameter override config
+      thinking:
+        type: enabled                      # Thinking mode: enabled, auto, disabled
+      parameters:                          # Parameter override config
         temperature:
           default: 1.0
           allow_override: false            # Allow request override
@@ -55,26 +58,27 @@ model_list:
           default: 0.95
           allow_override: false
     modules:                               # Response module config
-      enabled: true
-      response:
-        - parse_tags
-        - swap_reasoning_content
-      parse_tags:
-        parse_thinking: true
-        parse_tool_calls: true
-        think_tag: "think"
-        tool_arg_format: "xml"             # xml | json (for K2-style)
-        tool_tag: "tool_call"              # For xml format
-      swap_reasoning_content:
-        mode: "reasoning_to_content"       # reasoning_to_content | content_to_reasoning | auto
-        think_tag: "think"
-        think_open:
-          prefix: ""
-          suffix: ""
-        think_close:
-          prefix: ""
-          suffix: ""
-        include_newline: true
+      upstream:
+        enabled: true
+        response:
+          - parse_tags
+          - swap_reasoning_content
+        parse_tags:
+          parse_thinking: true
+          parse_tool_calls: true
+          think_tag: "think"
+          tool_arg_format: "xml"           # xml | json (for K2-style)
+          tool_tag: "tool_call"            # For xml format
+        swap_reasoning_content:
+          mode: "reasoning_to_content"     # reasoning_to_content | content_to_reasoning | auto
+          think_tag: "think"
+          think_open:
+            prefix: ""
+            suffix: ""
+          think_close:
+            prefix: ""
+            suffix: ""
+          include_newline: true
 
 router_settings:
   num_retries: 1                           # Retry attempts per backend
@@ -89,29 +93,33 @@ proxy_settings:
   logging:
     log_parsed_response: true              # Log parsed response
     log_parsed_stream: true                # Log parsed stream response
-    parsers:                               # Response module config (legacy name, use "modules")
-      enabled: false                         # Global parser enabled
-    response:
-      - parse_tags
-      - swap_reasoning_content
-    paths:
-      - /chat/completions                  # Paths to apply parsers
-    parse_tags:
-      parse_thinking: true
-      parse_tool_calls: true
-      think_tag: "think"
-      tool_arg_format: "xml"               # xml | json (for K2-style)
-      tool_tag: "tool_call"                # For xml format
-    swap_reasoning_content:
-      mode: "reasoning_to_content"
-      think_tag: "think"
-      think_open:
-        prefix: ""
-        suffix: ""
-      think_close:
-        prefix: ""
-        suffix: ""
-      include_newline: true
+  modules:
+    upstream:
+      enabled: false                       # Enable upstream response modules
+      response:
+        - parse_tags
+        - swap_reasoning_content
+      paths:
+        - /chat/completions                # Paths to apply upstream modules
+      parse_tags:
+        parse_thinking: true
+        parse_tool_calls: true
+        think_tag: "think"
+        tool_arg_format: "xml"             # xml | json (for K2-style)
+        tool_tag: "tool_call"              # For xml format
+      swap_reasoning_content:
+        mode: "reasoning_to_content"
+        think_tag: "think"
+        think_open:
+          prefix: ""
+          suffix: ""
+        think_close:
+          prefix: ""
+          suffix: ""
+        include_newline: true
+    downstream:
+      enabled: false                       # Enable downstream request modules
+      request: []
 
 forwarder_settings:
   listen:
@@ -151,9 +159,11 @@ http_forwarder_settings:
 | `model_params.api_type` | string | "openai" | API type (only "openai" supported) |
 | `model_params.target_model` | string | - | Override model name sent to backend |
 | `model_params.request_timeout` | number | 60 | Request timeout in seconds |
-| `model_params.supports_reasoning` | boolean | false | Whether model supports thinking content |
+| `model_params.supports_reasoning` | boolean | false | Whether model supports reasoning content (legacy, prefer `thinking.type`) |
 | `model_params.http2` | boolean | false | Whether to use HTTP/2 |
 | `model_params.parameters` | object | - | Parameter override configuration |
+| `model_params.thinking` | object | - | Thinking content configuration block |
+| `model_params.thinking.type` | string | "auto" | Thinking mode: enabled, auto, disabled |
 
 ### Parameter Overrides
 
@@ -188,19 +198,21 @@ model_list:
           default: 1.0
           allow_override: false
     modules:
-      enabled: true
-      response:
-        - swap_reasoning_content
+      upstream:
+        enabled: true
+        response:
+          - swap_reasoning_content
 
   # Derived model inherits from GLM-4.7, adds custom modules
   - model_name: GLM-4.7:Cursor
     protected: false
     extends: GLM-4.7
     modules:
-      enabled: true
-      response:
-        - parse_tags
-        - swap_reasoning_content
+      upstream:
+        enabled: true
+        response:
+          - parse_tags
+          - swap_reasoning_content
 ```
 
 The derived model `GLM-4.7:Cursor` inherits:
@@ -259,17 +271,19 @@ model_list:
       api_base: https://api.z.ai/api/coding/paas/v4
       api_key: ${GLM_API_KEY}
     modules:
-      enabled: true
-      response:
-        - swap_reasoning_content
+      upstream:
+        enabled: true
+        response:
+          - swap_reasoning_content
 
   - model_name: GLM-4.7:Custom
     protected: false
     extends: GLM-4.7
     modules:
-      response:
-        - parse_tags
-        - swap_reasoning_content
+      upstream:
+        response:
+          - parse_tags
+          - swap_reasoning_content
 ```
 
 ### Error Handling
@@ -424,11 +438,12 @@ model_list:
       api_base: https://api.example.com/v1
       api_key: ${GLM_API_KEY}
     modules:
-      enabled: true
-      response:
-        - swap_reasoning_content
-      swap_reasoning_content:
-        mode: reasoning_to_content
+      upstream:
+        enabled: true
+        response:
+          - swap_reasoning_content
+        swap_reasoning_content:
+          mode: reasoning_to_content
 ```
 
 If `enabled` is omitted, per-model modules default to enabled. Set `enabled: false` to explicitly disable.
@@ -501,6 +516,64 @@ proxy_settings:
     log_parsed_response: true  # Log parsed response bodies
     log_parsed_stream: true    # Log parsed stream chunks
 ```
+
+## App Key Authentication
+
+yaLLMproxy supports optional API key authentication for proxy access. This feature allows you to control access to the proxy and implement rate limiting per key.
+
+```yaml
+# App Key Authentication (optional)
+app_keys:
+  enabled: true                    # Set to true to enable app key authentication
+  header_name: x-api-key           # Header name for API key (also accepts Authorization: Bearer)
+  allow_unauthenticated: false     # Allow requests without a key when enabled
+  keys:
+    - key_id: "app-dev-001"
+      secret: "${APP_KEY_DEV}"     # Use env var for secrets
+      name: "Development"
+      description: "Development team access"
+      enabled: true
+```
+
+### Configuration Options
+
+|| Option | Type | Default | Description |
+||--------|------|---------|-------------|
+|| `enabled` | boolean | false | Enable/disable app key authentication |
+|| `header_name` | string | "x-api-key" | Header name for API key lookup |
+|| `allow_unauthenticated` | boolean | false | Allow requests without a key when authentication is enabled |
+|| `keys` | list | [] | List of API keys |
+
+### Key Configuration
+
+|| Option | Type | Description |
+||--------|------|-------------|
+|| `key_id` | string | Unique identifier for the key (used in access control) |
+|| `secret` | string | The API key secret (supports env var substitution) |
+|| `name` | string | Human-readable name for the key |
+|| `description` | string | Description of the key's purpose |
+|| `enabled` | boolean | Enable/disable this key |
+
+### Per-Model Access Control
+
+You can restrict which API keys have access to specific models:
+
+```yaml
+model_list:
+  - model_name: premium-model
+    model_params:
+      api_base: https://api.example.com/v1
+      api_key: ${PREMIUM_API_KEY}
+    access_control:
+      allowed_keys:                # List of key_ids that can access this model
+        - app-prod-001
+        - app-premium-001
+```
+
+**Special Values for `allowed_keys`:**
+
+- `"all"` - All API keys can access this model (default)
+- `"none"` - No API keys can access this model (requires unauthenticated access)
 
 ## Template Inspection
 
