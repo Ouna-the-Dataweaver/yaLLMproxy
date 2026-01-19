@@ -76,6 +76,18 @@ class TestDataMasking(unittest.TestCase):
         # Short tokens should be masked appropriately
         self.assertEqual(result_dict["authorization"], "Bearer abc****")
 
+    def test_x_api_key_masked(self):
+        """Test that x-api-key headers are masked."""
+        headers = {
+            "x-api-key": "sk-test-1234567890"
+        }
+
+        result = self.recorder._safe_json_dict(headers)
+        result_dict = json.loads(result)
+
+        # x-api-key should be masked to first 3 chars + ****
+        self.assertEqual(result_dict["x-api-key"], "sk-****")
+
     def test_host_replaced_with_proxy_host(self):
         """Test that host addresses are replaced with proxy_host."""
         headers = {

@@ -58,6 +58,25 @@ model_list:
       top_k:
         default: 40
         allow_override: false
+- model_name: MiniMax-M2.1:oc
+  protected: true
+  model_params:
+    api_type: anthropic
+    model: MiniMax-M2.1
+    api_base: https://api.minimax.io/anthropic/v1
+    api_key: ${MINIMAX_API_KEY}
+    anthropic_version: "2023-06-01"
+    request_timeout: 540
+    parameters:
+      temperature:
+        default: 1.0
+        allow_override: false
+      top_p:
+        default: 0.95
+        allow_override: false
+      top_k:
+        default: 40
+        allow_override: false
 - model_name: MiniMax-M2-nano
   protected: true
   model_params:
@@ -93,6 +112,7 @@ proxy_settings:
     host: 127.0.0.1
     port: 7979
   enable_responses_endpoint: false
+  enable_messages_endpoint: false
   logging:
     log_parsed_response: true
     log_parsed_stream: true

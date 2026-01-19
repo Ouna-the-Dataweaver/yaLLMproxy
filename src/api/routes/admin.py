@@ -108,6 +108,11 @@ def _backend_from_runtime_payload(
     api_type = extract_api_type(params)
     target_model = extract_target_model(params, api_type)
     supports_reasoning = bool(params.get("supports_reasoning") or payload.get("supports_reasoning"))
+    anthropic_version = params.get("anthropic_version")
+    if isinstance(anthropic_version, str):
+        anthropic_version = anthropic_version.strip() or None
+    elif anthropic_version is not None:
+        anthropic_version = str(anthropic_version).strip() or None
     fallbacks = _normalize_fallbacks(payload.get("fallbacks"))
 
     backend = Backend(
@@ -117,6 +122,7 @@ def _backend_from_runtime_payload(
         timeout=timeout,
         target_model=target_model,
         api_type=api_type,
+        anthropic_version=anthropic_version,
         supports_reasoning=supports_reasoning,
         editable=True,
     )

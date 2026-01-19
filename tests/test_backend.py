@@ -172,6 +172,36 @@ class TestBuildOutboundHeaders:
         assert result.get("X-Custom-Header") == "custom-value"
         assert result.get("User-Agent") == "test-agent"
 
+    def test_anthropic_uses_x_api_key(self):
+        """Test that anthropic backends use x-api-key and add version."""
+        incoming = {
+            "Content-Type": "application/json",
+            "x-api-key": "client-key",
+        }
+        result = build_outbound_headers(
+            incoming,
+            "backend-key",
+            api_type="anthropic",
+            anthropic_version="2023-06-01",
+        )
+        assert "Authorization" not in result
+        assert result.get("x-api-key") == "backend-key"
+        assert result.get("anthropic-version") == "2023-06-01"
+
+    def test_anthropic_preserves_client_version(self):
+        """Test that client-provided anthropic-version is preserved."""
+        incoming = {
+            "Content-Type": "application/json",
+            "anthropic-version": "2024-01-01",
+        }
+        result = build_outbound_headers(
+            incoming,
+            "backend-key",
+            api_type="anthropic",
+            anthropic_version="2023-06-01",
+        )
+        assert result.get("anthropic-version") == "2024-01-01"
+
 
 class TestBuildBackendBody:
     """Tests for building backend request body."""

@@ -42,6 +42,7 @@ class Backend:
     timeout: Optional[float]
     target_model: Optional[str]
     api_type: str = "openai"
+    anthropic_version: Optional[str] = None
     supports_reasoning: bool = False
     supports_responses_api: bool = False  # Backend natively supports /v1/responses
     http2: bool = False
@@ -93,7 +94,7 @@ def _safe_headers_for_log(headers: Mapping[str, str]) -> dict[str, str]:
         masked: dict[str, str] = {}
         for key, value in headers.items():
             key_lower = str(key).lower()
-            if key_lower in {"authorization", "proxy-connection"}:
+            if key_lower in {"authorization", "proxy-connection", "x-api-key"}:
                 masked[str(key)] = "****"
             else:
                 masked[str(key)] = str(value)
@@ -123,11 +124,16 @@ def format_httpx_error(exc: Any, backend: Backend, url: Optional[str] = None) ->
 
 
 def build_outbound_headers(
-    incoming: Mapping[str, str], backend_api_key: str, is_stream: bool = False
+    incoming: Mapping[str, str],
+    backend_api_key: str,
+    is_stream: bool = False,
+    api_type: Optional[str] = None,
+    anthropic_version: Optional[str] = None,
 ) -> dict[str, str]:
     """Build headers for outbound requests to backends."""
     headers: dict[str, str] = {}
     normalized_keys: set[str] = set()
+    normalized_api_type = (api_type or "openai").strip().lower()
     
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug("Incoming headers: %s", _safe_headers_for_log(incoming))
@@ -143,6 +149,9 @@ def build_outbound_headers(
         }:
             logger.debug(f"Stripping header: {key}")
             continue
+        if normalized_api_type == "anthropic" and key_lower == "x-api-key":
+            logger.debug("Stripping client x-api-key for anthropic backend")
+            continue
         if key_lower in normalized_keys:
             continue
         headers[key] = value
@@ -155,8 +164,17 @@ def build_outbound_headers(
         headers["Accept"] = "text/event-stream"
         normalized_keys.add("accept")
     if backend_api_key:
-        headers["Authorization"] = f"Bearer {backend_api_key}"
-        normalized_keys.add("authorization")
+        if normalized_api_type == "anthropic":
+            headers["x-api-key"] = backend_api_key
+            normalized_keys.add("x-api-key")
+        else:
+            headers["Authorization"] = f"Bearer {backend_api_key}"
+            normalized_keys.add("authorization")
+
+    if normalized_api_type == "anthropic":
+        if "anthropic-version" not in normalized_keys and anthropic_version:
+            headers["anthropic-version"] = anthropic_version
+            normalized_keys.add("anthropic-version")
     
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug("Built outbound headers: %s", _safe_headers_for_log(headers))

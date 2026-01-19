@@ -314,7 +314,11 @@ class ProxyRouter:
         
         url = backend.build_url(path, query)
         outbound_headers = build_outbound_headers(
-            headers, backend.api_key, is_stream=is_stream
+            headers,
+            backend.api_key,
+            is_stream=is_stream,
+            api_type=backend.api_type,
+            anthropic_version=backend.anthropic_version,
         )
         request_pipeline = self._select_request_modules(backend.name)
         if request_pipeline:
@@ -513,6 +517,11 @@ class ProxyRouter:
 
             api_type = extract_api_type(params)
             target_model = extract_target_model(params, api_type)
+            anthropic_version = params.get("anthropic_version")
+            if isinstance(anthropic_version, str):
+                anthropic_version = anthropic_version.strip() or None
+            elif anthropic_version is not None:
+                anthropic_version = str(anthropic_version).strip() or None
 
             supports_reasoning = bool(params.get("supports_reasoning"))
             supports_responses_api = _parse_bool(params.get("supports_responses_api"))
@@ -543,6 +552,7 @@ class ProxyRouter:
                 timeout=timeout_val,
                 target_model=target_model,
                 api_type=api_type,
+                anthropic_version=anthropic_version,
                 supports_reasoning=supports_reasoning,
                 supports_responses_api=supports_responses_api,
                 http2=http2,

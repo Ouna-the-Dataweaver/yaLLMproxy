@@ -31,6 +31,7 @@ from .core.registry import set_router
 from .api.routes import chat_completions, embeddings, list_models, register_model, config as config_routes, usage, logs
 from .api.routes import keys as key_routes
 from .api.routes.responses import responses_endpoint
+from .api.routes.messages import messages_endpoint
 
 # Load configuration
 config = CONFIG_STORE.get_runtime_config()
@@ -81,6 +82,16 @@ else:
     )
 
 logger.info(f"Responses endpoint enabled: {enable_responses_endpoint}")
+
+# Check if messages endpoint should be enabled
+if "enable_messages_endpoint" in proxy_settings:
+    enable_messages_endpoint = bool(proxy_settings.get("enable_messages_endpoint"))
+else:
+    enable_messages_endpoint = bool(
+        general_settings.get("enable_messages_endpoint", False)
+    )
+
+logger.info(f"Messages endpoint enabled: {enable_messages_endpoint}")
 
 
 # Create FastAPI application
@@ -229,6 +240,13 @@ if enable_responses_endpoint:
     logger.info("Responses endpoint enabled")
 else:
     logger.info("Responses endpoint is disabled in configuration")
+
+# Conditionally register messages endpoint
+if enable_messages_endpoint:
+    app.post("/v1/messages")(messages_endpoint)
+    logger.info("Messages endpoint enabled")
+else:
+    logger.info("Messages endpoint is disabled in configuration")
 
 
 def create_app() -> FastAPI:

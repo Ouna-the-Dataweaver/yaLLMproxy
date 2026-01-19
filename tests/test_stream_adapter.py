@@ -33,6 +33,11 @@ def _parse_event(raw: bytes) -> dict:
     }
 
 
+def _terminal_response(events: list[dict]) -> dict:
+    terminal = events[-1]
+    return terminal["data"]["response"]
+
+
 @pytest.mark.asyncio
 async def test_stream_adapter_emits_completed_on_done():
     adapter = ChatToResponsesStreamAdapter("resp_test", "test-model", {})
@@ -97,3 +102,30 @@ async def test_stream_adapter_handles_list_content():
 
     assert terminal["event"] == EVENT_RESPONSE_COMPLETED
     assert terminal["data"]["response"]["output_text"] == "Hello"
+
+
+@pytest.mark.asyncio
+async def test_stream_adapter_handles_tool_call_only_stream():
+    adapter = ChatToResponsesStreamAdapter("resp_tool", "test-model", {})
+    chunks = [
+        (
+            b'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1",'
+            b'"type":"function","function":{"name":"lookup","arguments":"{\\"q\\":\\""}}]},'
+            b'"index":0}]}\n\n'
+        ),
+        (
+            b'data: {"choices":[{"delta":{"tool_calls":[{"index":0,'
+            b'"function":{"arguments":"x\\"}"}}]},"index":0}]}\n\n'
+        ),
+        b'data: {"choices":[{"delta":{},"finish_reason":"tool_calls","index":0}]}\n\n',
+        b"data: [DONE]\n\n",
+    ]
+
+    events = [_parse_event(event) async for event in adapter.adapt_stream(_aiter(chunks))]
+    response = _terminal_response(events)
+
+    assert response["status"] == "completed"
+    assert response["output_text"] == ""
+    assert response["output"][0]["type"] == "function_call"
+    assert response["output"][0]["name"] == "lookup"
+    assert response["output"][0]["arguments"] == "{\"q\":\"x\"}"

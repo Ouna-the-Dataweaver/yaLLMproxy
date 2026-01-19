@@ -897,7 +897,7 @@ class RequestLogRecorder:
         masked_data: dict[str, str] = {}
         for key, value in normalized.items():
             key_lower = key.lower()
-            if key_lower in {"authorization", "proxy-connection"}:
+            if key_lower in {"authorization", "proxy-connection", "x-api-key"}:
                 # Mask authorization headers: first 3 chars + ****
                 if isinstance(value, str) and value.startswith("Bearer "):
                     bearer_token = value[7:]  # Remove "Bearer " prefix

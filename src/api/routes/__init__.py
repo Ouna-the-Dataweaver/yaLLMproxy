@@ -4,6 +4,7 @@ from .admin import register_model
 from .chat import chat_completions, handle_openai_request
 from .embeddings import embeddings
 from .models import list_models
+from .messages import messages_endpoint
 from .responses import responses_endpoint
 from . import config
 
@@ -12,8 +13,8 @@ __all__ = [
     "embeddings",
     "handle_openai_request",
     "list_models",
+    "messages_endpoint",
     "register_model",
     "responses_endpoint",
     "config",
 ]
-

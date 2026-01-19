@@ -9,7 +9,7 @@ from fastapi import FastAPI
 
 from ..core import ProxyRouter
 from ..core.registry import get_router, set_router
-from ..api.routes import chat_completions, responses
+from ..api.routes import chat_completions, responses, messages_endpoint
 
 
 class ProxyHarness:
@@ -20,6 +20,7 @@ class ProxyHarness:
         config: Mapping[str, Any],
         *,
         enable_responses_endpoint: bool = False,
+        enable_messages_endpoint: bool = False,
     ) -> None:
         self.router = ProxyRouter(dict(config))
         self._previous_router: Optional[Any] = None
@@ -33,6 +34,8 @@ class ProxyHarness:
         self.app.post("/v1/chat/completions")(chat_completions)
         if enable_responses_endpoint:
             self.app.post("/v1/responses")(responses)
+        if enable_messages_endpoint:
+            self.app.post("/v1/messages")(messages_endpoint)
 
     def close(self) -> None:
         if self._previous_router is not None:
