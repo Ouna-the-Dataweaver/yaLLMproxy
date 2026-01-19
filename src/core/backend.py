@@ -163,6 +163,12 @@ def build_outbound_headers(
     if is_stream:
         headers["Accept"] = "text/event-stream"
         normalized_keys.add("accept")
+        # Force identity encoding for streaming to avoid compressed SSE bytes
+        for existing_key in list(headers.keys()):
+            if existing_key.lower() == "accept-encoding":
+                headers.pop(existing_key, None)
+        headers["Accept-Encoding"] = "identity"
+        normalized_keys.add("accept-encoding")
     if backend_api_key:
         if normalized_api_type == "anthropic":
             headers["x-api-key"] = backend_api_key

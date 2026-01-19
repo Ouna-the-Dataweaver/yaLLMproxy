@@ -262,17 +262,27 @@ const showLogDetail = async (logId) => {
 
         const bodyObj = typeof log.body === "object" ? log.body : null;
 
-        // 3. Messages section (if body is object with messages)
+        // 3. System Prompt section (Anthropic format - top level system)
+        if (bodyObj && bodyObj.system) {
+            html += renderSystemSection(bodyObj);
+        }
+
+        // 4. Messages section (if body is object with messages)
         if (bodyObj && bodyObj.messages) {
             html += renderMessagesSection(bodyObj.messages);
         }
 
-        // 4. Tools section (if body has tools or functions)
+        // 5. Tools section (if body has tools or functions)
         if (bodyObj && (bodyObj.tools || bodyObj.functions)) {
             html += renderToolsSection(bodyObj.tools || bodyObj.functions);
         }
 
-        // 5. Full Response section
+        // 6. Tool Choice section (if present)
+        if (bodyObj && bodyObj.tool_choice !== undefined) {
+            html += renderToolChoiceSection(bodyObj);
+        }
+
+        // 7. Full Response section
         if (log.full_response) {
             const truncatedNotice = log.full_response_truncated
                 ? '<span class="truncated-notice">(truncated)</span>'
@@ -286,7 +296,7 @@ const showLogDetail = async (logId) => {
             );
         }
 
-        // 6. Stream Chunks section
+        // 8. Stream Chunks section
         if (log.stream_chunks && log.stream_chunks.length > 0) {
             const truncatedNotice = log.stream_chunks_truncated
                 ? `<div class="truncated-notice" style="margin-bottom: 8px;">Showing ${log.stream_chunks.length} of ${log.stream_chunks_total} chunks</div>`
@@ -295,20 +305,20 @@ const showLogDetail = async (logId) => {
             html += renderCollapsibleSection("Stream Chunks", chunksContent, `${log.stream_chunks.length} chunks`, true);
         }
 
-        // 7. Usage Statistics section
+        // 9. Usage Statistics section
         if (log.usage_stats) {
             const usageContent = highlightJson(JSON.stringify(log.usage_stats, null, 2));
             html += renderCollapsibleSection("Usage Statistics (Raw)", `<pre style="margin: 0; white-space: pre-wrap;">${usageContent}</pre>`, "", true);
         }
 
-        // 8. Modules Log section
+        // 10. Modules Log section
         if (log.modules_log) {
             const modulesContent = `<div class="json-tree">${renderJsonTree(log.modules_log)}</div>`;
             const eventCount = log.modules_log.total_events || 0;
             html += renderCollapsibleSection("Modules Log", modulesContent, `${eventCount} events`, true);
         }
 
-        // 9. Backend Attempts section
+        // 11. Backend Attempts section
         if (log.backend_attempts && log.backend_attempts.length > 0) {
             const truncatedNotice = log.backend_attempts_truncated
                 ? `<div class="truncated-notice" style="margin-bottom: 8px;">Showing first ${log.backend_attempts.length} attempts</div>`
@@ -317,19 +327,19 @@ const showLogDetail = async (logId) => {
             html += renderCollapsibleSection("Backend Attempts", attemptsContent, `${log.backend_attempts.length} attempts`, true);
         }
 
-        // 10. Errors section (expanded by default if present)
+        // 12. Errors section (expanded by default if present)
         if (log.errors && log.errors.length > 0) {
             const errorsContent = `<div class="json-tree">${renderJsonTree(log.errors)}</div>`;
             html += renderCollapsibleSection("Errors", errorsContent, `${log.errors.length} errors`, false);
         }
 
-        // 11. Linked Error Logs
+        // 13. Linked Error Logs
         if (log.error_logs && log.error_logs.length > 0) {
             const errorLogsContent = `<div class="json-tree">${renderJsonTree(log.error_logs)}</div>`;
             html += renderCollapsibleSection("Linked Error Logs", errorLogsContent, `${log.error_logs.length} logs`, false);
         }
 
-        // 12. Other Request Parameters (remaining body fields as tree view)
+        // 14. Other Request Parameters (remaining body fields as tree view)
         if (bodyObj) {
             html += renderOtherRequestData(bodyObj);
         } else if (log.body && typeof log.body === "string") {
@@ -965,7 +975,16 @@ const renderStatsGrid = (log) => {
 // Other Request Data (remaining fields as tree view)
 // ============================================================================
 
-const KNOWN_BODY_KEYS = ["messages", "tools", "functions", "model", "stream"];
+const KNOWN_BODY_KEYS = [
+    // OpenAI Chat Completions
+    "messages", "tools", "functions", "model", "stream",
+    // Anthropic Messages
+    "system", "tool_choice", "max_tokens", "stop_sequences", "metadata",
+    // Common sampling parameters
+    "temperature", "top_p", "top_k", "presence_penalty", "frequency_penalty",
+    // Other common
+    "n", "logprobs", "seed", "user", "response_format"
+];
 
 const renderOtherRequestData = (body) => {
     if (!body || typeof body !== "object") return "";
@@ -985,6 +1004,53 @@ const renderOtherRequestData = (body) => {
 
     const treeHtml = `<div class="json-tree">${renderJsonTree(otherData)}</div>`;
     return renderCollapsibleSection("Other Request Parameters", treeHtml, `${Object.keys(otherData).length} params`, true);
+};
+
+// ============================================================================
+// Anthropic-Specific Request Data Rendering
+// ============================================================================
+
+const renderSystemSection = (body) => {
+    if (!body || !body.system) return "";
+    const system = body.system;
+    let content;
+    let badge;
+
+    if (typeof system === "string") {
+        // Simple string system prompt
+        content = `<pre style="margin: 0; white-space: pre-wrap;">${escapeHtml(system)}</pre>`;
+        badge = `${formatNumber(system.length)} chars`;
+    } else if (Array.isArray(system)) {
+        // Array of content blocks (anthropic format with cache_control etc)
+        content = `<div class="json-tree">${renderJsonTree(system)}</div>`;
+        badge = `${system.length} blocks`;
+    } else {
+        // Object format
+        content = `<div class="json-tree">${renderJsonTree(system)}</div>`;
+        badge = "object";
+    }
+    return renderCollapsibleSection("System Prompt", content, badge, true);
+};
+
+const renderToolChoiceSection = (body) => {
+    if (!body || body.tool_choice === undefined) return "";
+    const tc = body.tool_choice;
+    let content;
+    let badge;
+
+    if (typeof tc === "string") {
+        // Simple string like "auto", "any", "none"
+        content = `<code style="font-size: 1rem;">${escapeHtml(tc)}</code>`;
+        badge = tc;
+    } else if (tc && typeof tc === "object") {
+        // Object format like {type: "tool", name: "..."}
+        content = `<div class="json-tree">${renderJsonTree(tc)}</div>`;
+        badge = tc.type || "object";
+    } else {
+        content = `<code>${escapeHtml(String(tc))}</code>`;
+        badge = String(tc);
+    }
+    return renderCollapsibleSection("Tool Choice", content, badge, true);
 };
 
 const hideModal = () => {

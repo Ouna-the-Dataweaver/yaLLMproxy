@@ -618,13 +618,21 @@ class RequestLogRecorder:
             return {}
 
         # Extract core token counts with fallback handling
-        prompt_tokens = usage.get("prompt_tokens") or 0
-        completion_tokens = usage.get("completion_tokens") or 0
+        # OpenAI uses prompt_tokens/completion_tokens, Anthropic uses input_tokens/output_tokens
+        prompt_tokens = usage.get("prompt_tokens") or usage.get("input_tokens") or 0
+        completion_tokens = usage.get("completion_tokens") or usage.get("output_tokens") or 0
         total_tokens = usage.get("total_tokens") or (prompt_tokens + completion_tokens)
 
         # Normalize prompt tokens details
         prompt_details = usage.get("prompt_tokens_details") or {}
-        cached_tokens = prompt_details.get("cached_tokens") or usage.get("cached_tokens") or 0
+        # Anthropic uses cache_creation_input_tokens and cache_read_input_tokens
+        cached_tokens = (
+            prompt_details.get("cached_tokens")
+            or usage.get("cached_tokens")
+            or usage.get("cache_read_input_tokens")
+            or 0
+        )
+        cache_creation_tokens = usage.get("cache_creation_input_tokens") or 0
 
         # Normalize completion tokens details
         completion_details = usage.get("completion_tokens_details") or {}
@@ -638,18 +646,28 @@ class RequestLogRecorder:
         }
 
         # Add details if any are present
+        prompt_details_normalized: dict[str, Any] = {}
         if cached_tokens > 0:
-            normalized["prompt_tokens_details"] = {"cached_tokens": cached_tokens}
+            prompt_details_normalized["cached_tokens"] = cached_tokens
+        if cache_creation_tokens > 0:
+            prompt_details_normalized["cache_creation_tokens"] = cache_creation_tokens
+        if prompt_details_normalized:
+            normalized["prompt_tokens_details"] = prompt_details_normalized
 
         if reasoning_tokens > 0:
             normalized["completion_tokens_details"] = {"reasoning_tokens": reasoning_tokens}
 
         # Preserve any additional provider-specific fields
+        # Skip fields we've already normalized
+        skip_fields = {
+            "prompt_tokens", "completion_tokens", "total_tokens",
+            "prompt_tokens_details", "completion_tokens_details",
+            "input_tokens", "output_tokens",  # Anthropic equivalents
+            "cache_creation_input_tokens", "cache_read_input_tokens",  # Anthropic cache fields
+        }
         for key, value in usage.items():
-            if key not in ("prompt_tokens", "completion_tokens", "total_tokens",
-                          "prompt_tokens_details", "completion_tokens_details"):
-                if key not in normalized:
-                    normalized[key] = value
+            if key not in skip_fields and key not in normalized:
+                normalized[key] = value
 
         return normalized
 

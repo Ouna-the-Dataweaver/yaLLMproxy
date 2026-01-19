@@ -161,6 +161,15 @@ class TestBuildOutboundHeaders:
         result = build_outbound_headers(incoming, "")
         assert "Accept-Encoding" not in result
 
+    def test_stream_forces_identity_encoding(self):
+        """Test that streaming requests force identity encoding."""
+        incoming = {
+            "Accept-Encoding": "gzip, br",
+            "Content-Type": "application/json",
+        }
+        result = build_outbound_headers(incoming, "", is_stream=True)
+        assert result.get("Accept-Encoding") == "identity"
+
     def test_preserves_custom_headers(self):
         """Test that custom headers are preserved."""
         incoming = {

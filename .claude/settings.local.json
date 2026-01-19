@@ -15,7 +15,9 @@
       "WebFetch(domain:hackmd.io)",
       "WebFetch(domain:blog.robino.dev)",
       "WebFetch(domain:www.openresponses.org)",
-      "Bash(python -c:*)"
+      "Bash(python -c:*)",
+      "Bash(dir \"C:\\\\Users\\\\theio\\\\repos\\\\yaLLMproxy\\\\tests\" /s /b *.py)",
+      "Bash(findstr:*)"
     ]
   },
   "outputStyle": "default"

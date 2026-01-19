@@ -476,17 +476,44 @@ class ProxyRouter:
                     if isinstance(payload, dict):
                         if "usage" in payload:
                             request_log.record_usage_stats(payload["usage"])
-                        choices = payload.get("choices")
-                        if isinstance(choices, list) and choices:
-                            choice = choices[0]
-                            if isinstance(choice, dict):
-                                finish_reason = (
-                                    choice.get("finish_reason")
-                                    or choice.get("stop_reason")
-                                    or choice.get("reason")
-                                )
-                                if isinstance(finish_reason, str) and finish_reason:
-                                    request_log.record_stop_reason(finish_reason)
+
+                        # Detect anthropic format: has "type": "message" or
+                        # has "content" + "stop_reason" at top level without "choices"
+                        is_anthropic = (
+                            payload.get("type") == "message"
+                            or (
+                                "content" in payload
+                                and "stop_reason" in payload
+                                and "choices" not in payload
+                            )
+                        )
+
+                        if is_anthropic:
+                            # Anthropic format: extract stop_reason directly
+                            stop_reason = payload.get("stop_reason")
+                            if isinstance(stop_reason, str) and stop_reason:
+                                request_log.record_stop_reason(stop_reason)
+                            # Extract content for full_response accumulation
+                            content = payload.get("content", [])
+                            if isinstance(content, list):
+                                for block in content:
+                                    if isinstance(block, dict) and block.get("type") == "text":
+                                        text = block.get("text", "")
+                                        if text:
+                                            request_log._accumulated_response_parts.append(text)
+                        else:
+                            # OpenAI format: extract from choices[0]
+                            choices = payload.get("choices")
+                            if isinstance(choices, list) and choices:
+                                choice = choices[0]
+                                if isinstance(choice, dict):
+                                    finish_reason = (
+                                        choice.get("finish_reason")
+                                        or choice.get("stop_reason")
+                                        or choice.get("reason")
+                                    )
+                                    if isinstance(finish_reason, str) and finish_reason:
+                                        request_log.record_stop_reason(finish_reason)
                 except (json_module.JSONDecodeError, TypeError):
                     pass
             return _build_response_from_httpx(resp, parsed_body)
@@ -687,7 +714,8 @@ async def _streaming_request(
     
     initial_buffer = bytearray()
     buffered_chunks: List[bytes] = []
-    stream = resp.aiter_raw()
+    # Use decoded bytes so content-encoding doesn't leak compressed data to clients.
+    stream = resp.aiter_bytes()
     stream_exhausted = False
     
     while len(initial_buffer) < STREAM_ERROR_CHECK_BUFFER_SIZE:
@@ -795,13 +823,52 @@ async def _streaming_request(
             nonlocal last_chunk_data, last_choice_data, last_finish_reason, last_usage_stats
             last_chunk_data = payload
 
+            if not isinstance(payload, dict):
+                return
+
             # Track usage stats from payloads (usually only in final chunk)
-            if isinstance(payload, dict) and "usage" in payload:
+            if "usage" in payload:
                 usage = payload["usage"]
                 if isinstance(usage, dict):
                     last_usage_stats = usage
 
-            choices = payload.get("choices") if isinstance(payload, dict) else None
+            # Anthropic streaming format detection
+            event_type = payload.get("type")
+            if event_type:
+                # Anthropic SSE event types:
+                # - message_start: initial message metadata
+                # - content_block_start: start of a content block
+                # - content_block_delta: content update (text_delta or input_json_delta)
+                # - content_block_stop: end of content block
+                # - message_delta: final stop_reason and usage
+                # - message_stop: end of message
+                if event_type == "content_block_delta":
+                    delta = payload.get("delta", {})
+                    if isinstance(delta, dict):
+                        delta_type = delta.get("type")
+                        if delta_type == "text_delta":
+                            text = delta.get("text", "")
+                            if text and request_log:
+                                request_log._accumulated_response_parts.append(text)
+                        elif delta_type == "input_json_delta":
+                            # Tool use input streaming - could accumulate if needed
+                            pass
+                elif event_type == "message_delta":
+                    delta = payload.get("delta", {})
+                    if isinstance(delta, dict):
+                        stop_reason = delta.get("stop_reason")
+                        if isinstance(stop_reason, str) and stop_reason:
+                            last_finish_reason = stop_reason
+                    # Usage is at top level of message_delta, not inside delta
+                    # (already captured above)
+                elif event_type == "message_start":
+                    # Could extract message id/model from payload["message"] if needed
+                    pass
+                # Return early - anthropic events don't have "choices"
+                return
+
+            # OpenAI streaming format: extract from choices array
+            choices = payload.get("choices")
             if not (choices and isinstance(choices, list)):
                 return
             last_choice_data = payload

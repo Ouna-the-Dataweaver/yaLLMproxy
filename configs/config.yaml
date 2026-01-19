@@ -65,7 +65,7 @@ model_list:
     model: MiniMax-M2.1
     api_base: https://api.minimax.io/anthropic/v1
     api_key: ${MINIMAX_API_KEY}
-    anthropic_version: "2023-06-01"
+    anthropic_version: '2023-06-01'
     request_timeout: 540
     parameters:
       temperature:
@@ -77,6 +77,28 @@ model_list:
       top_k:
         default: 40
         allow_override: false
+- model_name: GLM-4.7:oc
+  model_params:
+    api_base: https://api.z.ai/api/anthropic/v1
+    model: GLM-4.7
+    request_timeout: 540
+    api_type: anthropic
+    supports_reasoning: true
+    parameters:
+      temperature:
+        default: 1
+        allow_override: false
+      top_p:
+        default: 0.95
+        allow_override: false
+      top_k:
+        default: 40
+        allow_override: false
+      effort:
+        default: high
+        allow_override: false
+    api_key: ${GLM_API_KEY}
+  protected: true
 - model_name: MiniMax-M2-nano
   protected: true
   model_params:
@@ -103,7 +125,6 @@ model_list:
         template_path: configs/jinja_templates/k2thinking.jinja
         parse_thinking: false
         parse_tool_calls: true
-        # tool_arg_format auto-detected from template (json for K2)
   protected: true
 router_settings:
   num_retries: 1
@@ -112,7 +133,7 @@ proxy_settings:
     host: 127.0.0.1
     port: 7979
   enable_responses_endpoint: false
-  enable_messages_endpoint: false
+  enable_messages_endpoint: true
   logging:
     log_parsed_response: true
     log_parsed_stream: true
@@ -125,12 +146,11 @@ proxy_settings:
       paths:
       - /chat/completions
       parse_tags:
-        # template_path: configs/jinja_templates/template_example.jinja  # Optional: auto-detect from template
         parse_thinking: true
         parse_tool_calls: true
         think_tag: think
-        tool_arg_format: xml       # xml | json (for K2-style JSON arguments)
-        tool_tag: tool_call        # For xml format
+        tool_arg_format: xml
+        tool_tag: tool_call
       swap_reasoning_content:
         mode: reasoning_to_content
         think_tag: think
@@ -144,32 +164,6 @@ proxy_settings:
     downstream:
       enabled: false
       request: []
-
-# App Key Authentication (optional)
-# Uncomment and configure to require API keys for proxy access
-# app_keys:
-#   enabled: false                    # Set to true to enable app key authentication
-#   header_name: x-api-key            # Header name for API key (also accepts Authorization: Bearer)
-#   allow_unauthenticated: false      # Allow requests without a key when enabled
-#   keys:
-#     - key_id: "app-dev-001"
-#       secret: "${APP_KEY_DEV}"      # Use env var for secrets
-#       name: "Development"
-#       description: "Development team access"
-#       enabled: true
-#       # FUTURE (not yet implemented):
-#       # rate_limits:
-#       #   requests_per_minute: 100
-#       #   tokens_per_day: 1000000
-#       # priority: normal            # low, normal, high, critical
-#
-# Per-model access control (add to model_list entries):
-#   access_control:
-#     allowed_keys: all               # "all" (default), "none", or list of key_ids
-#     # allowed_keys:
-#     #   - app-prod-001
-#     #   - app-dev-001
-
 forwarder_settings:
   listen:
     host: 0.0.0.0
@@ -191,11 +185,5 @@ database:
   connection:
     sqlite:
       path: logs/yaLLM.db
-    #postgres:
-    #  host: localhost
-    #  port: 5432
-    #  database: yallm_proxy
-    #  user: ${DB_USER}
-    #  password: ${DB_PASSWORD}
   pool_size: 5
   max_overflow: 10
