@@ -839,6 +839,47 @@
             background: var(--bg-hover);
         }
 
+        /* Download Controls */
+        .download-controls {
+            display: flex;
+            gap: 8px;
+        }
+
+        .download-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            border: 1px solid var(--border);
+            background: var(--bg-primary);
+            color: var(--ink-primary);
+            cursor: pointer;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-family: inherit;
+            transition: background 0.15s, color 0.15s;
+        }
+
+        .download-btn:hover {
+            background: var(--bg-hover);
+            color: var(--accent-primary);
+        }
+
+        .download-btn:active {
+            transform: translateY(1px);
+        }
+
+        .download-btn svg {
+            width: 14px;
+            height: 14px;
+        }
+
+        .download-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
         /* Expand/Collapse All */
         .expand-controls {
             display: flex;

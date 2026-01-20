@@ -20,6 +20,9 @@ let state = {
     loading: false
 };
 
+// Current log data for download functionality
+let currentLogData = null;
+
 const formatDate = (isoString) => {
     if (!isoString) return "--";
     const date = new Date(isoString);
@@ -250,6 +253,7 @@ const showLogDetail = async (logId) => {
         }
 
         const log = await response.json();
+        currentLogData = log;  // Store for download functionality
         title.textContent = `Request Log - ${formatDate(log.request_time)}`;
 
         let html = "";
@@ -361,6 +365,7 @@ const showLogDetail = async (logId) => {
         initTreeToggles(body);
         initDetailSearch();
         initNavigation();
+        initDownloadButtons();
     } catch (error) {
         console.error("Failed to fetch log details:", error);
         body.innerHTML = `<p style="color: var(--error-ink)">Error loading log details: ${escapeHtml(error.message)}</p>`;
@@ -384,6 +389,125 @@ const escapeHtml = (text) => {
     const div = document.createElement("div");
     div.textContent = text;
     return div.innerHTML;
+};
+
+// ============================================================================
+// Download Functionality
+// ============================================================================
+
+/**
+ * Trigger a JSON file download in the browser.
+ * @param {Object|string} data - The data to download (object will be stringified)
+ * @param {string} filename - The filename for the download
+ */
+const downloadJson = (data, filename) => {
+    let content;
+    let mimeType = 'application/json';
+
+    if (typeof data === 'string') {
+        // For full_response which is already a string
+        // Try to parse and re-stringify for consistent formatting
+        try {
+            const parsed = JSON.parse(data);
+            content = JSON.stringify(parsed, null, 2);
+        } catch {
+            // If not valid JSON, download as plain text
+            content = data;
+            mimeType = 'text/plain';
+        }
+    } else if (data && typeof data === 'object') {
+        content = JSON.stringify(data, null, 2);
+    } else {
+        console.error('No data to download');
+        return;
+    }
+
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    // Clean up the URL object
+    URL.revokeObjectURL(url);
+};
+
+/**
+ * Generate a safe filename for downloads.
+ * @param {string} logId - The log UUID
+ * @param {string} type - 'request' or 'response'
+ * @param {string} requestTime - ISO timestamp from the log
+ * @returns {string} The formatted filename
+ */
+const getDownloadFilename = (logId, type, requestTime) => {
+    // Format timestamp for filename (replace colons with dashes)
+    let timestamp = '';
+    if (requestTime) {
+        timestamp = '_' + requestTime.replace(/[:.]/g, '-').replace('Z', '');
+    }
+    return `${logId}_${type}${timestamp}.json`;
+};
+
+/**
+ * Download the request body (input) for the current log.
+ */
+const downloadRequestBody = () => {
+    if (!currentLogData) {
+        console.error('No log data available for download');
+        return;
+    }
+
+    const { id, body, request_time } = currentLogData;
+
+    if (!body) {
+        alert('No request body available for this log.');
+        return;
+    }
+
+    const filename = getDownloadFilename(id, 'request', request_time);
+    downloadJson(body, filename);
+};
+
+/**
+ * Download the full response (output) for the current log.
+ */
+const downloadFullResponse = () => {
+    if (!currentLogData) {
+        console.error('No log data available for download');
+        return;
+    }
+
+    const { id, full_response, request_time } = currentLogData;
+
+    if (!full_response) {
+        alert('No response data available for this log.');
+        return;
+    }
+
+    const filename = getDownloadFilename(id, 'response', request_time);
+    downloadJson(full_response, filename);
+};
+
+/**
+ * Initialize download button event listeners.
+ */
+const initDownloadButtons = () => {
+    const downloadRequestBtn = document.getElementById('downloadRequest');
+    const downloadResponseBtn = document.getElementById('downloadResponse');
+
+    if (downloadRequestBtn) {
+        downloadRequestBtn.disabled = !currentLogData?.body;
+        downloadRequestBtn.addEventListener('click', downloadRequestBody);
+    }
+
+    if (downloadResponseBtn) {
+        downloadResponseBtn.disabled = !currentLogData?.full_response;
+        downloadResponseBtn.addEventListener('click', downloadFullResponse);
+    }
 };
 
 // ============================================================================
@@ -897,6 +1021,24 @@ const renderDetailToolbar = () => {
             <span class="search-count" id="searchCount"></span>
             <button class="search-nav-btn" id="searchPrev" title="Previous (Shift+Enter)">↑</button>
             <button class="search-nav-btn" id="searchNext" title="Next (Enter)">↓</button>
+        </div>
+        <div class="download-controls">
+            <button class="download-btn" id="downloadRequest" title="Download raw request body">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                    <polyline points="7 10 12 15 17 10"/>
+                    <line x1="12" y1="15" x2="12" y2="3"/>
+                </svg>
+                Request
+            </button>
+            <button class="download-btn" id="downloadResponse" title="Download raw response">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                    <polyline points="7 10 12 15 17 10"/>
+                    <line x1="12" y1="15" x2="12" y2="3"/>
+                </svg>
+                Response
+            </button>
         </div>
         <div class="expand-controls">
             <button class="expand-btn" id="expandAll" title="Expand all sections">Expand All</button>
