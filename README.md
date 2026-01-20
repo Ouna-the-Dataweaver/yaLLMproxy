@@ -31,6 +31,7 @@ Install `task` on your platform:
 **Linux/macOS:**
 ```bash
 sh -c "$(curl -sSL https://taskfile.dev/install.sh)"
+export PATH="$PWD/bin:$PATH"
 ```
 
 **Windows (winget):**

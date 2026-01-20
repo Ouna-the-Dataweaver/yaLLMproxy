@@ -126,11 +126,67 @@ model_list:
         parse_thinking: false
         parse_tool_calls: true
   protected: true
+- model_name: glm_local
+  model_params:
+    api_base: http://nid-sc-28:16667/v1
+    model: GLM_air_fp8
+    request_timeout: 180
+    api_type: openai
+    supports_reasoning: true
+  protected: false
+- model_name: glm_local_AWQ
+  model_params:
+    api_base: http://nid-sc-28:16161/v1
+    model: GLM_air_awq
+    request_timeout: 30
+    api_type: openai
+    supports_reasoning: true
+    parameters:
+      tool_choice:
+        default: none
+        allow_override: false
+  modules:
+    upstream:
+      enabled: true
+      response:
+      - parse_tags
+      parse_tags:
+        template_path: configs/jinja_templates/glm_4.5_air.jinja
+        think_tag: think
+        tool_arg_format: xml
+        tool_tag: tool_call
+        parse_thinking: true
+        parse_tool_calls: true
+  protected: false
+- model_name: giga-2-pro
+  model_params:
+    api_base: http://nid-sc-29:9996/v1
+    model: GigaChat-2-Pro
+    request_timeout: 60
+    api_type: openai
+    supports_reasoning: false
+    parameters:
+      temperature:
+        default: 0.85
+        allow_override: true
+  protected: false
+- model_name: giga-3-ultra
+  model_params:
+    api_base: http://nid-sc-29:9996/v1
+    model: GigaChat-3-Ultra
+    request_timeout: 60
+    api_type: openai
+    supports_reasoning: false
+    parameters:
+      temperature:
+        default: 0.85
+        allow_override: true
+  protected: false
 router_settings:
   num_retries: 1
 proxy_settings:
   server:
-    host: 127.0.0.1
+    host: 0.0.0.0
     port: 7979
   enable_responses_endpoint: false
   enable_messages_endpoint: true
