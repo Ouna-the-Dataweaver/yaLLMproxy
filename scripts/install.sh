@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Directory containing this script (so we can create .venv next to it)
+# Directory containing this script
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# Allow overriding VENV_PATH, default to .venv beside script
-VENV_PATH="${VENV_PATH:-$SCRIPT_DIR/.venv}"
+# Project root is the parent of scripts/
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+# Allow overriding VENV_PATH, default to .venv in project root
+VENV_PATH="${VENV_PATH:-$PROJECT_ROOT/.venv}"
 
 if ! command -v uv >/dev/null 2>&1; then
   echo "[ERROR] uv is required but was not found in PATH." >&2
@@ -25,7 +27,7 @@ PYTHON_BIN="$VENV_PATH/bin/python"
 # Install dependencies into the venv using uv sync
 echo "[INFO] Syncing proxy dependencies"
 uv sync \
-  --project "$SCRIPT_DIR" \
+  --project "$PROJECT_ROOT" \
   --python "$PYTHON_BIN"
 
 cat <<'MSG'

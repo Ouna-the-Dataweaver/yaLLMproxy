@@ -141,13 +141,22 @@ yaLLMproxy/
 │       ├── usage.css              # Usage page styles
 │       └── usage.js               # Usage page JavaScript
 │
-├── scripts/                       # Utility scripts
+├── scripts/                       # Utility and runner scripts
 │   ├── db_clean.py                # Clean database logs
+│   ├── extract_model_output.py    # Model output extraction utility
 │   ├── inspect_template.py        # Inspect Jinja templates for parsing
+│   ├── install.bat                # Installation script (Windows)
+│   ├── install.sh                 # Installation script (Unix)
 │   ├── manual_test.py             # Manual testing utilities
 │   ├── plan/                      # Planning and documentation
 │   ├── print_run_config.py        # Print resolved configuration
 │   ├── replay_request.py          # Replay logged requests
+│   ├── run.bat                    # Run script (Windows)
+│   ├── run.sh                     # Run script (Unix)
+│   ├── run_forwarder.bat          # Run TCP forwarder script (Windows)
+│   ├── run_forwarder.sh           # Run TCP forwarder script (Unix)
+│   ├── run_http_forwarder.bat     # Run HTTP forwarder script (Windows)
+│   ├── run_http_forwarder.sh      # Run HTTP forwarder script (Unix)
 │   ├── simulate_proxy.py          # Simulate proxy behavior
 │   └── tcp_forward.py             # TCP forwarding script
 │
@@ -194,18 +203,9 @@ yaLLMproxy/
 │
 ├── __init__.py                    # Package initialization
 ├── AGENTS.md                      # Agent-specific rules
-├── extract_model_output.py        # Model output extraction utility
-├── install.bat                    # Installation script (Windows)
-├── install.sh                     # Installation script (Unix)
 ├── LICENSE                        # MIT License
 ├── pyproject.toml                 # Project metadata & dependencies
 ├── README.md                      # Quick start guide
-├── run.bat                        # Run script (Windows)
-├── run.sh                         # Run script (Unix)
-├── run_forwarder.bat              # Run TCP forwarder script (Windows)
-├── run_forwarder.sh               # Run TCP forwarder script (Unix)
-├── run_http_forwarder.bat         # Run HTTP forwarder script (Windows)
-├── run_http_forwarder.sh          # Run HTTP forwarder script (Unix)
 ├── Taskfile.yml                   # Task automation (run, test, etc.)
 └── uv.lock                        # UV lock file for dependency management
 ```

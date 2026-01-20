@@ -9,41 +9,41 @@ tasks:
   run:
     desc: Run proxy server (uses run script)
     cmds:
-      - cmd: cmd /c "{{.TASKFILE_DIR}}\\run.bat"
+      - cmd: cmd /c "{{.TASKFILE_DIR}}\\scripts\\run.bat"
         platforms: [windows]
-      - cmd: bash ./run.sh
+      - cmd: bash ./scripts/run.sh
         platforms: [linux, darwin]
 
   run:reload:
     desc: Run proxy server with autoreload
     cmds:
-      - cmd: cmd /c call "{{.TASKFILE_DIR}}\\run.bat" --reload
+      - cmd: cmd /c call "{{.TASKFILE_DIR}}\\scripts\\run.bat" --reload
         platforms: [windows]
-      - cmd: bash ./run.sh --reload
+      - cmd: bash ./scripts/run.sh --reload
         platforms: [linux, darwin]
 
   forwarder:
     desc: Run TCP forwarder (separate venv)
     cmds:
-      - cmd: cmd /c "{{.TASKFILE_DIR}}\\run_forwarder.bat"
+      - cmd: cmd /c "{{.TASKFILE_DIR}}\\scripts\\run_forwarder.bat"
         platforms: [windows]
-      - cmd: bash ./run_forwarder.sh
+      - cmd: bash ./scripts/run_forwarder.sh
         platforms: [linux, darwin]
 
   forwarder:http:
     desc: Run HTTP forwarder (reverse proxy)
     cmds:
-      - cmd: cmd /c "{{.TASKFILE_DIR}}\\run_http_forwarder.bat"
+      - cmd: cmd /c "{{.TASKFILE_DIR}}\\scripts\\run_http_forwarder.bat"
         platforms: [windows]
-      - cmd: bash ./run_http_forwarder.sh
+      - cmd: bash ./scripts/run_http_forwarder.sh
         platforms: [linux, darwin]
 
   install:
     desc: Create venv + sync dependencies (uses install script)
     cmds:
-      - cmd: cmd /c "{{.TASKFILE_DIR}}\\install.bat"
+      - cmd: cmd /c "{{.TASKFILE_DIR}}\\scripts\\install.bat"
         platforms: [windows]
-      - cmd: bash ./install.sh
+      - cmd: bash ./scripts/install.sh
         platforms: [linux, darwin]
 
   install:dev:

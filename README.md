@@ -66,12 +66,12 @@ uv run python -m src.main
 
 ```bash
 # Linux/macOS
-./install.sh
-./run.sh
+./scripts/install.sh
+./scripts/run.sh
 
 # Windows
-install.bat
-run.bat
+scripts\install.bat
+scripts\run.bat
 
 # Run with autoreload (development)
 task run:reload

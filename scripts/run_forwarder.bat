@@ -4,11 +4,13 @@ setlocal
 REM Directory containing this script (strip trailing backslash to avoid quote escaping)
 set "SCRIPT_DIR=%~dp0"
 if "%SCRIPT_DIR:~-1%"=="\" set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
+REM Project root is the parent of scripts/
+for %%i in ("%SCRIPT_DIR%\..") do set "PROJECT_ROOT=%%~fi"
 
 REM Forwarder venv
-set "FWD_VENV=%SCRIPT_DIR%\.venv_fwd"
+set "FWD_VENV=%PROJECT_ROOT%\.venv_fwd"
 set "FWD_PY=%FWD_VENV%\Scripts\python.exe"
-set "BASE_PY=%SCRIPT_DIR%\.venv\Scripts\python.exe"
+set "BASE_PY=%PROJECT_ROOT%\.venv\Scripts\python.exe"
 
 if exist "%FWD_PY%" goto venv_ok
 if not exist "%BASE_PY%" goto no_base_venv
@@ -23,8 +25,8 @@ if /i "%FORWARD_DEBUG%"=="1" echo [DEBUG] FWD_PY=%FWD_PY%
 
 REM Load config defaults (CFG_*)
 set "CFG_TMP=%TEMP%\yallmp_forwarder_cfg_%RANDOM%%RANDOM%.txt"
-if /i "%FORWARD_DEBUG%"=="1" echo [DEBUG] Reading config via "%BASE_PY%" "%SCRIPT_DIR%\scripts\print_run_config.py"
-"%BASE_PY%" "%SCRIPT_DIR%\scripts\print_run_config.py" > "%CFG_TMP%" 2> "%CFG_TMP%.err"
+if /i "%FORWARD_DEBUG%"=="1" echo [DEBUG] Reading config via "%BASE_PY%" "%SCRIPT_DIR%\print_run_config.py"
+"%BASE_PY%" "%SCRIPT_DIR%\print_run_config.py" > "%CFG_TMP%" 2> "%CFG_TMP%.err"
 set "CFG_EXIT=%ERRORLEVEL%"
 if not "%CFG_EXIT%"=="0" echo [WARN] Config helper exit code %CFG_EXIT%
 if exist "%CFG_TMP%.err" (
@@ -73,7 +75,7 @@ if "%IDLE_LOG%"=="" set "IDLE_LOG=0"
 echo [INFO] Forwarding %LISTEN_HOST%:%LISTEN_PORT% ^> %TARGET_HOST%:%TARGET_PORT%
 echo [INFO] Press Ctrl+C to stop (then Y if prompted).
 set "PYTHONUNBUFFERED=1"
-"%FWD_PY%" "%SCRIPT_DIR%\scripts\tcp_forward.py" --listen-host "%LISTEN_HOST%" --listen-port "%LISTEN_PORT%" --target-host "%TARGET_HOST%" --target-port "%TARGET_PORT%" --bufsize "%BUF_SIZE%" --log-level "%LOG_LEVEL%" --idle-log-seconds "%IDLE_LOG%"
+"%FWD_PY%" "%SCRIPT_DIR%\tcp_forward.py" --listen-host "%LISTEN_HOST%" --listen-port "%LISTEN_PORT%" --target-host "%TARGET_HOST%" --target-port "%TARGET_PORT%" --bufsize "%BUF_SIZE%" --log-level "%LOG_LEVEL%" --idle-log-seconds "%IDLE_LOG%"
 exit /b 0
 
 :no_base_venv

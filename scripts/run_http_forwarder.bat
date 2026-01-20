@@ -4,11 +4,13 @@ setlocal enabledelayedexpansion
 REM Directory containing this script (strip trailing backslash to avoid quote escaping)
 set "SCRIPT_DIR=%~dp0"
 if "%SCRIPT_DIR:~-1%"=="\" set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
+REM Project root is the parent of scripts/
+for %%i in ("%SCRIPT_DIR%\..") do set "PROJECT_ROOT=%%~fi"
 
 REM Forwarder venv
-set "FWD_VENV=%SCRIPT_DIR%\.venv_fwd"
+set "FWD_VENV=%PROJECT_ROOT%\.venv_fwd"
 set "FWD_PY=%FWD_VENV%\Scripts\python.exe"
-set "BASE_PY=%SCRIPT_DIR%\.venv\Scripts\python.exe"
+set "BASE_PY=%PROJECT_ROOT%\.venv\Scripts\python.exe"
 
 if exist "%FWD_PY%" goto venv_ok
 if not exist "%BASE_PY%" goto no_base_venv
@@ -40,7 +42,7 @@ set "TARGET_HOST="
 set "TARGET_PORT="
 set "LOG_LEVEL="
 
-for /f "usebackq delims=" %%A in (`"%FWD_PY%" "%SCRIPT_DIR%\scripts\print_run_config.py" ^| findstr /b CFG_`) do set "%%A"
+for /f "usebackq delims=" %%A in (`"%FWD_PY%" "%SCRIPT_DIR%\print_run_config.py" ^| findstr /b CFG_`) do set "%%A"
 if not "%CFG_HTTP_FORWARD_LISTEN_HOST%"=="" set "HOST=%CFG_HTTP_FORWARD_LISTEN_HOST%"
 if not "%CFG_HTTP_FORWARD_LISTEN_PORT%"=="" set "PORT=%CFG_HTTP_FORWARD_LISTEN_PORT%"
 if not "%CFG_HTTP_FORWARD_TARGET_SCHEME%"=="" set "TARGET_SCHEME=%CFG_HTTP_FORWARD_TARGET_SCHEME%"
@@ -70,7 +72,7 @@ set "HTTP_FORWARD_LISTEN_PORT=%PORT%"
 set "HTTP_FORWARD_TARGET_SCHEME=%TARGET_SCHEME%"
 set "HTTP_FORWARD_TARGET_HOST=%TARGET_HOST%"
 set "HTTP_FORWARD_TARGET_PORT=%TARGET_PORT%"
-"%FWD_PY%" -m uvicorn src.http_forwarder:app --host %HOST% --port %PORT% --log-level %LOG_LEVEL%
+cd /d "%PROJECT_ROOT%" && "%FWD_PY%" -m uvicorn src.http_forwarder:app --host %HOST% --port %PORT% --log-level %LOG_LEVEL%
 exit /b 0
 
 :no_base_venv

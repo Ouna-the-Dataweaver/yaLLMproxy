@@ -2,11 +2,13 @@
 
 # Directory containing this script
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Project root is the parent of scripts/
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 # Forwarder venv
-FWD_VENV="$SCRIPT_DIR/.venv_fwd"
+FWD_VENV="$PROJECT_ROOT/.venv_fwd"
 FWD_PY="$FWD_VENV/bin/python"
-BASE_PY="$SCRIPT_DIR/.venv/bin/python"
+BASE_PY="$PROJECT_ROOT/.venv/bin/python"
 
 if [[ -x "$FWD_PY" ]]; then
   :
@@ -54,7 +56,7 @@ while IFS= read -r line; do
       export "$line"
       ;;
   esac
-done < <("$FWD_PY" "$SCRIPT_DIR/scripts/print_run_config.py" | grep '^CFG_')
+done < <("$FWD_PY" "$SCRIPT_DIR/print_run_config.py" | grep '^CFG_')
 
 if [[ -n "${CFG_HTTP_FORWARD_LISTEN_HOST:-}" ]]; then
   HOST="$CFG_HTTP_FORWARD_LISTEN_HOST"
@@ -120,4 +122,4 @@ export HTTP_FORWARD_TARGET_SCHEME="$TARGET_SCHEME"
 export HTTP_FORWARD_TARGET_HOST="$TARGET_HOST"
 export HTTP_FORWARD_TARGET_PORT="$TARGET_PORT"
 
-"$FWD_PY" -m uvicorn src.http_forwarder:app --host "$HOST" --port "$PORT" --log-level "$LOG_LEVEL"
+cd "$PROJECT_ROOT" && "$FWD_PY" -m uvicorn src.http_forwarder:app --host "$HOST" --port "$PORT" --log-level "$LOG_LEVEL"

@@ -4,6 +4,8 @@ setlocal enabledelayedexpansion
 REM Directory containing this script (strip trailing backslash to avoid quote escaping)
 set "SCRIPT_DIR=%~dp0"
 if "%SCRIPT_DIR:~-1%"=="\" set "SCRIPT_DIR=%SCRIPT_DIR:~0,-1%"
+REM Project root is the parent of scripts/
+for %%i in ("%SCRIPT_DIR%\..") do set "PROJECT_ROOT=%%~fi"
 
 REM Configuration (override with config, then YALLMP_HOST / YALLMP_PORT)
 set "HOST=127.0.0.1"
@@ -17,7 +19,7 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-for /f "usebackq delims=" %%A in (`uv run --project "%SCRIPT_DIR%" python "%SCRIPT_DIR%\scripts\print_run_config.py" ^| findstr /b CFG_`) do set "%%A"
+for /f "usebackq delims=" %%A in (`uv run --project "%PROJECT_ROOT%" python "%SCRIPT_DIR%\print_run_config.py" ^| findstr /b CFG_`) do set "%%A"
 if not "%CFG_PROXY_HOST%"=="" set "HOST=%CFG_PROXY_HOST%"
 if not "%CFG_PROXY_PORT%"=="" set "PORT=%CFG_PROXY_PORT%"
 
@@ -35,4 +37,4 @@ goto parse_args
 
 REM Start the proxy server
 echo [INFO] Starting proxy server on http://%HOST%:%PORT%
-uv run --project "%SCRIPT_DIR%" uvicorn src.main:app --host %HOST% --port %PORT% %RELOAD_ARG%
+uv run --project "%PROJECT_ROOT%" uvicorn src.main:app --host %HOST% --port %PORT% %RELOAD_ARG%

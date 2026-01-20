@@ -2,6 +2,8 @@
 
 # Get the directory containing this script
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Project root is the parent of scripts/
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 # Configuration (override with config, then YALLMP_HOST / YALLMP_PORT)
 HOST="127.0.0.1"
@@ -18,7 +20,7 @@ while IFS= read -r line; do
     case "$line" in
         CFG_*) export "$line" ;;
     esac
-done < <(uv run --project "$SCRIPT_DIR" python "$SCRIPT_DIR/scripts/print_run_config.py")
+done < <(uv run --project "$PROJECT_ROOT" python "$SCRIPT_DIR/print_run_config.py")
 
 if [[ -n "${CFG_PROXY_HOST:-}" ]]; then
     HOST="$CFG_PROXY_HOST"
@@ -42,4 +44,4 @@ done
 
 # Start the proxy server
 echo "[INFO] Starting proxy server on http://$HOST:$PORT"
-uv run --project "$SCRIPT_DIR" uvicorn src.main:app --host "$HOST" --port "$PORT" "${RELOAD_ARGS[@]}"
+uv run --project "$PROJECT_ROOT" uvicorn src.main:app --host "$HOST" --port "$PORT" "${RELOAD_ARGS[@]}"

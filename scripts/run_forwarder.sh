@@ -2,11 +2,13 @@
 
 # Directory containing this script
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Project root is the parent of scripts/
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 # Forwarder venv
-FWD_VENV="$SCRIPT_DIR/.venv_fwd"
+FWD_VENV="$PROJECT_ROOT/.venv_fwd"
 FWD_PY="$FWD_VENV/bin/python"
-BASE_PY="$SCRIPT_DIR/.venv/bin/python"
+BASE_PY="$PROJECT_ROOT/.venv/bin/python"
 
 if [[ -x "$FWD_PY" ]]; then
   :
@@ -39,9 +41,9 @@ else
 fi
 
 if [[ "${FORWARD_DEBUG:-}" == "1" ]]; then
-  echo "[DEBUG] Reading config via \"$BASE_PY\" \"$SCRIPT_DIR/scripts/print_run_config.py\""
+  echo "[DEBUG] Reading config via \"$BASE_PY\" \"$SCRIPT_DIR/print_run_config.py\""
 fi
-"$BASE_PY" "$SCRIPT_DIR/scripts/print_run_config.py" > "$CFG_TMP" 2> "$CFG_TMP.err"
+"$BASE_PY" "$SCRIPT_DIR/print_run_config.py" > "$CFG_TMP" 2> "$CFG_TMP.err"
 CFG_EXIT=$?
 if [[ "$CFG_EXIT" != "0" ]]; then
   echo "[WARN] Config helper exit code $CFG_EXIT"
@@ -140,7 +142,7 @@ fi
 echo "[INFO] Forwarding $LISTEN_HOST:$LISTEN_PORT -> $TARGET_HOST:$TARGET_PORT"
 echo "[INFO] Press Ctrl+C to stop."
 export PYTHONUNBUFFERED=1
-"$FWD_PY" "$SCRIPT_DIR/scripts/tcp_forward.py" \
+"$FWD_PY" "$SCRIPT_DIR/tcp_forward.py" \
   --listen-host "$LISTEN_HOST" \
   --listen-port "$LISTEN_PORT" \
   --target-host "$TARGET_HOST" \
