@@ -107,12 +107,12 @@ async def get_full_config() -> dict:
 
 async def update_config(request: Request, new_config: dict) -> dict:
     """Update the full configuration.
-    
+
     PUT /admin/config
-    
+
     Args:
         new_config: The new configuration to save.
-    
+
     Returns:
         Success status.
     """
@@ -127,6 +127,11 @@ async def update_config(request: Request, new_config: dict) -> dict:
                 detail="Admin password required to modify protected models",
             )
         CONFIG_STORE.save(new_config)
+
+        # Also reload the router to apply changes immediately
+        router = get_router()
+        await router.reload_config(CONFIG_STORE.get_runtime_config())
+
         logger.info("Configuration updated at %s", CONFIG_STORE.config_path)
         return {"status": "ok", "message": "Configuration saved successfully"}
     except Exception as exc:

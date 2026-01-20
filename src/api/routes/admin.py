@@ -9,6 +9,7 @@ from fastapi import HTTPException, Request
 
 from ...config_store import CONFIG_STORE, _normalize_protected
 from ...core import Backend, extract_api_type, extract_target_model
+from ...core.backend import ParameterConfig, _parse_bool
 from ...core.registry import get_router
 
 logger = logging.getLogger("yallmp-proxy")
@@ -115,6 +116,19 @@ def _backend_from_runtime_payload(
         anthropic_version = str(anthropic_version).strip() or None
     fallbacks = _normalize_fallbacks(payload.get("fallbacks"))
 
+    # Parse parameter overrides
+    param_configs: dict[str, ParameterConfig] = {}
+    raw_params = payload.get("parameters")
+    if isinstance(raw_params, dict):
+        for param_name, param_config in raw_params.items():
+            if isinstance(param_config, dict):
+                default = param_config.get("default")
+                allow_override = _parse_bool(param_config.get("allow_override", True))
+                param_configs[param_name] = ParameterConfig(
+                    default=default,
+                    allow_override=allow_override,
+                )
+
     backend = Backend(
         name=model_name,
         base_url=api_base,
@@ -125,6 +139,7 @@ def _backend_from_runtime_payload(
         anthropic_version=anthropic_version,
         supports_reasoning=supports_reasoning,
         editable=True,
+        parameters=param_configs,
     )
     model_entry = _build_model_entry(
         payload,
