@@ -25,7 +25,12 @@ let currentLogData = null;
 
 const formatDate = (isoString) => {
     if (!isoString) return "--";
-    const date = new Date(isoString);
+    // Ensure timestamp is treated as UTC if no timezone specified
+    let ts = isoString;
+    if (!ts.endsWith('Z') && !ts.includes('+') && !ts.includes('-', 10)) {
+        ts = ts.replace(' ', 'T') + 'Z';
+    }
+    const date = new Date(ts);
     const year = date.getFullYear();
     const month = String(date.getMonth() + 1).padStart(2, '0');
     const day = String(date.getDate()).padStart(2, '0');
