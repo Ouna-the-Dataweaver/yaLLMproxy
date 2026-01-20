@@ -15,16 +15,6 @@ yaLLMproxy/
 │   ├── model_tree.md             # Model inheritance tree documentation
 │   └── project-structure.md       # This file
 │
-├── alembic/                       # Database migration scripts
-│   ├── env.py                     # Alembic environment configuration
-│   ├── README                     # Alembic usage documentation
-│   ├── script.py.mako             # Migration script template
-│   └── versions/                  # Database migration versions
-│       ├── 001_initial_migration.py
-│       └── 002_enhance_request_logs.py
-│
-├── alembic.ini                    # Alembic configuration file
-│
 ├── configs/                       # Configuration files
 │   ├── config.yaml                # Main configuration file
 │   └── jinja_templates/           # Jinja chat templates
@@ -204,7 +194,6 @@ yaLLMproxy/
 │
 ├── __init__.py                    # Package initialization
 ├── AGENTS.md                      # Agent-specific rules
-├── alembic.ini                    # Alembic configuration
 ├── extract_model_output.py        # Model output extraction utility
 ├── install.bat                    # Installation script (Windows)
 ├── install.sh                     # Installation script (Unix)

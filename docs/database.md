@@ -126,36 +126,6 @@ Stores response objects for the Responses API with conversation chaining support
 - `ix_response_states_model_created`: Composite index on model and created_at
 - `ix_response_states_previous`: Index on previous_response_id for conversation chain queries
 
-## Database Tasks
-
-### Running Migrations
-
-```bash
-# Apply all pending migrations
-task db:migrate
-
-# Check current revision
-task db:current
-
-# Show migration history
-task db:history
-```
-
-### Creating Migrations
-
-When you change models, create a new migration:
-
-```bash
-uv run alembic revision --autogenerate -m "your migration description"
-```
-
-### Rolling Back
-
-```bash
-# Rollback last migration
-task db:rollback
-```
-
 ## Switching Backends
 
 ### SQLite to PostgreSQL
@@ -179,10 +149,7 @@ task db:rollback
    DB_PASSWORD=your_password
    ```
 
-3. Run migrations to create tables in PostgreSQL:
-   ```bash
-   task db:migrate
-   ```
+3. Start the application - tables will be created automatically on first run.
 
 ### PostgreSQL to SQLite
 

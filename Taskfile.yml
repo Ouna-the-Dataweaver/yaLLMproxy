@@ -75,41 +75,6 @@ tasks:
       - cmd: bash -c 'if [ -f "{{.TASKFILE_DIR}}/logs/yaLLM.db" ]; then mv "{{.TASKFILE_DIR}}/logs/yaLLM.db" "{{.TASKFILE_DIR}}/logs/yaLLM.db.bak"; fi && rm -rf "{{.TASKFILE_DIR}}/logs" && mkdir -p "{{.TASKFILE_DIR}}/logs" && if [ -f "{{.TASKFILE_DIR}}/logs/yaLLM.db.bak" ]; then mv "{{.TASKFILE_DIR}}/logs/yaLLM.db.bak" "{{.TASKFILE_DIR}}/logs/yaLLM.db"; fi'
         platforms: [linux, darwin]
 
-  db:migrate:
-    desc: Run database migrations
-    cmds:
-      - uv run alembic upgrade head
-
-  db:rollback:
-    desc: Rollback last database migration
-    cmds:
-      - uv run alembic downgrade -1
-
-  db:revision:
-    desc: Create new migration (provide message as argument)
-    cmds:
-      - uv run alembic revision --autogenerate -m "{{.CLI_ARGS}}"
-
-  db:current:
-    desc: Show current database revision
-    cmds:
-      - uv run alembic current
-
-  db:history:
-    desc: Show migration history
-    cmds:
-      - uv run alembic history
-
-  db:upgrade:
-    desc: Upgrade database to latest revision
-    cmds:
-      - uv run alembic upgrade head
-
-  db:heads:
-    desc: Show current heads
-    cmds:
-      - uv run alembic heads
-
   db-clean:
     desc: Clean request/error logs from database
     cmds:
