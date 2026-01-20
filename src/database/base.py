@@ -1,5 +1,6 @@
 """Base database class and connection management."""
 
+import json
 import logging
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
@@ -68,6 +69,7 @@ class DatabaseBase(ABC):
             connection_string,
             **pool_options,
             echo=False,  # Set to True for debugging SQL
+            json_serializer=lambda obj: json.dumps(obj, ensure_ascii=False),
         )
 
         # Create session factory

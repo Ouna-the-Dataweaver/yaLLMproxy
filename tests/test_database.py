@@ -371,6 +371,308 @@ class TestJSONBOperations:
             assert retrieved.usage_stats["total_tokens"] == 450
 
 
+class TestUTF8JSONEncoding:
+    """Tests for UTF-8 encoding preservation in JSON columns.
+
+    These tests ensure that non-ASCII characters (Cyrillic, Chinese, emoji, etc.)
+    are correctly stored and retrieved from JSON columns without corruption.
+
+    Regression tests for: SQLAlchemy json_serializer ensure_ascii=False fix.
+    """
+
+    def test_cyrillic_in_body(self, sqlite_config: dict[str, Any]) -> None:
+        """Test that Cyrillic characters are preserved in body JSON."""
+        db = get_database(sqlite_config)
+        db.initialize()
+
+        # The exact text from the reported bug
+        test_body = {
+            "messages": [
+                {"role": "user", "content": "Расскажи про сервисов задокументиров"},
+                {"role": "assistant", "content": "Привет! Как дела?"},
+            ],
+            "model": "test-model",
+        }
+
+        with db.session() as session:
+            log = RequestLog(
+                request_time=datetime.now(timezone.utc),
+                model_name="test-model",
+                body=test_body,
+            )
+            session.add(log)
+            session.flush()
+            log_id = log.id
+
+        # Retrieve in a new session to ensure data comes from DB
+        with db.session() as session:
+            retrieved = session.get(RequestLog, log_id)
+            assert retrieved is not None
+            assert retrieved.body == test_body
+            # Explicitly check the problematic text
+            assert retrieved.body["messages"][0]["content"] == "Расскажи про сервисов задокументиров"
+            assert retrieved.body["messages"][1]["content"] == "Привет! Как дела?"
+
+    def test_cyrillic_in_stream_chunks(self, sqlite_config: dict[str, Any]) -> None:
+        """Test that Cyrillic characters are preserved in stream_chunks JSON."""
+        db = get_database(sqlite_config)
+        db.initialize()
+
+        # Simulating actual stream chunks like in the bug report
+        test_chunks = [
+            {"type": "content_block_delta", "delta": {"text": " сервис"}},
+            {"type": "content_block_delta", "delta": {"text": "ов"}},
+            {"type": "content_block_delta", "delta": {"text": " зад"}},
+            {"type": "content_block_delta", "delta": {"text": "окумент"}},
+            {"type": "content_block_delta", "delta": {"text": "иров"}},
+        ]
+
+        with db.session() as session:
+            log = RequestLog(
+                request_time=datetime.now(timezone.utc),
+                model_name="test-model",
+                stream_chunks=test_chunks,
+            )
+            session.add(log)
+            session.flush()
+            log_id = log.id
+
+        with db.session() as session:
+            retrieved = session.get(RequestLog, log_id)
+            assert retrieved is not None
+            assert retrieved.stream_chunks == test_chunks
+            # Verify each chunk text is intact
+            assert retrieved.stream_chunks[0]["delta"]["text"] == " сервис"
+            assert retrieved.stream_chunks[1]["delta"]["text"] == "ов"
+
+    def test_chinese_characters(self, sqlite_config: dict[str, Any]) -> None:
+        """Test that Chinese characters are preserved in JSON columns."""
+        db = get_database(sqlite_config)
+        db.initialize()
+
+        test_body = {
+            "messages": [
+                {"role": "user", "content": "你好世界！这是一个测试。"},
+                {"role": "assistant", "content": "我可以帮助你。"},
+            ],
+        }
+
+        with db.session() as session:
+            log = RequestLog(
+                request_time=datetime.now(timezone.utc),
+                model_name="test-model",
+                body=test_body,
+            )
+            session.add(log)
+            session.flush()
+            log_id = log.id
+
+        with db.session() as session:
+            retrieved = session.get(RequestLog, log_id)
+            assert retrieved is not None
+            assert retrieved.body["messages"][0]["content"] == "你好世界！这是一个测试。"
+            assert retrieved.body["messages"][1]["content"] == "我可以帮助你。"
+
+    def test_japanese_characters(self, sqlite_config: dict[str, Any]) -> None:
+        """Test that Japanese characters are preserved in JSON columns."""
+        db = get_database(sqlite_config)
+        db.initialize()
+
+        test_body = {
+            "messages": [
+                {"role": "user", "content": "こんにちは世界！テストです。"},
+                {"role": "assistant", "content": "お手伝いします。"},
+            ],
+        }
+
+        with db.session() as session:
+            log = RequestLog(
+                request_time=datetime.now(timezone.utc),
+                model_name="test-model",
+                body=test_body,
+            )
+            session.add(log)
+            session.flush()
+            log_id = log.id
+
+        with db.session() as session:
+            retrieved = session.get(RequestLog, log_id)
+            assert retrieved is not None
+            assert retrieved.body["messages"][0]["content"] == "こんにちは世界！テストです。"
+
+    def test_emoji_characters(self, sqlite_config: dict[str, Any]) -> None:
+        """Test that emoji characters are preserved in JSON columns."""
+        db = get_database(sqlite_config)
+        db.initialize()
+
+        test_body = {
+            "messages": [
+                {"role": "user", "content": "Hello! 👋 How are you? 😊🎉"},
+                {"role": "assistant", "content": "I'm great! 🚀✨"},
+            ],
+        }
+
+        with db.session() as session:
+            log = RequestLog(
+                request_time=datetime.now(timezone.utc),
+                model_name="test-model",
+                body=test_body,
+            )
+            session.add(log)
+            session.flush()
+            log_id = log.id
+
+        with db.session() as session:
+            retrieved = session.get(RequestLog, log_id)
+            assert retrieved is not None
+            assert retrieved.body["messages"][0]["content"] == "Hello! 👋 How are you? 😊🎉"
+            assert retrieved.body["messages"][1]["content"] == "I'm great! 🚀✨"
+
+    def test_mixed_scripts(self, sqlite_config: dict[str, Any]) -> None:
+        """Test that mixed scripts (Latin, Cyrillic, CJK, emoji) are preserved."""
+        db = get_database(sqlite_config)
+        db.initialize()
+
+        test_body = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Hello Привет 你好 こんにちは 👋 مرحبا שלום",
+                },
+            ],
+            "metadata": {
+                "tags": ["русский", "中文", "日本語", "العربية", "עברית"],
+            },
+        }
+
+        with db.session() as session:
+            log = RequestLog(
+                request_time=datetime.now(timezone.utc),
+                model_name="test-model",
+                body=test_body,
+            )
+            session.add(log)
+            session.flush()
+            log_id = log.id
+
+        with db.session() as session:
+            retrieved = session.get(RequestLog, log_id)
+            assert retrieved is not None
+            assert retrieved.body == test_body
+            # Check specific tags
+            assert "русский" in retrieved.body["metadata"]["tags"]
+            assert "中文" in retrieved.body["metadata"]["tags"]
+
+    def test_utf8_in_full_response(self, sqlite_config: dict[str, Any]) -> None:
+        """Test that UTF-8 characters are preserved in full_response text column."""
+        db = get_database(sqlite_config)
+        db.initialize()
+
+        # Full response with Cyrillic (the actual use case from the bug)
+        test_response = "Документация сервисов задокументирована в следующих файлах..."
+
+        with db.session() as session:
+            log = RequestLog(
+                request_time=datetime.now(timezone.utc),
+                model_name="test-model",
+                full_response=test_response,
+            )
+            session.add(log)
+            session.flush()
+            log_id = log.id
+
+        with db.session() as session:
+            retrieved = session.get(RequestLog, log_id)
+            assert retrieved is not None
+            assert retrieved.full_response == test_response
+
+    def test_utf8_in_errors_json(self, sqlite_config: dict[str, Any]) -> None:
+        """Test that UTF-8 characters are preserved in errors JSON column."""
+        db = get_database(sqlite_config)
+        db.initialize()
+
+        test_errors = [
+            {"type": "validation_error", "message": "Неверный формат данных"},
+            {"type": "api_error", "message": "服务器错误"},
+        ]
+
+        with db.session() as session:
+            log = RequestLog(
+                request_time=datetime.now(timezone.utc),
+                model_name="test-model",
+                errors=test_errors,
+            )
+            session.add(log)
+            session.flush()
+            log_id = log.id
+
+        with db.session() as session:
+            retrieved = session.get(RequestLog, log_id)
+            assert retrieved is not None
+            assert retrieved.errors == test_errors
+            assert retrieved.errors[0]["message"] == "Неверный формат данных"
+            assert retrieved.errors[1]["message"] == "服务器错误"
+
+    def test_utf8_in_modules_log(self, sqlite_config: dict[str, Any]) -> None:
+        """Test that UTF-8 characters are preserved in modules_log JSON column."""
+        db = get_database(sqlite_config)
+        db.initialize()
+
+        test_modules_log = {
+            "translation": {
+                "original": "Translate to Russian",
+                "translated": "Переведите на русский",
+            },
+            "summary": "Модуль обработки завершён успешно",
+        }
+
+        with db.session() as session:
+            log = RequestLog(
+                request_time=datetime.now(timezone.utc),
+                model_name="test-model",
+                modules_log=test_modules_log,
+            )
+            session.add(log)
+            session.flush()
+            log_id = log.id
+
+        with db.session() as session:
+            retrieved = session.get(RequestLog, log_id)
+            assert retrieved is not None
+            assert retrieved.modules_log == test_modules_log
+            assert retrieved.modules_log["translation"]["translated"] == "Переведите на русский"
+
+    def test_to_dict_preserves_utf8(self, sqlite_config: dict[str, Any]) -> None:
+        """Test that to_dict() method preserves UTF-8 characters."""
+        db = get_database(sqlite_config)
+        db.initialize()
+
+        test_body = {
+            "messages": [{"role": "user", "content": "Тестовое сообщение"}],
+        }
+
+        with db.session() as session:
+            log = RequestLog(
+                request_time=datetime.now(timezone.utc),
+                model_name="test-model",
+                body=test_body,
+                full_response="Ответ на русском языке",
+            )
+            session.add(log)
+            session.flush()
+            log_id = log.id
+
+        with db.session() as session:
+            retrieved = session.get(RequestLog, log_id)
+            assert retrieved is not None
+
+            # Convert to dict (this is what the API returns)
+            log_dict = retrieved.to_dict()
+
+            assert log_dict["body"]["messages"][0]["content"] == "Тестовое сообщение"
+            assert log_dict["full_response"] == "Ответ на русском языке"
+
+
 class TestDatabaseIntegration:
     """Integration tests for database operations."""
 

@@ -903,7 +903,7 @@ async def _streaming_request(
                 for out_chunk in _process_chunk(chunk):
                     yield out_chunk
                 if stream_parser and stream_parser.stop_requested and not stop_early:
-                    stop_reason = stream_parser.stop_reason or "tool_calls"
+                    stop_reason = stream_parser.stop_reason or stream_parser._last_finish_reason or "stop"
                     stop_early = True
                     last_finish_reason = stop_reason
                     logger.debug(
