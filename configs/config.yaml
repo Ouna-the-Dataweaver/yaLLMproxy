@@ -185,6 +185,7 @@ model_list:
 router_settings:
   num_retries: 1
 proxy_settings:
+  debug: false  # Enable debug logging -> logs/console.log
   server:
     host: 0.0.0.0
     port: 7979
@@ -221,6 +222,7 @@ proxy_settings:
       enabled: false
       request: []
 forwarder_settings:
+  debug: false  # Enable debug logging -> logs/console_forwarder.log
   listen:
     host: 0.0.0.0
     port: 6969
@@ -228,6 +230,7 @@ forwarder_settings:
     host: 127.0.0.1
     port: 7979
 http_forwarder_settings:
+  debug: false  # Enable debug logging -> logs/console_http_forwarder.log
   preserve_host: true
   listen:
     host: 0.0.0.0

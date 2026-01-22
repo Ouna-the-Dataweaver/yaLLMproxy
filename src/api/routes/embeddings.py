@@ -5,6 +5,7 @@ import logging
 from typing import Any, Mapping, Optional
 
 from fastapi import HTTPException, Request, Response
+from starlette.requests import ClientDisconnect
 
 from ...auth.app_key import get_app_key_validator
 from ...core import normalize_request_model
@@ -48,7 +49,13 @@ async def embeddings(request: Request) -> Response:
 
     tracker = USAGE_COUNTERS.start_request()
 
-    body = await request.body()
+    try:
+        body = await request.body()
+    except ClientDisconnect:
+        logger.warning("Client disconnected before request body was fully read")
+        tracker.finish()
+        return Response(status_code=499)  # Client Closed Request
+
     request_log: Optional[RequestLogRecorder] = None
 
     try:

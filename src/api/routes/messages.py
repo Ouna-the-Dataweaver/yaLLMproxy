@@ -2,11 +2,14 @@
 
 import json
 import logging
+import time
+import uuid
 from typing import Any, Mapping, Optional
 
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.background import BackgroundTask, BackgroundTasks
+from starlette.requests import ClientDisconnect
 
 from ...auth.app_key import get_app_key_validator
 from ...core import normalize_request_model
@@ -56,7 +59,37 @@ def _anthropic_error_response(
 
 async def messages_endpoint(request: Request) -> Response:
     """POST /v1/messages - Anthropic Messages API compatible endpoint."""
-    logger.info("Received Messages API request")
+    # Generate request ID for log correlation
+    req_id = uuid.uuid4().hex[:8]
+    start_time = time.perf_counter()
+
+    # Extract connection info for debugging
+    client_host = request.client.host if request.client else "unknown"
+    client_port = request.client.port if request.client else "unknown"
+    content_length = request.headers.get("content-length", "not-set")
+    content_type = request.headers.get("content-type", "not-set")
+
+    # Extract ASGI scope info for connection debugging
+    scope = request.scope
+    http_version = scope.get("http_version", "unknown")
+    server_info = scope.get("server", ("unknown", 0))
+    asgi_spec = scope.get("asgi", {})
+
+    logger.info(
+        f"[{req_id}] Messages API request from {client_host}:{client_port}, "
+        f"Content-Length: {content_length}, Content-Type: {content_type}, "
+        f"HTTP/{http_version}"
+    )
+
+    # Log additional connection details at debug level
+    if logger.isEnabledFor(logging.DEBUG):
+        headers_str = ", ".join(f"{k}: {v}" for k, v in request.headers.items())
+        logger.debug(f"[{req_id}] Request headers: {headers_str}")
+        logger.debug(
+            f"[{req_id}] ASGI scope: server={server_info}, asgi={asgi_spec}, "
+            f"type={scope.get('type')}, scheme={scope.get('scheme')}"
+        )
+
     router = get_router()
     known_models = set(router.backends.keys())
 
@@ -71,8 +104,26 @@ async def messages_endpoint(request: Request) -> Response:
     request_log: Optional[RequestLogRecorder] = None
 
     try:
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                f"[{req_id}] Starting body read, Content-Length: {content_length}"
+            )
         body = await request.body()
+        elapsed = time.perf_counter() - start_time
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                f"[{req_id}] Body read complete: {len(body)} bytes in {elapsed:.3f}s "
+                f"(expected: {content_length})"
+            )
         payload = json.loads(body or b"{}")
+    except ClientDisconnect:
+        elapsed = time.perf_counter() - start_time
+        logger.warning(
+            f"[{req_id}] ClientDisconnect after {elapsed:.3f}s - "
+            f"client {client_host}:{client_port}, Content-Length: {content_length}"
+        )
+        tracker.finish()
+        return Response(status_code=499)  # Client Closed Request
     except json.JSONDecodeError as exc:
         request_log = RequestLogRecorder(
             "unknown",
@@ -160,6 +211,12 @@ async def messages_endpoint(request: Request) -> Response:
     request_log.set_app_key(app_key_ctx.key_id)
 
     if backend.api_type == "anthropic":
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                f"[{req_id}] Forwarding to backend: name={model_name}, "
+                f"api_type={backend.api_type}, base_url={backend.base_url}, "
+                f"path=/v1/messages, stream={is_stream}"
+            )
         try:
             response = await router.forward_request(
                 model_name=model_name,
@@ -173,7 +230,8 @@ async def messages_endpoint(request: Request) -> Response:
                 disconnect_checker=request.is_disconnected,
             )
         except Exception as exc:
-            logger.error(f"Messages backend error: {exc}")
+            elapsed = time.perf_counter() - start_time
+            logger.error(f"[{req_id}] Messages backend error after {elapsed:.3f}s: {exc}")
             if request_log and not request_log.finalized:
                 request_log.record_error(str(exc))
                 request_log.finalize("error")
@@ -193,9 +251,19 @@ async def messages_endpoint(request: Request) -> Response:
                 request_log.finalize("success")
 
         if isinstance(response, StreamingResponse):
+            elapsed = time.perf_counter() - start_time
+            logger.info(
+                f"[{req_id}] Starting streaming response for {model_name}, "
+                f"setup took {elapsed:.3f}s"
+            )
             _attach_finish_task(response, tracker.finish)
             return response
 
+        elapsed = time.perf_counter() - start_time
+        logger.info(
+            f"[{req_id}] Completed non-streaming response for {model_name}, "
+            f"status={response.status_code}, took {elapsed:.3f}s"
+        )
         tracker.finish()
         return response
 

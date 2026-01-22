@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from threading import Lock
 from typing import Any
+
+logger = logging.getLogger("yallmp-proxy")
 
 # Import database repositories for historical data
 try:
@@ -24,12 +27,25 @@ class RequestTracker:
     def __init__(self, counters: "UsageCounters") -> None:
         self._counters = counters
         self._finished = False
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "RequestTracker created, ongoing=%d",
+                counters._ongoing,
+            )
 
     def finish(self) -> None:
         if self._finished:
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug("RequestTracker.finish() called but already finished")
             return
         self._finished = True
         self._counters.finish_request()
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "RequestTracker finished, served=%d, ongoing=%d",
+                self._counters._served,
+                self._counters._ongoing,
+            )
 
 
 @dataclass
@@ -48,6 +64,12 @@ class UsageCounters:
         with self._lock:
             self._received += 1
             self._ongoing += 1
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "Request started: received=%d, ongoing=%d",
+                    self._received,
+                    self._ongoing,
+                )
         return RequestTracker(self)
 
     def finish_request(self) -> None:

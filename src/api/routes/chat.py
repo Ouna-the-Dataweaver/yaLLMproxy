@@ -7,6 +7,7 @@ from typing import Any, Callable, Mapping, Optional
 from fastapi import HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from starlette.background import BackgroundTask, BackgroundTasks
+from starlette.requests import ClientDisconnect
 
 from ...auth.app_key import get_app_key_validator
 from ...core import normalize_request_model
@@ -56,8 +57,14 @@ async def handle_openai_request(request: Request) -> Response:
             known_models=known_models,
         )
     tracker = USAGE_COUNTERS.start_request()
-    
-    body = await request.body()
+
+    try:
+        body = await request.body()
+    except ClientDisconnect:
+        logger.warning("Client disconnected before request body was fully read")
+        tracker.finish()
+        return Response(status_code=499)  # Client Closed Request
+
     request_log: Optional[RequestLogRecorder] = None
     try:
         payload = json.loads(body or b"{}")

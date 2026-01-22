@@ -154,7 +154,10 @@ def build_outbound_headers(
             continue
         if key_lower in normalized_keys:
             continue
-        headers[key] = value
+        # Sanitize header values - strip whitespace to avoid "Illegal header value" errors
+        # Some clients/forwarders may add trailing whitespace to headers
+        sanitized_value = value.strip() if isinstance(value, str) else value
+        headers[key] = sanitized_value
         normalized_keys.add(key_lower)
 
     if "content-type" not in normalized_keys:

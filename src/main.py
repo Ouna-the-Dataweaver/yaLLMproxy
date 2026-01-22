@@ -11,8 +11,9 @@ from fastapi.responses import Response
 
 # Import logging setup FIRST before anything that might log
 from .logging import setup_logging
+from .logging.setup import reconfigure_logging, CONSOLE_LOG_PATH
 
-# Initialize logging BEFORE importing config_store
+# Initialize logging BEFORE importing config_store (initially INFO level)
 logger = setup_logging()
 
 # Import database module (after logging is set up)
@@ -35,6 +36,14 @@ from .api.routes.messages import messages_endpoint
 
 # Load configuration
 config = CONFIG_STORE.get_runtime_config()
+
+# Reconfigure logging if debug mode is enabled in config
+proxy_settings_for_debug = config.get("proxy_settings") or {}
+debug_enabled = bool(proxy_settings_for_debug.get("debug", False))
+if debug_enabled:
+    logger = reconfigure_logging(debug=True, log_file=CONSOLE_LOG_PATH)
+    logger.info("Debug mode enabled - logging to %s", CONSOLE_LOG_PATH)
+
 router = ProxyRouter(config)
 logger.info(f"Proxy router initialized with {len(router.backends)} backends")
 

@@ -763,6 +763,9 @@ async def _streaming_request(
 
     logger.info(f"Streaming request to {url} successful, status {resp.status_code}")
     headers_to_client = filter_response_headers(resp.headers)
+    # Force connection close after streaming to prevent connection reuse issues
+    # This avoids ClientDisconnect errors on subsequent requests using the same connection
+    headers_to_client["connection"] = "close"
     media_type = headers_to_client.pop("content-type", None)
     stream_parser = None
     if parser_pipeline and parser_context:

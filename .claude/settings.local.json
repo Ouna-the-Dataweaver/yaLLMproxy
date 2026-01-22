@@ -17,7 +17,8 @@
       "WebFetch(domain:www.openresponses.org)",
       "Bash(python -c:*)",
       "Bash(dir \"C:\\\\Users\\\\theio\\\\repos\\\\yaLLMproxy\\\\tests\" /s /b *.py)",
-      "Bash(findstr:*)"
+      "Bash(findstr:*)",
+      "Bash(python -m py_compile:*)"
     ]
   },
   "outputStyle": "default"

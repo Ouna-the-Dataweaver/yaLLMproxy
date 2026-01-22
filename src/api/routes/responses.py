@@ -13,6 +13,7 @@ from typing import Any, AsyncIterator, Optional
 
 from fastapi import HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
+from starlette.requests import ClientDisconnect
 
 from ...auth.app_key import get_app_key_validator
 from ...core import normalize_request_model
@@ -59,6 +60,9 @@ async def responses_endpoint(request: Request) -> Response:
     try:
         body = await request.body()
         payload = json.loads(body or b"{}")
+    except ClientDisconnect:
+        logger.warning("Client disconnected before request body was fully read")
+        return Response(status_code=499)  # Client Closed Request
     except json.JSONDecodeError as exc:
         logger.error(f"Invalid JSON in Responses request: {exc}")
         request_log = RequestLogRecorder(

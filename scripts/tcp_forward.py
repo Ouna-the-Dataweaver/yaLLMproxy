@@ -11,12 +11,36 @@ from __future__ import annotations
 import argparse
 import itertools
 import logging
+import os
 import signal
 import socket
 import sys
 import threading
 import time
-from typing import Dict, Tuple
+from pathlib import Path
+from typing import Dict, Optional, Tuple
+
+# Add project root to path for imports
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_PROJECT_ROOT = _SCRIPT_DIR.parent
+sys.path.insert(0, str(_PROJECT_ROOT))
+
+# Log file path
+TCP_FORWARDER_LOG_PATH = _PROJECT_ROOT / "logs" / "console_forwarder.log"
+
+
+def _load_forwarder_config() -> dict:
+    """Load forwarder settings from config file.
+
+    Returns:
+        forwarder_settings dict from config, or empty dict if unavailable.
+    """
+    try:
+        from src.config_loader import load_config
+        cfg = load_config(substitute_env=False)
+        return cfg.get("forwarder_settings") or {}
+    except Exception:
+        return {}
 
 
 def _pipe(
@@ -25,27 +49,40 @@ def _pipe(
     bufsize: int,
     stats: Dict[str, int],
     key: str,
+    logger: logging.Logger,
+    conn_id: int,
 ) -> None:
     total = 0
+    chunk_count = 0
     try:
         while True:
             data = src.recv(bufsize)
             if not data:
-                try:
-                    dst.shutdown(socket.SHUT_WR)
-                except OSError:
-                    pass
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(
+                        "Conn #%d pipe %s: EOF received after %d chunks, %d bytes total",
+                        conn_id,
+                        key,
+                        chunk_count,
+                        total,
+                    )
                 break
             total += len(data)
+            chunk_count += 1
             dst.sendall(data)
-    except OSError:
-        pass
+    except OSError as exc:
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "Conn #%d pipe %s: OSError after %d chunks, %d bytes - %s (errno=%s)",
+                conn_id,
+                key,
+                chunk_count,
+                total,
+                exc,
+                getattr(exc, 'errno', 'N/A'),
+            )
     finally:
         stats[key] = total
-        try:
-            dst.shutdown(socket.SHUT_WR)
-        except OSError:
-            pass
 
 
 def _set_nodelay(sock: socket.socket) -> None:
@@ -66,10 +103,26 @@ def _handle_client(
 ) -> None:
     target = None
     stats: Dict[str, int] = {}
+    start_time = time.perf_counter()
     try:
+        # Connect to target with timing
+        connect_start = time.perf_counter()
         target = socket.create_connection((target_host, target_port))
+        connect_elapsed = time.perf_counter() - connect_start
+
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "Conn #%d target connection established in %.3fs",
+                conn_id,
+                connect_elapsed,
+            )
+
         _set_nodelay(client)
         _set_nodelay(target)
+
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug("Conn #%d TCP_NODELAY set on both sockets", conn_id)
+
         logger.info(
             "Conn #%d established %s:%s -> %s:%s",
             conn_id,
@@ -80,12 +133,12 @@ def _handle_client(
         )
         t1 = threading.Thread(
             target=_pipe,
-            args=(client, target, bufsize, stats, "up"),
+            args=(client, target, bufsize, stats, "up", logger, conn_id),
             daemon=True,
         )
         t2 = threading.Thread(
             target=_pipe,
-            args=(target, client, bufsize, stats, "down"),
+            args=(target, client, bufsize, stats, "down", logger, conn_id),
             daemon=True,
         )
         t1.start()
@@ -94,14 +147,33 @@ def _handle_client(
         t2.join()
         sent = stats.get("up", 0)
         received = stats.get("down", 0)
+        elapsed = time.perf_counter() - start_time
         logger.info(
-            "Conn #%d closed (sent=%d bytes, received=%d bytes)",
+            "Conn #%d closed after %.3fs (sent=%d bytes, received=%d bytes)",
             conn_id,
+            elapsed,
             sent,
             received,
         )
     except OSError as exc:
-        logger.warning("Conn #%d error for %s:%s: %s", conn_id, addr[0], addr[1], exc)
+        elapsed = time.perf_counter() - start_time
+        logger.warning(
+            "Conn #%d error for %s:%s after %.3fs: %s",
+            conn_id,
+            addr[0],
+            addr[1],
+            elapsed,
+            exc,
+        )
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "Conn #%d error details: target=%s:%s, errno=%s, type=%s",
+                conn_id,
+                target_host,
+                target_port,
+                getattr(exc, 'errno', 'N/A'),
+                type(exc).__name__,
+            )
     finally:
         try:
             client.close()
@@ -115,13 +187,40 @@ def _handle_client(
 
 
 def main() -> None:
+    # Load config first for debug flag and defaults
+    forwarder_cfg = _load_forwarder_config()
+    debug_from_config = bool(forwarder_cfg.get("debug", False))
+
+    # Get defaults from config
+    listen_cfg = forwarder_cfg.get("listen") or {}
+    target_cfg = forwarder_cfg.get("target") or {}
+    default_listen_host = str(listen_cfg.get("host", "0.0.0.0"))
+    default_listen_port = int(listen_cfg.get("port", 6969)) if listen_cfg.get("port") else None
+    default_target_host = str(target_cfg.get("host", "127.0.0.1"))
+    default_target_port = int(target_cfg.get("port", 7979)) if target_cfg.get("port") else None
+
     parser = argparse.ArgumentParser(description="TCP forwarder")
-    parser.add_argument("--listen-host", default="0.0.0.0")
-    parser.add_argument("--listen-port", type=int, required=True)
-    parser.add_argument("--target-host", default="127.0.0.1")
-    parser.add_argument("--target-port", type=int, required=True)
+    parser.add_argument("--listen-host", default=default_listen_host)
+    parser.add_argument(
+        "--listen-port",
+        type=int,
+        default=default_listen_port,
+        required=default_listen_port is None,
+    )
+    parser.add_argument("--target-host", default=default_target_host)
+    parser.add_argument(
+        "--target-port",
+        type=int,
+        default=default_target_port,
+        required=default_target_port is None,
+    )
     parser.add_argument("--bufsize", type=int, default=65536)
     parser.add_argument("--log-level", default="INFO")
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug logging (overrides config and --log-level)",
+    )
     parser.add_argument(
         "--accept-timeout",
         type=float,
@@ -136,12 +235,27 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    # Debug from CLI overrides config
+    is_debug = args.debug or debug_from_config
+    log_level = logging.DEBUG if is_debug else getattr(logging, args.log_level.upper(), logging.INFO)
+
+    # Set up logging with optional file handler
+    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+    if is_debug:
+        TCP_FORWARDER_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        file_handler = logging.FileHandler(TCP_FORWARDER_LOG_PATH, mode='w', encoding='utf-8')
+        file_handler.setLevel(logging.DEBUG)
+        handlers.append(file_handler)
+
     logging.basicConfig(
-        level=args.log_level.upper(),
-        format="%(asctime)s %(message)s",
-        stream=sys.stdout,
+        level=log_level,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        handlers=handlers,
     )
     logger = logging.getLogger("tcp_forward")
+
+    if is_debug:
+        logger.debug("Debug mode enabled - logging to %s", TCP_FORWARDER_LOG_PATH)
 
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
