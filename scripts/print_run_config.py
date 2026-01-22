@@ -55,6 +55,19 @@ def _to_str(value: Any) -> str | None:
     return str(value)
 
 
+def _to_bool(value: Any) -> bool | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    value_str = str(value).strip().lower()
+    if value_str in {"1", "true", "yes", "on"}:
+        return True
+    if value_str in {"0", "false", "no", "off"}:
+        return False
+    return None
+
+
 def _default_target_host(proxy_host: str | None) -> str:
     if proxy_host and proxy_host not in {"0.0.0.0", "::"}:
         return proxy_host
@@ -94,6 +107,13 @@ def main() -> int:
         http_fwd_target_host = _default_target_host(proxy_host)
     http_fwd_target_port = _to_int(_get(cfg, "http_forwarder_settings", "target", "port")) or proxy_port
 
+    # SSL settings
+    http_fwd_ssl_enabled = _to_bool(_get(cfg, "http_forwarder_settings", "ssl", "enabled")) or False
+    http_fwd_ssl_cert = _to_str(_get(cfg, "http_forwarder_settings", "ssl", "cert_file")) or ""
+    http_fwd_ssl_key = _to_str(_get(cfg, "http_forwarder_settings", "ssl", "key_file")) or ""
+    http_fwd_ssl_hosts_raw = _get(cfg, "http_forwarder_settings", "ssl", "hosts") or []
+    http_fwd_ssl_hosts = " ".join(str(h) for h in http_fwd_ssl_hosts_raw if h)
+
     lines = [
         f"CFG_PROXY_HOST={proxy_host}",
         f"CFG_PROXY_PORT={proxy_port}",
@@ -106,6 +126,10 @@ def main() -> int:
         f"CFG_HTTP_FORWARD_TARGET_SCHEME={http_fwd_target_scheme}",
         f"CFG_HTTP_FORWARD_TARGET_HOST={http_fwd_target_host}",
         f"CFG_HTTP_FORWARD_TARGET_PORT={http_fwd_target_port}",
+        f"CFG_HTTP_FORWARD_SSL_ENABLED={str(http_fwd_ssl_enabled).lower()}",
+        f"CFG_HTTP_FORWARD_SSL_CERT={http_fwd_ssl_cert}",
+        f"CFG_HTTP_FORWARD_SSL_KEY={http_fwd_ssl_key}",
+        f"CFG_HTTP_FORWARD_SSL_HOSTS={http_fwd_ssl_hosts}",
     ]
     sys.stdout.write("\n".join(lines) + "\n")
     return 0

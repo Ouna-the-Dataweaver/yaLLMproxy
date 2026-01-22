@@ -1,6 +1,6 @@
 # Plan: Add /v1/messages (Anthropic) Support
 
-## Current Status (Updated 2026-01-20)
+## Current Status (Updated 2026-01-22)
 
 ### ✅ COMPLETED
 - **Route handler**: `src/api/routes/messages.py` - fully implemented
@@ -9,24 +9,30 @@
   - Anthropic-format error responses
   - Request logging and usage metrics
   - Streaming detection and response handling
+  - **OpenAI translation path**: Translates requests for non-anthropic backends
 - **Feature flag**: `proxy_settings.enable_messages_endpoint` in config (currently `true`)
-- **Module structure**: `src/messages/__init__.py` exports translator functions
+- **Module structure**: `src/messages/__init__.py` exports translator functions and stream adapter
 - **Anthropic pass-through**: Works for backends with `api_type: "anthropic"`
   - Forwards requests directly to Anthropic-compatible backends
   - Streaming works natively (Anthropic SSE format)
 - **Anthropic types**: `src/types/chat.py` has type definitions for Anthropic responses
 - **Backend configuration**: Supports `api_type: anthropic` and `anthropic_version` fields
 - **Route registration**: Conditional registration in `src/main.py`
+- **Translator**: `src/messages/translator.py` - fully implemented
+  - `messages_to_chat_completions()` - translates Anthropic Messages to OpenAI Chat Completions
+  - `chat_completion_to_messages()` - translates OpenAI responses back to Anthropic format
+- **Stream adapter**: `src/messages/stream_adapter.py` - fully implemented
+  - `ChatToMessagesStreamAdapter` - converts OpenAI SSE stream to Anthropic SSE format
+  - Handles text blocks, tool_use blocks, and proper event sequencing
+- **Tests**: Full test coverage
+  - `tests/test_messages_translator.py` - 46 tests for translator functions
+  - `tests/test_messages_stream_adapter.py` - 11 tests for stream adapter
 
 ### ⚠️ STUB/PLACEHOLDER
-- **Translator**: `src/messages/translator.py` - functions exist but raise `NotImplementedError`
-  - `messages_to_chat_completions()` - not implemented
-  - `chat_completion_to_messages()` - not implemented
+(None - all components implemented)
 
 ### ❌ NOT IMPLEMENTED
-- **OpenAI translation path**: Non-anthropic backends return 501 "Not Implemented"
-- **Stream adapter**: `src/messages/stream_adapter.py` does not exist (not needed for pass-through)
-- **Tests**: No test coverage for messages endpoint
+(None - all planned features implemented)
 
 ---
 
@@ -47,99 +53,79 @@
 
 ---
 
-## Remaining Work
+## Completed Work
 
-### Phase 1: Request Translation (Anthropic -> OpenAI Chat)
-Implement `messages_to_chat_completions()` in `src/messages/translator.py`:
+### Phase 1: Request Translation (Anthropic -> OpenAI Chat) ✅
+Implemented `messages_to_chat_completions()` in `src/messages/translator.py`:
 
-- **Top-level system**:
-  - If system is string or content blocks, convert to a single OpenAI system message.
-  - If system contains non-text blocks, either move those to first user message or raise a validation error (configurable).
-- **Messages list**:
-  - Roles limited to user/assistant; convert to OpenAI messages with same roles.
-  - content string -> OpenAI string.
-  - content blocks:
-    - text -> content parts (type: text) or string if only text.
-    - image -> content part (type: image_url). Map base64 to data URL; map url source to direct URL.
-    - tool_use (assistant) -> assistant tool_calls. Preserve tool_use.id as tool_call.id.
-    - tool_result (user) -> tool messages with tool_call_id. Enforce tool_result blocks first; split trailing text into a separate user message.
-    - thinking / redacted_thinking -> map to assistant content with an explicit tag OR drop with a warning (default to drop to avoid leaking chain-of-thought; make configurable).
-- **Tools and tool_choice**:
-  - tools[]: map to OpenAI tools/functions (name, description, input_schema->parameters).
-  - tool_choice: map {auto, any, tool, none} to OpenAI equivalents (auto/required/function/none).
-- **Other parameters**:
-  - max_tokens -> max_tokens (chat completions)
-  - stop_sequences -> stop
-  - temperature/top_p/top_k, metadata -> pass through when supported.
+- **Top-level system**: Converts string or content blocks to OpenAI system message
+- **Messages list**: Converts all content block types (text, image, tool_use, tool_result)
+- **Tools and tool_choice**: Maps Anthropic tools to OpenAI format, tool_choice mappings (auto, any->required, tool, none)
+- **Other parameters**: max_tokens, stop_sequences->stop, temperature, top_p, stream, metadata
 
-### Phase 2: Response Translation (OpenAI Chat -> Anthropic Messages)
-Implement `chat_completion_to_messages()` in `src/messages/translator.py`:
+### Phase 2: Response Translation (OpenAI Chat -> Anthropic Messages) ✅
+Implemented `chat_completion_to_messages()` in `src/messages/translator.py`:
 
-- **Response envelope**:
-  - id/type/role/model/usage/stop_reason/stop_sequence.
-  - stop_reason mapping: finish_reason stop->end_turn, length->max_tokens, tool_calls->tool_use; default to end_turn if unknown.
-- **Content blocks**:
-  - assistant content string/parts -> text blocks.
-  - tool_calls -> tool_use blocks (id/name/input). Generate id if missing; ensure stable mapping for streaming.
-  - If refusal/content_filter occurs, map to stop_reason=refusal and provide a refusal text block if available.
+- **Response envelope**: Builds complete Anthropic message with id, type, role, model, usage, stop_reason
+- **Stop reason mapping**: stop->end_turn, length->max_tokens, tool_calls->tool_use, content_filter->refusal
+- **Content blocks**: Converts text content and tool_calls to Anthropic format
 
-### Phase 3: Streaming Translation (OpenAI Stream -> Anthropic SSE)
-Create `src/messages/stream_adapter.py`:
+### Phase 3: Streaming Translation (OpenAI Stream -> Anthropic SSE) ✅
+Created `src/messages/stream_adapter.py`:
 
-- Emit message_start with empty content array and id/model.
-- For each OpenAI delta:
-  - text delta -> content_block_start (text) + content_block_delta (text_delta) + content_block_stop (on block end).
-  - tool_call delta -> content_block_start (tool_use) + content_block_delta (input_json_delta).
-  - Maintain index for content blocks in the final content array; track per-index accumulation.
-- On finish_reason:
-  - Emit message_delta with stop_reason and final usage if present.
-  - Emit message_stop.
-- Ensure tool_use ID stability:
-  - Use tool_call.id if present; else generate deterministic call_id once per tool_call index.
-  - For streaming arguments, emit partial_json in arrival order.
+- **ChatToMessagesStreamAdapter**: Full streaming translation
+- **Event flow**: message_start -> content_block_start -> content_block_delta -> content_block_stop -> message_delta -> message_stop
+- **Tool use support**: Proper input_json_delta streaming with ID stability
+- **Usage tracking**: Captures input/output tokens from stream
 
-### Phase 4: Route Handler Integration
-Update `src/api/routes/messages.py` to use translators for non-anthropic backends:
+### Phase 4: Route Handler Integration ✅
+Updated `src/api/routes/messages.py`:
 
-- Replace the 501 error path with actual translation logic
-- Wire up streaming adapter for translated streams
-- Handle errors gracefully during translation
+- Replaced 501 error path with actual translation logic
+- Non-streaming: Translates request, forwards to /v1/chat/completions, translates response
+- Streaming: Wraps OpenAI stream with ChatToMessagesStreamAdapter
+- Graceful error handling during translation
 
-### Phase 5: Tests
-Create `tests/test_messages.py`:
+### Phase 5: Tests ✅
+Created comprehensive test coverage:
 
-- **Unit: translator**
-  - text-only, mixed text+image, tool_use/tool_result, assistant-prefill, system param.
-  - tool_choice mapping; missing tools handling.
-  - tool_use id preservation across translation.
-- **Unit: stream adapter**
-  - text streaming, tool_call streaming with input_json_delta, multi-tool call ordering, finish_reason mapping.
-- **API route tests**:
-  - pass-through vs simulation branch, header mapping, error handling.
+- **`tests/test_messages_translator.py`** (46 tests):
+  - Text-only, mixed text+image, tool_use/tool_result, assistant-prefill, system param
+  - tool_choice mapping; tool_use id preservation
+  - stop_reason mapping; usage conversion
+
+- **`tests/test_messages_stream_adapter.py`** (11 tests):
+  - Text streaming, tool_call streaming with input_json_delta
+  - Multi-tool call ordering, finish_reason mapping
+  - Empty stream handling, interleaved content
 
 ---
 
-## Architecture (Already Implemented)
+## Architecture (Fully Implemented)
 
 ```
 src/
-├── api/routes/messages.py     ✅ Route handler (complete)
+├── api/routes/messages.py     ✅ Route handler (complete with translation)
 ├── messages/
-│   ├── __init__.py            ✅ Module exports
-│   ├── translator.py          ⚠️ Stubs only
-│   └── stream_adapter.py      ❌ Does not exist yet
+│   ├── __init__.py            ✅ Module exports (translator + stream_adapter)
+│   ├── translator.py          ✅ Full implementation
+│   └── stream_adapter.py      ✅ Full implementation
 └── types/chat.py              ✅ Anthropic types defined
+
+tests/
+├── test_messages_translator.py    ✅ 46 tests
+└── test_messages_stream_adapter.py ✅ 11 tests
 ```
 
-## Implementation Sequence (Updated)
+## Implementation Sequence (Completed)
 
-1. ~~Types + translator skeleton (non-streaming) with unit tests.~~ ✅ Skeleton exists
-2. ~~Route handler with simulation path (non-streaming) and tests.~~ ✅ Route handler complete (pass-through only)
-3. **NEXT**: Implement `messages_to_chat_completions()` with unit tests
-4. Implement `chat_completion_to_messages()` with unit tests
-5. Create streaming adapter (`stream_adapter.py`) + tests
-6. Wire translation path into route handler
-7. End-to-end tests for non-anthropic backends
+1. ~~Types + translator skeleton (non-streaming) with unit tests.~~ ✅ Done
+2. ~~Route handler with simulation path (non-streaming) and tests.~~ ✅ Done
+3. ~~Implement `messages_to_chat_completions()` with unit tests~~ ✅ Done
+4. ~~Implement `chat_completion_to_messages()` with unit tests~~ ✅ Done
+5. ~~Create streaming adapter (`stream_adapter.py`) + tests~~ ✅ Done
+6. ~~Wire translation path into route handler~~ ✅ Done
+7. ~~Unit tests for translation path~~ ✅ Done (57 total tests)
 
 ## Sources (for quick reference)
 - Create a Message API reference: https://platform.claude.com/docs/en/api/python/messages/create

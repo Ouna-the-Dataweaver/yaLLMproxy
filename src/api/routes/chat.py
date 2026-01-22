@@ -10,6 +10,13 @@ from starlette.background import BackgroundTask, BackgroundTasks
 from starlette.requests import ClientDisconnect
 
 from ...auth.app_key import get_app_key_validator
+from ...concurrency import (
+    ConcurrencyClientDisconnected,
+    ConcurrencyQueueTimeout,
+    ConcurrencySlot,
+    get_concurrency_manager,
+    get_key_concurrency_config,
+)
 from ...core import normalize_request_model
 from ...core.registry import get_router
 from ...logging import RequestLogRecorder, resolve_db_log_target
@@ -32,6 +39,28 @@ def _attach_finish_task(response: Response, finish: Callable[[], None]) -> None:
         tasks.add_task(existing.func, *existing.args, **existing.kwargs)
     tasks.add_task(finish)
     response.background = tasks
+
+
+def _wrap_stream_with_slot_release(
+    response: StreamingResponse,
+    slot: ConcurrencySlot,
+) -> StreamingResponse:
+    """Wrap a streaming response to release the concurrency slot when done."""
+    original_iterator = response.body_iterator
+
+    async def wrapped_iterator():
+        try:
+            async for chunk in original_iterator:
+                yield chunk
+        finally:
+            await slot.release()
+
+    return StreamingResponse(
+        wrapped_iterator(),
+        status_code=response.status_code,
+        headers=dict(response.headers),
+        media_type=response.media_type,
+    )
 
 
 async def handle_openai_request(request: Request) -> Response:
@@ -143,6 +172,42 @@ async def handle_openai_request(request: Request) -> Response:
     # Validate app key authentication and model access
     app_key_ctx = get_app_key_validator().validate_request(request, model_name)
 
+    # Acquire concurrency slot (will queue if at limit)
+    concurrency_config = get_key_concurrency_config(app_key_ctx.key_id)
+    try:
+        slot = await get_concurrency_manager().acquire(
+            key_identifier=app_key_ctx.key_id,
+            concurrency_limit=concurrency_config.concurrency_limit,
+            priority=concurrency_config.priority,
+            timeout=concurrency_config.queue_timeout,
+            disconnect_checker=request.is_disconnected,
+        )
+    except ConcurrencyQueueTimeout:
+        logger.warning(
+            "Concurrency queue timeout for key=%s, model=%s",
+            app_key_ctx.key_id,
+            model_name,
+        )
+        tracker.finish()
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "error": {
+                    "message": "Request queued too long - concurrency limit reached",
+                    "type": "rate_limit_error",
+                    "code": "concurrency_limit_exceeded",
+                }
+            },
+        )
+    except ConcurrencyClientDisconnected:
+        logger.info(
+            "Client disconnected while waiting in queue: key=%s, model=%s",
+            app_key_ctx.key_id,
+            model_name,
+        )
+        tracker.finish()
+        return Response(status_code=499)
+
     # Basic validation for chat completions
     if "/chat/completions" in request.url.path:
         messages = payload.get("messages")
@@ -157,6 +222,7 @@ async def handle_openai_request(request: Request) -> Response:
             request_log.record_request(request.method, request.url.query, request.headers, body)
             request_log.record_error("missing messages array")
             request_log.finalize("error")
+            await slot.release()
             tracker.finish()
             raise HTTPException(
                 status_code=400,
@@ -199,8 +265,12 @@ async def handle_openai_request(request: Request) -> Response:
         if not is_stream and request_log and not request_log.finalized:
             request_log.finalize("success")
         if isinstance(response, StreamingResponse):
+            # Wrap stream to release slot after streaming completes
+            response = _wrap_stream_with_slot_release(response, slot)
             _attach_finish_task(response, tracker.finish)
             return response
+        # Non-streaming: release slot immediately
+        await slot.release()
         tracker.finish()
         return response
     except Exception as e:
@@ -208,6 +278,7 @@ async def handle_openai_request(request: Request) -> Response:
         if request_log and not request_log.finalized:
             request_log.record_error(str(e))
             request_log.finalize("error")
+        await slot.release()
         tracker.finish()
         raise
 

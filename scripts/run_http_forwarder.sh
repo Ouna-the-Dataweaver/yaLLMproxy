@@ -49,6 +49,9 @@ TARGET_SCHEME=""
 TARGET_HOST=""
 TARGET_PORT=""
 LOG_LEVEL=""
+SSL_ENABLED=""
+SSL_CERT=""
+SSL_KEY=""
 
 while IFS= read -r line; do
   case "$line" in
@@ -73,6 +76,15 @@ fi
 if [[ -n "${CFG_HTTP_FORWARD_TARGET_PORT:-}" ]]; then
   TARGET_PORT="$CFG_HTTP_FORWARD_TARGET_PORT"
 fi
+if [[ -n "${CFG_HTTP_FORWARD_SSL_ENABLED:-}" ]]; then
+  SSL_ENABLED="$CFG_HTTP_FORWARD_SSL_ENABLED"
+fi
+if [[ -n "${CFG_HTTP_FORWARD_SSL_CERT:-}" ]]; then
+  SSL_CERT="$CFG_HTTP_FORWARD_SSL_CERT"
+fi
+if [[ -n "${CFG_HTTP_FORWARD_SSL_KEY:-}" ]]; then
+  SSL_KEY="$CFG_HTTP_FORWARD_SSL_KEY"
+fi
 
 if [[ -n "${HTTP_FORWARD_LISTEN_HOST:-}" ]]; then
   HOST="$HTTP_FORWARD_LISTEN_HOST"
@@ -91,6 +103,15 @@ if [[ -n "${HTTP_FORWARD_TARGET_PORT:-}" ]]; then
 fi
 if [[ -n "${HTTP_FORWARD_LOG_LEVEL:-}" ]]; then
   LOG_LEVEL="$HTTP_FORWARD_LOG_LEVEL"
+fi
+if [[ -n "${HTTP_FORWARD_SSL_ENABLED:-}" ]]; then
+  SSL_ENABLED="$HTTP_FORWARD_SSL_ENABLED"
+fi
+if [[ -n "${HTTP_FORWARD_SSL_CERT:-}" ]]; then
+  SSL_CERT="$HTTP_FORWARD_SSL_CERT"
+fi
+if [[ -n "${HTTP_FORWARD_SSL_KEY:-}" ]]; then
+  SSL_KEY="$HTTP_FORWARD_SSL_KEY"
 fi
 
 # Fallback defaults (only if still empty)
@@ -112,8 +133,26 @@ fi
 if [[ -z "$LOG_LEVEL" ]]; then
   LOG_LEVEL="info"
 fi
+if [[ -z "$SSL_ENABLED" ]]; then
+  SSL_ENABLED="false"
+fi
 
-echo "[INFO] HTTP forwarding http://$HOST:$PORT -> $TARGET_SCHEME://$TARGET_HOST:$TARGET_PORT"
+# Build SSL flags if enabled
+SSL_FLAGS=""
+if [[ "$SSL_ENABLED" == "true" ]]; then
+  if [[ -n "$SSL_CERT" && -n "$SSL_KEY" ]]; then
+    SSL_FLAGS="--ssl-certfile $SSL_CERT --ssl-keyfile $SSL_KEY"
+  else
+    echo "[WARN] SSL enabled but cert_file or key_file not set in config"
+  fi
+fi
+
+# Display info message
+if [[ "$SSL_ENABLED" == "true" ]]; then
+  echo "[INFO] HTTP forwarding https://$HOST:$PORT -> $TARGET_SCHEME://$TARGET_HOST:$TARGET_PORT"
+else
+  echo "[INFO] HTTP forwarding http://$HOST:$PORT -> $TARGET_SCHEME://$TARGET_HOST:$TARGET_PORT"
+fi
 echo "[INFO] Press Ctrl+C to stop."
 export PYTHONUNBUFFERED=1
 export HTTP_FORWARD_LISTEN_HOST="$HOST"
@@ -121,5 +160,8 @@ export HTTP_FORWARD_LISTEN_PORT="$PORT"
 export HTTP_FORWARD_TARGET_SCHEME="$TARGET_SCHEME"
 export HTTP_FORWARD_TARGET_HOST="$TARGET_HOST"
 export HTTP_FORWARD_TARGET_PORT="$TARGET_PORT"
+export HTTP_FORWARD_SSL_ENABLED="$SSL_ENABLED"
+export HTTP_FORWARD_SSL_CERT="$SSL_CERT"
+export HTTP_FORWARD_SSL_KEY="$SSL_KEY"
 
-cd "$PROJECT_ROOT" && "$FWD_PY" -m uvicorn src.http_forwarder:app --host "$HOST" --port "$PORT" --log-level "$LOG_LEVEL"
+cd "$PROJECT_ROOT" && "$FWD_PY" -m uvicorn src.http_forwarder:app --host "$HOST" --port "$PORT" --log-level "$LOG_LEVEL" $SSL_FLAGS

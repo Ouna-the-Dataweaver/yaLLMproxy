@@ -9,7 +9,8 @@ Yet Another LLM Proxy - A lightweight, modular LLM proxy with OpenAI-compatible 
 - **Request/Response Logging**: Detailed logs of all requests and responses for debugging
 - **Database Support**: SQLite (default) or PostgreSQL for persistent logging with JSONB columns
 - **OpenAI Compatibility**: Works with OpenAI-compatible clients and tools
-- **Chat & Embeddings**: Supports both `/v1/chat/completions` and `/v1/embeddings` endpoints
+- **Chat, Embeddings & Messages**: Supports `/v1/chat/completions`, `/v1/embeddings`, and `/v1/messages` (Anthropic API) endpoints
+- **Anthropic API Translation**: Route Anthropic Messages API requests to OpenAI-compatible backends with automatic format conversion
 - **Runtime Registration**: Register new backends without restarting the proxy
 - **Environment Variable Support**: Configure via environment variables in YAML files
 - **Streaming Support**: Transparent handling of streaming responses with SSE error detection
@@ -92,6 +93,11 @@ curl http://localhost:7979/v1/chat/completions \
 curl http://localhost:7979/v1/embeddings \
   -H "Content-Type: application/json" \
   -d '{"model": "your-embedding-model", "input": "Hello, world!"}'
+
+# Anthropic Messages API (routed to OpenAI backend)
+curl http://localhost:7979/v1/messages \
+  -H "Content-Type: application/json" \
+  -d '{"model": "your-model", "max_tokens": 1024, "messages": [{"role": "user", "content": "Hello!"}]}'
 ```
 
 ### Configuration Structure
@@ -107,7 +113,7 @@ model_list:
       request_timeout: 30          # Timeout in seconds (optional)
       target_model: gpt-4          # Rewrite model name in requests (optional)
       supports_reasoning: false    # Enable reasoning block injection (optional)
-      api_type: openai             # API type: openai, anthropic, etc. (optional)
+      api_type: openai             # API type: openai (default), anthropic (optional)
     parameters:                    # Per-model parameter defaults (optional)
       temperature:
         default: 1.0               # Default value if not specified in request
@@ -224,6 +230,34 @@ It reads `http_forwarder_settings` from `configs/config.yaml`. You can override 
 `HTTP_FORWARD_LISTEN_HOST`, `HTTP_FORWARD_LISTEN_PORT`, `HTTP_FORWARD_TARGET_SCHEME`,
 `HTTP_FORWARD_TARGET_HOST`, `HTTP_FORWARD_TARGET_PORT`, and `HTTP_FORWARD_PRESERVE_HOST`.
 
+**SSL/TLS Support:**
+
+The HTTP forwarder supports HTTPS with SSL certificates:
+
+```yaml
+http_forwarder_settings:
+  listen:
+    host: 0.0.0.0
+    port: 6969
+  target:
+    scheme: http
+    host: 127.0.0.1
+    port: 7979
+  ssl:
+    enabled: true
+    cert_file: certs/localhost+2.pem
+    key_file: certs/localhost+2-key.pem
+  debug: false  # Enable debug logging
+  timeout_seconds: 300  # Request timeout (optional)
+```
+
+Generate certificates using mkcert:
+```bash
+task ssl:generate-certs
+```
+
+Environment variable overrides: `HTTP_FORWARD_SSL_ENABLED`, `HTTP_FORWARD_SSL_CERT`, `HTTP_FORWARD_SSL_KEY`, `HTTP_FORWARD_DEBUG`, `HTTP_FORWARD_TIMEOUT`.
+
 Note: both forwarders default to port `6969`. If you want to run both at once, change one of their ports.
 
 ## Documentation
@@ -262,6 +296,7 @@ yaLLMproxy/
 | `task test` | Run tests |
 | `task forwarder` | Run TCP forwarder |
 | `task forwarder:http` | Run HTTP forwarder |
+| `task ssl:generate-certs` | Generate SSL certificates using mkcert |
 | `uv run pytest tests/` | Run tests directly |
 
 ## Runtime Management

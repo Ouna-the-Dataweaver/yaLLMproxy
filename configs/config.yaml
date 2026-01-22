@@ -239,6 +239,17 @@ http_forwarder_settings:
     scheme: http
     host: 127.0.0.1
     port: 7979
+  ssl:
+    enabled: false
+    cert_file: certs/cert.pem
+    key_file: certs/key.pem
+    # Hostnames/IPs to include in certificate (used by generate_certs script)
+    # Add every address that clients will use to connect to the forwarder
+    hosts:
+      - localhost
+      - 127.0.0.1
+      # - 192.168.1.100  # Your LAN IP (for LAN clients)
+      # - 203.0.113.50   # Your public IP (for internet clients)
 database:
   backend: sqlite
   connection:

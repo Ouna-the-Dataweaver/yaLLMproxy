@@ -38,6 +38,14 @@ tasks:
       - cmd: bash ./scripts/run_http_forwarder.sh
         platforms: [linux, darwin]
 
+  ssl:generate-certs:
+    desc: Generate SSL certificates using mkcert (reads hosts from config)
+    cmds:
+      - cmd: cmd /c "{{.TASKFILE_DIR}}\\scripts\\generate_certs.bat"
+        platforms: [windows]
+      - cmd: bash ./scripts/generate_certs.sh
+        platforms: [linux, darwin]
+
   install:
     desc: Create venv + sync dependencies (uses install script)
     cmds:

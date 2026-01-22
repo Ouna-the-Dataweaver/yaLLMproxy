@@ -1,0 +1,7 @@
+# Ignore generated SSL certificates
+*.pem
+*.crt
+*.key
+
+# Keep this .gitignore
+!.gitignore

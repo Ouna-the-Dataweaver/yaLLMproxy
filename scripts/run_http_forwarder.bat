@@ -41,6 +41,9 @@ set "TARGET_SCHEME="
 set "TARGET_HOST="
 set "TARGET_PORT="
 set "LOG_LEVEL="
+set "SSL_ENABLED="
+set "SSL_CERT="
+set "SSL_KEY="
 
 for /f "usebackq delims=" %%A in (`"%FWD_PY%" "%SCRIPT_DIR%\print_run_config.py" ^| findstr /b CFG_`) do set "%%A"
 if not "%CFG_HTTP_FORWARD_LISTEN_HOST%"=="" set "HOST=%CFG_HTTP_FORWARD_LISTEN_HOST%"
@@ -48,6 +51,9 @@ if not "%CFG_HTTP_FORWARD_LISTEN_PORT%"=="" set "PORT=%CFG_HTTP_FORWARD_LISTEN_P
 if not "%CFG_HTTP_FORWARD_TARGET_SCHEME%"=="" set "TARGET_SCHEME=%CFG_HTTP_FORWARD_TARGET_SCHEME%"
 if not "%CFG_HTTP_FORWARD_TARGET_HOST%"=="" set "TARGET_HOST=%CFG_HTTP_FORWARD_TARGET_HOST%"
 if not "%CFG_HTTP_FORWARD_TARGET_PORT%"=="" set "TARGET_PORT=%CFG_HTTP_FORWARD_TARGET_PORT%"
+if not "%CFG_HTTP_FORWARD_SSL_ENABLED%"=="" set "SSL_ENABLED=%CFG_HTTP_FORWARD_SSL_ENABLED%"
+if not "%CFG_HTTP_FORWARD_SSL_CERT%"=="" set "SSL_CERT=%CFG_HTTP_FORWARD_SSL_CERT%"
+if not "%CFG_HTTP_FORWARD_SSL_KEY%"=="" set "SSL_KEY=%CFG_HTTP_FORWARD_SSL_KEY%"
 
 if not "%HTTP_FORWARD_LISTEN_HOST%"=="" set "HOST=%HTTP_FORWARD_LISTEN_HOST%"
 if not "%HTTP_FORWARD_LISTEN_PORT%"=="" set "PORT=%HTTP_FORWARD_LISTEN_PORT%"
@@ -55,6 +61,9 @@ if not "%HTTP_FORWARD_TARGET_SCHEME%"=="" set "TARGET_SCHEME=%HTTP_FORWARD_TARGE
 if not "%HTTP_FORWARD_TARGET_HOST%"=="" set "TARGET_HOST=%HTTP_FORWARD_TARGET_HOST%"
 if not "%HTTP_FORWARD_TARGET_PORT%"=="" set "TARGET_PORT=%HTTP_FORWARD_TARGET_PORT%"
 if not "%HTTP_FORWARD_LOG_LEVEL%"=="" set "LOG_LEVEL=%HTTP_FORWARD_LOG_LEVEL%"
+if not "%HTTP_FORWARD_SSL_ENABLED%"=="" set "SSL_ENABLED=%HTTP_FORWARD_SSL_ENABLED%"
+if not "%HTTP_FORWARD_SSL_CERT%"=="" set "SSL_CERT=%HTTP_FORWARD_SSL_CERT%"
+if not "%HTTP_FORWARD_SSL_KEY%"=="" set "SSL_KEY=%HTTP_FORWARD_SSL_KEY%"
 
 REM Fallback defaults (only if still empty)
 if "%HOST%"=="" set "HOST=0.0.0.0"
@@ -63,8 +72,24 @@ if "%TARGET_SCHEME%"=="" set "TARGET_SCHEME=http"
 if "%TARGET_HOST%"=="" set "TARGET_HOST=127.0.0.1"
 if "%TARGET_PORT%"=="" set "TARGET_PORT=7979"
 if "%LOG_LEVEL%"=="" set "LOG_LEVEL=info"
+if "%SSL_ENABLED%"=="" set "SSL_ENABLED=false"
 
-echo [INFO] HTTP forwarding http://%HOST%:%PORT% ^> %TARGET_SCHEME%://%TARGET_HOST%:%TARGET_PORT%
+REM Build SSL flags if enabled
+set "SSL_FLAGS="
+if /i "%SSL_ENABLED%"=="true" (
+    if not "%SSL_CERT%"=="" if not "%SSL_KEY%"=="" (
+        set "SSL_FLAGS=--ssl-certfile %SSL_CERT% --ssl-keyfile %SSL_KEY%"
+    ) else (
+        echo [WARN] SSL enabled but cert_file or key_file not set in config
+    )
+)
+
+REM Display info message
+if /i "%SSL_ENABLED%"=="true" (
+    echo [INFO] HTTP forwarding https://%HOST%:%PORT% ^> %TARGET_SCHEME%://%TARGET_HOST%:%TARGET_PORT%
+) else (
+    echo [INFO] HTTP forwarding http://%HOST%:%PORT% ^> %TARGET_SCHEME%://%TARGET_HOST%:%TARGET_PORT%
+)
 echo [INFO] Press Ctrl+C to stop (then Y if prompted).
 set "PYTHONUNBUFFERED=1"
 set "HTTP_FORWARD_LISTEN_HOST=%HOST%"
@@ -72,7 +97,10 @@ set "HTTP_FORWARD_LISTEN_PORT=%PORT%"
 set "HTTP_FORWARD_TARGET_SCHEME=%TARGET_SCHEME%"
 set "HTTP_FORWARD_TARGET_HOST=%TARGET_HOST%"
 set "HTTP_FORWARD_TARGET_PORT=%TARGET_PORT%"
-cd /d "%PROJECT_ROOT%" && "%FWD_PY%" -m uvicorn src.http_forwarder:app --host %HOST% --port %PORT% --log-level %LOG_LEVEL%
+set "HTTP_FORWARD_SSL_ENABLED=%SSL_ENABLED%"
+set "HTTP_FORWARD_SSL_CERT=%SSL_CERT%"
+set "HTTP_FORWARD_SSL_KEY=%SSL_KEY%"
+cd /d "%PROJECT_ROOT%" && "%FWD_PY%" -m uvicorn src.http_forwarder:app --host %HOST% --port %PORT% --log-level %LOG_LEVEL% %SSL_FLAGS%
 exit /b 0
 
 :no_base_venv

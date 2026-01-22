@@ -42,7 +42,7 @@ model_list:
   - model_name: GLM-4.6-nano              # Unique model identifier
     protected: true
     model_params:
-      api_type: openai                     # API type: openai (currently only)
+      api_type: openai                     # API type: openai (default) or anthropic
       model: z-ai/glm-4.6:thinking         # Actual model name
       api_base: https://nano-gpt.com/api/v1thinking  # API base URL
       api_key: ${NANOGPT_API_KEY}          # API key (from .env)
@@ -131,6 +131,8 @@ forwarder_settings:
 
 http_forwarder_settings:
   preserve_host: true
+  debug: false                       # Enable debug logging
+  timeout_seconds: 300               # Request timeout (optional, no timeout if not set)
   listen:
     host: 0.0.0.0
     port: 6969
@@ -138,6 +140,10 @@ http_forwarder_settings:
     scheme: http
     host: 127.0.0.1
     port: 7979
+  ssl:                               # SSL/TLS configuration (optional)
+    enabled: false
+    cert_file: certs/localhost+2.pem
+    key_file: certs/localhost+2-key.pem
 ```
 
 ## Model Configuration
@@ -156,7 +162,7 @@ http_forwarder_settings:
 |-------|------|---------|-------------|
 | `protected` | boolean | true | Require admin password to edit/delete this model |
 | `model_params.model` | string | - | Actual model name to send to backend |
-| `model_params.api_type` | string | "openai" | API type (only "openai" supported) |
+| `model_params.api_type` | string | "openai" | API type: "openai" or "anthropic" (for backend that uses Anthropic format) |
 | `model_params.target_model` | string | - | Override model name sent to backend |
 | `model_params.request_timeout` | number | 60 | Request timeout in seconds |
 | `model_params.supports_reasoning` | boolean | false | Whether model supports reasoning content (legacy, prefer `thinking.type`) |
@@ -478,6 +484,11 @@ If `enabled` is omitted, per-model modules default to enabled. Set `enabled: fal
 | `HTTP_FORWARD_TARGET_HOST` | HTTP forwarder target host |
 | `HTTP_FORWARD_TARGET_PORT` | HTTP forwarder target port |
 | `HTTP_FORWARD_PRESERVE_HOST` | Preserve Host header (true/false) |
+| `HTTP_FORWARD_DEBUG` | Enable debug logging (true/false) |
+| `HTTP_FORWARD_TIMEOUT` | Request timeout in seconds |
+| `HTTP_FORWARD_SSL_ENABLED` | Enable SSL/TLS (true/false) |
+| `HTTP_FORWARD_SSL_CERT` | Path to SSL certificate file |
+| `HTTP_FORWARD_SSL_KEY` | Path to SSL private key file |
 
 ### In-Config Substitution
 

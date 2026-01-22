@@ -9,7 +9,7 @@ import os
 import sys
 import uuid
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import yaml
@@ -88,7 +88,7 @@ async def test_messages_endpoint_client_disconnect_cleans_up_tracker(proxy_modul
     initial_ongoing = initial_snapshot["ongoing"]
 
     # Create a mock request that raises ClientDisconnect when body() is called
-    mock_request = AsyncMock()
+    mock_request = MagicMock()
     mock_request.body = AsyncMock(side_effect=ClientDisconnect())
     mock_request.headers = {}
     mock_request.url.path = "/v1/messages"
@@ -127,7 +127,7 @@ async def test_chat_endpoint_client_disconnect_cleans_up_tracker(proxy_module):
     initial_ongoing = initial_snapshot["ongoing"]
 
     # Create a mock request that raises ClientDisconnect when body() is called
-    mock_request = AsyncMock()
+    mock_request = MagicMock()
     mock_request.body = AsyncMock(side_effect=ClientDisconnect())
     mock_request.headers = {}
     mock_request.url.path = "/v1/chat/completions"

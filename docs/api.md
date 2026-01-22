@@ -105,6 +105,157 @@ OpenAI-compatible embeddings endpoint. Generate vector representations of text f
 - Configure embedding models the same way as chat models in `config.yaml`
 - Embeddings requests are never streaming
 
+### Anthropic Messages
+
+```http
+POST /v1/messages
+```
+
+Anthropic Messages API endpoint. Accepts Anthropic-format requests and translates them to OpenAI Chat Completions internally, enabling you to use Anthropic-compatible clients with OpenAI backends.
+
+**Request Body:**
+
+```json
+{
+  "model": "model-name",
+  "max_tokens": 1024,
+  "system": "You are a helpful assistant.",
+  "messages": [
+    {"role": "user", "content": "Hello, world!"}
+  ],
+  "temperature": 0.7,
+  "stream": false
+}
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `model` | string | Yes | Model name to use |
+| `max_tokens` | integer | Yes | Maximum tokens to generate |
+| `messages` | array | Yes | Array of messages (Anthropic format) |
+| `system` | string/array | No | System prompt (string or content blocks) |
+| `temperature` | number | No | Sampling temperature (0-2) |
+| `top_p` | number | No | Nucleus sampling parameter |
+| `stop_sequences` | array | No | Stop sequences (converted to `stop`) |
+| `stream` | boolean | No | Enable streaming responses |
+| `tools` | array | No | Tool definitions (Anthropic format) |
+| `tool_choice` | string/object | No | Tool selection strategy |
+| `metadata` | object | No | Request metadata (user_id mapped to `user`) |
+
+**Message Content Formats:**
+
+Messages can contain string content or content blocks:
+
+```json
+{
+  "role": "user",
+  "content": [
+    {"type": "text", "text": "What's in this image?"},
+    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "..."}}
+  ]
+}
+```
+
+**Supported Content Block Types:**
+- `text` - Text content
+- `image` - Base64 or URL images (converted to OpenAI `image_url`)
+- `tool_use` - Tool/function calls (assistant role)
+- `tool_result` - Tool results (converted to OpenAI `tool` messages)
+
+**Response (non-streaming):**
+
+```json
+{
+  "id": "msg_abc123",
+  "type": "message",
+  "role": "assistant",
+  "content": [
+    {"type": "text", "text": "Hello! How can I help you today?"}
+  ],
+  "model": "model-name",
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "usage": {
+    "input_tokens": 15,
+    "output_tokens": 12
+  }
+}
+```
+
+**Response (streaming):**
+
+Streaming responses use Server-Sent Events (SSE) with Anthropic event types:
+
+```
+event: message_start
+data: {"type":"message_start","message":{...}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":12}}
+
+event: message_stop
+data: {"type":"message_stop"}
+```
+
+**Tool Use Example:**
+
+Request with tools:
+```json
+{
+  "model": "model-name",
+  "max_tokens": 1024,
+  "tools": [
+    {
+      "name": "get_weather",
+      "description": "Get current weather for a location",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "location": {"type": "string", "description": "City name"}
+        },
+        "required": ["location"]
+      }
+    }
+  ],
+  "messages": [{"role": "user", "content": "What's the weather in Tokyo?"}]
+}
+```
+
+Response with tool use:
+```json
+{
+  "id": "msg_abc123",
+  "type": "message",
+  "role": "assistant",
+  "content": [
+    {
+      "type": "tool_use",
+      "id": "toolu_abc123",
+      "name": "get_weather",
+      "input": {"location": "Tokyo"}
+    }
+  ],
+  "stop_reason": "tool_use",
+  "usage": {"input_tokens": 50, "output_tokens": 30}
+}
+```
+
+**Translation Notes:**
+- `stop_sequences` → OpenAI `stop`
+- `tool_choice: "any"` → OpenAI `"required"`
+- `tool_choice: {"type": "tool", "name": "..."}` → OpenAI function selection
+- `top_k` is logged but ignored (OpenAI doesn't support it)
+- Stop reason mapping: `stop`→`end_turn`, `length`→`max_tokens`, `tool_calls`→`tool_use`
+
 ### Models List
 
 ```http

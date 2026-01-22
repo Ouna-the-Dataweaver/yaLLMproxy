@@ -47,10 +47,10 @@ class TestTcpForwarder:
         from scripts.tcp_forward import _pipe
         import inspect
         sig = inspect.signature(_pipe)
-        
-        # Should have 5 parameters
+
+        # Should have 7 parameters
         params = list(sig.parameters.keys())
-        assert params == ["src", "dst", "bufsize", "stats", "key"]
+        assert params == ["src", "dst", "bufsize", "stats", "key", "logger", "conn_id"]
 
     def test_set_nodelay_does_not_raise(self) -> None:
         """Test that _set_nodelay does not raise on a valid socket."""

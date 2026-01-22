@@ -8,6 +8,12 @@ from fastapi import HTTPException, Request, Response
 from starlette.requests import ClientDisconnect
 
 from ...auth.app_key import get_app_key_validator
+from ...concurrency import (
+    ConcurrencyClientDisconnected,
+    ConcurrencyQueueTimeout,
+    get_concurrency_manager,
+    get_key_concurrency_config,
+)
 from ...core import normalize_request_model
 from ...core.registry import get_router
 from ...logging import RequestLogRecorder, resolve_db_log_target
@@ -135,6 +141,42 @@ async def embeddings(request: Request) -> Response:
     # Validate app key authentication and model access
     app_key_ctx = get_app_key_validator().validate_request(request, model_name)
 
+    # Acquire concurrency slot (will queue if at limit)
+    concurrency_config = get_key_concurrency_config(app_key_ctx.key_id)
+    try:
+        slot = await get_concurrency_manager().acquire(
+            key_identifier=app_key_ctx.key_id,
+            concurrency_limit=concurrency_config.concurrency_limit,
+            priority=concurrency_config.priority,
+            timeout=concurrency_config.queue_timeout,
+            disconnect_checker=request.is_disconnected,
+        )
+    except ConcurrencyQueueTimeout:
+        logger.warning(
+            "Concurrency queue timeout for key=%s, model=%s",
+            app_key_ctx.key_id,
+            model_name,
+        )
+        tracker.finish()
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "error": {
+                    "message": "Request queued too long - concurrency limit reached",
+                    "type": "rate_limit_error",
+                    "code": "concurrency_limit_exceeded",
+                }
+            },
+        )
+    except ConcurrencyClientDisconnected:
+        logger.info(
+            "Client disconnected while waiting in queue: key=%s, model=%s",
+            app_key_ctx.key_id,
+            model_name,
+        )
+        tracker.finish()
+        return Response(status_code=499)
+
     # Validate input field for embeddings
     input_text = payload.get("input")
     if input_text is None:
@@ -148,6 +190,7 @@ async def embeddings(request: Request) -> Response:
         request_log.record_request(request.method, request.url.query, request.headers, body)
         request_log.record_error("missing input parameter")
         request_log.finalize("error")
+        await slot.release()
         tracker.finish()
         raise HTTPException(
             status_code=400,
@@ -172,6 +215,7 @@ async def embeddings(request: Request) -> Response:
         request_log.record_request(request.method, request.url.query, request.headers, body)
         request_log.record_error("invalid input type")
         request_log.finalize("error")
+        await slot.release()
         tracker.finish()
         raise HTTPException(
             status_code=400,
@@ -214,6 +258,7 @@ async def embeddings(request: Request) -> Response:
         logger.info(f"Embeddings request for model {model_name} completed successfully")
         if request_log and not request_log.finalized:
             request_log.finalize("success")
+        await slot.release()
         tracker.finish()
         return response
     except Exception as e:
@@ -221,5 +266,6 @@ async def embeddings(request: Request) -> Response:
         if request_log and not request_log.finalized:
             request_log.record_error(str(e))
             request_log.finalize("error")
+        await slot.release()
         tracker.finish()
         raise

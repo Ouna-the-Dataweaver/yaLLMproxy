@@ -48,6 +48,9 @@ class ForwarderSettings:
     preserve_host: bool
     timeout_seconds: Optional[float]
     debug: bool = False
+    ssl_enabled: bool = False
+    ssl_cert_file: Optional[str] = None
+    ssl_key_file: Optional[str] = None
 
     @property
     def target_base(self) -> str:
@@ -152,6 +155,19 @@ def _load_settings() -> ForwarderSettings:
     if debug_env is not None:
         debug = debug_env
 
+    # SSL settings
+    ssl_cfg = http_cfg.get("ssl") or {}
+    ssl_enabled = _to_bool(ssl_cfg.get("enabled")) or False
+    ssl_cert_file = _to_str(ssl_cfg.get("cert_file"))
+    ssl_key_file = _to_str(ssl_cfg.get("key_file"))
+
+    # Env overrides for SSL
+    ssl_enabled_env = _to_bool(os.getenv("HTTP_FORWARD_SSL_ENABLED"))
+    if ssl_enabled_env is not None:
+        ssl_enabled = ssl_enabled_env
+    ssl_cert_file = os.getenv("HTTP_FORWARD_SSL_CERT", ssl_cert_file)
+    ssl_key_file = os.getenv("HTTP_FORWARD_SSL_KEY", ssl_key_file)
+
     return ForwarderSettings(
         listen_host=listen_host,
         listen_port=listen_port,
@@ -161,6 +177,9 @@ def _load_settings() -> ForwarderSettings:
         preserve_host=preserve_host,
         timeout_seconds=timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
         debug=debug,
+        ssl_enabled=ssl_enabled,
+        ssl_cert_file=ssl_cert_file,
+        ssl_key_file=ssl_key_file,
     )
 
 
