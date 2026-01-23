@@ -105,6 +105,82 @@ OpenAI-compatible embeddings endpoint. Generate vector representations of text f
 - Configure embedding models the same way as chat models in `config.yaml`
 - Embeddings requests are never streaming
 
+### Rerank
+
+```http
+POST /v1/rerank
+```
+
+Rerank endpoint for semantic search and document ranking. Given a query and a list of documents, returns the documents ranked by relevance to the query.
+
+**Request Body:**
+
+```json
+{
+  "model": "reranker-model",
+  "query": "What is machine learning?",
+  "documents": [
+    "Machine learning is a subset of artificial intelligence.",
+    "Python is a popular programming language.",
+    "Neural networks can learn complex patterns from data."
+  ],
+  "top_n": 2,
+  "return_documents": true
+}
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `model` | string | Yes | Model name to use for reranking |
+| `query` | string | Yes | The search query to rank documents against |
+| `documents` | array | Yes | Array of document strings to rank |
+| `top_n` | integer | No | Maximum number of results to return (defaults to all) |
+| `return_documents` | boolean | No | Include document text in response (default: true) |
+
+**Response:**
+
+```json
+{
+  "id": "rerank-abc123",
+  "model": "reranker-model",
+  "usage": {
+    "total_tokens": 150
+  },
+  "results": [
+    {
+      "index": 0,
+      "relevance_score": 0.98,
+      "document": {
+        "text": "Machine learning is a subset of artificial intelligence."
+      }
+    },
+    {
+      "index": 2,
+      "relevance_score": 0.75,
+      "document": {
+        "text": "Neural networks can learn complex patterns from data."
+      }
+    }
+  ]
+}
+```
+
+| Response Field | Type | Description |
+|----------------|------|-------------|
+| `id` | string | Unique request identifier |
+| `model` | string | Model used for reranking |
+| `usage.total_tokens` | integer | Total tokens processed |
+| `results` | array | Ranked results sorted by relevance |
+| `results[].index` | integer | Original index of the document in the input array |
+| `results[].relevance_score` | float | Relevance score (0-1, higher is more relevant) |
+| `results[].document` | object | Document content (if `return_documents` is true) |
+
+**Notes:**
+- Results are returned sorted by `relevance_score` in descending order
+- The `index` field indicates the original position in the input `documents` array
+- Configure reranker models the same way as other models in `config.yaml`
+- Rerank requests are never streaming
+
 ### Anthropic Messages
 
 ```http
@@ -941,6 +1017,6 @@ All endpoints return consistent error responses:
 |------|-------------|
 | `invalid_json` | Request body is not valid JSON |
 | `invalid_json_shape` | Request body is not an object |
-| `missing_parameter` | Required parameter is missing (model, messages, input) |
+| `missing_parameter` | Required parameter is missing (model, messages, input, query, documents) |
 | `invalid_parameter` | Parameter has invalid type or value |
 | `model_not_found` | Requested model is not configured |

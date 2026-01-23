@@ -9,7 +9,7 @@ Yet Another LLM Proxy - A lightweight, modular LLM proxy with OpenAI-compatible 
 - **Request/Response Logging**: Detailed logs of all requests and responses for debugging
 - **Database Support**: SQLite (default) or PostgreSQL for persistent logging with JSONB columns
 - **OpenAI Compatibility**: Works with OpenAI-compatible clients and tools
-- **Chat, Embeddings & Messages**: Supports `/v1/chat/completions`, `/v1/embeddings`, and `/v1/messages` (Anthropic API) endpoints
+- **Chat, Embeddings, Rerank & Messages**: Supports `/v1/chat/completions`, `/v1/embeddings`, `/v1/rerank`, and `/v1/messages` (Anthropic API) endpoints
 - **Anthropic API Translation**: Route Anthropic Messages API requests to OpenAI-compatible backends with automatic format conversion
 - **Runtime Registration**: Register new backends without restarting the proxy
 - **Environment Variable Support**: Configure via environment variables in YAML files
@@ -93,6 +93,11 @@ curl http://localhost:7979/v1/chat/completions \
 curl http://localhost:7979/v1/embeddings \
   -H "Content-Type: application/json" \
   -d '{"model": "your-embedding-model", "input": "Hello, world!"}'
+
+# Rerank
+curl http://localhost:7979/v1/rerank \
+  -H "Content-Type: application/json" \
+  -d '{"model": "your-reranker-model", "query": "What is machine learning?", "documents": ["ML is a subset of AI", "Python is a programming language", "Neural networks learn patterns"], "top_n": 2}'
 
 # Anthropic Messages API (routed to OpenAI backend)
 curl http://localhost:7979/v1/messages \

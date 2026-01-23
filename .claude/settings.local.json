@@ -23,7 +23,8 @@
       "Bash(wc:*)",
       "Bash(ls:*)",
       "Bash(grep:*)",
-      "Bash(git log:*)"
+      "Bash(git log:*)",
+      "WebFetch(domain:docs.vllm.ai)"
     ]
   },
   "outputStyle": "default"

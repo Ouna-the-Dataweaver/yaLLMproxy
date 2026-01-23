@@ -31,6 +31,7 @@ from .core import ProxyRouter
 from .core.registry import set_router
 from .api.routes import chat_completions, embeddings, list_models, register_model, config as config_routes, usage, logs
 from .api.routes import keys as key_routes
+from .api.routes.rerank import rerank
 from .api.routes.responses import responses_endpoint
 from .api.routes.messages import messages_endpoint
 
@@ -207,6 +208,7 @@ async def shutdown_event():
 # Register routes
 app.post("/v1/chat/completions")(chat_completions)
 app.post("/v1/embeddings")(embeddings)
+app.post("/v1/rerank")(rerank)
 app.get("/v1/models")(list_models)
 app.post("/admin/models")(register_model)
 

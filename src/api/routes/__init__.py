@@ -5,6 +5,7 @@ from .chat import chat_completions, handle_openai_request
 from .embeddings import embeddings
 from .models import list_models
 from .messages import messages_endpoint
+from .rerank import rerank
 from .responses import responses_endpoint
 from . import config
 
@@ -15,6 +16,7 @@ __all__ = [
     "list_models",
     "messages_endpoint",
     "register_model",
+    "rerank",
     "responses_endpoint",
     "config",
 ]
