@@ -149,6 +149,9 @@ cython_debug/
 cLLMp/logs/
 logs/
 
+# Local config (use config_example.yaml as template)
+configs/config.yaml
+
 # OS generated files
 .DS_Store
 .DS_Store?
