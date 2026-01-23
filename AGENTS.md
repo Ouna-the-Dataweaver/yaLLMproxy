@@ -12,3 +12,4 @@ This file contains rules and guidelines for working with this repository.
 9. Ask user if they want to update `README.md` and `docs/` files to reflect changes after work is done. 
 10. For big tasks, write unit tests as you go and run them in the process, instead of doing everything at once and then testing everything at once. 
 11. When unsure about any library usage you can search web for docs of the library, or check library installed in the project venv.
+12. There is a lot of info on the repo in the docs folder, this can help with initial understanding of the repository structure. 
