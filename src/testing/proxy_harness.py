@@ -10,7 +10,7 @@ from fastapi import FastAPI
 
 from ..core import ProxyRouter
 from ..core.registry import get_router, set_router
-from ..api.routes import chat_completions, responses, messages_endpoint
+from ..api.routes import chat_completions, responses_endpoint, messages_endpoint
 
 if TYPE_CHECKING:
     from ..concurrency import ConcurrencyManager
@@ -71,7 +71,7 @@ class ProxyHarness:
         self.app = FastAPI(title="ProxyHarness")
         self.app.post("/v1/chat/completions")(chat_completions)
         if enable_responses_endpoint:
-            self.app.post("/v1/responses")(responses)
+            self.app.post("/v1/responses")(responses_endpoint)
         if enable_messages_endpoint:
             self.app.post("/v1/messages")(messages_endpoint)
 

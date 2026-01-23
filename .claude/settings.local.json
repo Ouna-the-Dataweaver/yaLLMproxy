@@ -21,7 +21,9 @@
       "Bash(python -m py_compile:*)",
       "Bash(cat:*)",
       "Bash(wc:*)",
-      "Bash(ls:*)"
+      "Bash(ls:*)",
+      "Bash(grep:*)",
+      "Bash(git log:*)"
     ]
   },
   "outputStyle": "default"

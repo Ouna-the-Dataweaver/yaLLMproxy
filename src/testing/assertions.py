@@ -322,3 +322,142 @@ def assert_response_content_equals(
     assert actual == expected_text, (
         f"Content mismatch.\nExpected: {expected_text}\nActual: {actual}"
     )
+
+
+# =============================================================================
+# Responses API Assertions
+# =============================================================================
+
+
+def assert_responses_api_valid(response: dict[str, Any]) -> None:
+    """Validate that a response has valid Responses API structure.
+
+    Args:
+        response: Response dict to validate
+
+    Raises:
+        AssertionError: If structure is invalid
+    """
+    assert "id" in response, "Missing 'id' field"
+    assert response["id"].startswith("resp_"), f"ID should start with 'resp_': {response['id']}"
+
+    assert "object" in response, "Missing 'object' field"
+    assert response["object"] == "response", f"Expected object='response', got '{response['object']}'"
+
+    assert "status" in response, "Missing 'status' field"
+    valid_statuses = {"in_progress", "completed", "incomplete", "failed"}
+    assert response["status"] in valid_statuses, (
+        f"Invalid status '{response['status']}', expected one of {valid_statuses}"
+    )
+
+    assert "output" in response, "Missing 'output' field"
+    assert isinstance(response["output"], list), "Output should be a list"
+
+    # Validate each output item
+    for i, item in enumerate(response["output"]):
+        assert "type" in item, f"Output item {i} missing 'type'"
+        item_type = item["type"]
+        if item_type == "message":
+            assert "role" in item, f"Message item {i} missing 'role'"
+            assert "content" in item, f"Message item {i} missing 'content'"
+            assert item["role"] == "assistant", f"Message item {i} should have role='assistant'"
+        elif item_type == "function_call":
+            assert "call_id" in item, f"Function call item {i} missing 'call_id'"
+            assert "name" in item, f"Function call item {i} missing 'name'"
+            assert "arguments" in item, f"Function call item {i} missing 'arguments'"
+
+    # Validate usage if present, non-empty, and status is completed
+    if response["status"] == "completed" and response.get("usage"):
+        usage = response["usage"]
+        if usage:  # Only validate if usage is non-empty dict
+            # Accept either OpenAI format (prompt_tokens) or Responses format (input_tokens)
+            has_input = "input_tokens" in usage or "prompt_tokens" in usage
+            has_output = "output_tokens" in usage or "completion_tokens" in usage
+            if has_input or has_output:  # Only check if some tokens are present
+                assert has_input, f"Usage missing input tokens: {usage}"
+                assert has_output, f"Usage missing output tokens: {usage}"
+
+
+def assert_responses_sse_valid(events: list[dict[str, Any]]) -> None:
+    """Validate Responses API SSE event sequence.
+
+    Args:
+        events: List of parsed SSE event dicts
+
+    Raises:
+        AssertionError: If structure is invalid
+    """
+    assert len(events) > 0, "Events list is empty"
+
+    # Check required initial events
+    assert events[0]["type"] == "response.created", (
+        f"First event should be response.created, got '{events[0].get('type')}'"
+    )
+
+    # Must have in_progress after created
+    event_types = [e.get("type") for e in events]
+    assert "response.in_progress" in event_types, "Missing response.in_progress event"
+
+    # Must end with a terminal event
+    terminal_types = {"response.completed", "response.failed", "response.incomplete"}
+    assert events[-1]["type"] in terminal_types, (
+        f"Last event should be terminal (completed/failed/incomplete), got '{events[-1].get('type')}'"
+    )
+
+    # Check sequence numbers are monotonically increasing
+    sequence_numbers = [e.get("sequence_number") for e in events if "sequence_number" in e]
+    if sequence_numbers:
+        for i in range(1, len(sequence_numbers)):
+            assert sequence_numbers[i] > sequence_numbers[i - 1], (
+                f"Sequence numbers not monotonic at index {i}: "
+                f"{sequence_numbers[i - 1]} -> {sequence_numbers[i]}"
+            )
+
+
+def assert_responses_output_text_equals(
+    response: dict[str, Any],
+    expected_text: str,
+) -> None:
+    """Assert that response output_text matches expected.
+
+    Args:
+        response: Responses API response dict
+        expected_text: Expected output text
+
+    Raises:
+        AssertionError: If text doesn't match
+    """
+    output_text = response.get("output_text", "")
+    assert output_text == expected_text, (
+        f"Output text mismatch.\nExpected: {expected_text}\nActual: {output_text}"
+    )
+
+
+def assert_responses_has_tool_calls(
+    response: dict[str, Any],
+    expected_count: int | None = None,
+    expected_names: list[str] | None = None,
+) -> None:
+    """Assert that response has expected tool calls.
+
+    Args:
+        response: Responses API response dict
+        expected_count: Expected number of function_call items
+        expected_names: Expected function names
+
+    Raises:
+        AssertionError: If tool calls don't match expectations
+    """
+    output = response.get("output", [])
+    function_calls = [item for item in output if item.get("type") == "function_call"]
+
+    if expected_count is not None:
+        assert len(function_calls) == expected_count, (
+            f"Expected {expected_count} tool calls, got {len(function_calls)}"
+        )
+
+    if expected_names is not None:
+        actual_names = [fc.get("name") for fc in function_calls]
+        assert actual_names == expected_names, (
+            f"Tool call names mismatch.\nExpected: {expected_names}\nActual: {actual_names}"
+        )

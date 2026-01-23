@@ -307,3 +307,209 @@ def register_fake_upstream(
     from src.core.upstream_transport import register_upstream_transport
 
     register_upstream_transport(host, httpx.ASGITransport(app=upstream.app))
+
+
+# =============================================================================
+# Responses Endpoint Configuration
+# =============================================================================
+
+
+def build_responses_config(
+    base_url: str,
+    *,
+    model_name: str = "test-model",
+    api_key: str = "test-key",
+    concurrency_limit: int = 0,
+    priority: int = 100,
+    queue_timeout: float = 30.0,
+) -> dict[str, Any]:
+    """Build a config for /v1/responses endpoint testing.
+
+    Args:
+        base_url: Upstream server URL
+        model_name: Model name to register
+        api_key: API key for the model
+        concurrency_limit: Concurrency limit (0 = unlimited)
+        priority: Request priority
+        queue_timeout: Queue timeout in seconds
+
+    Returns:
+        Config dict for ProxyHarness with responses endpoint
+    """
+    return {
+        "model_list": [
+            {
+                "model_name": model_name,
+                "model_params": {
+                    "model": "openai/fake",
+                    "api_base": base_url,
+                    "api_key": api_key,
+                },
+            }
+        ],
+        "proxy_settings": {
+            "concurrency": {
+                "enabled": concurrency_limit > 0,
+                "default_limit": concurrency_limit,
+                "default_priority": priority,
+                "default_queue_timeout": queue_timeout,
+            }
+        },
+    }
+
+
+def build_parser_config(
+    base_url: str,
+    *,
+    model_name: str = "test-model",
+    api_key: str = "test-key",
+    parse_tags: dict[str, Any] | None = None,
+    swap_reasoning: dict[str, Any] | None = None,
+    paths: list[str] | None = None,
+) -> dict[str, Any]:
+    """Build a config with specific parser configuration.
+
+    Args:
+        base_url: Upstream server URL
+        model_name: Model name to register
+        api_key: API key
+        parse_tags: Optional parse_tags module config
+        swap_reasoning: Optional swap_reasoning_content module config
+        paths: Paths to apply parsers to (defaults to ["/chat/completions"])
+
+    Returns:
+        Config dict for ProxyHarness with parser configuration
+    """
+    # Build modules config
+    modules: dict[str, Any] = {
+        "enabled": True,
+        "paths": paths or ["/chat/completions"],
+        "response": [],
+    }
+
+    if parse_tags is not None:
+        modules["response"].append("parse_tags")
+        modules["parse_tags"] = parse_tags
+
+    if swap_reasoning is not None:
+        modules["response"].append("swap_reasoning_content")
+        modules["swap_reasoning_content"] = swap_reasoning
+
+    return {
+        "model_list": [
+            {
+                "model_name": model_name,
+                "model_params": {
+                    "model": "openai/fake",
+                    "api_base": base_url,
+                    "api_key": api_key,
+                },
+            }
+        ],
+        "proxy_settings": {
+            "modules": modules,
+        },
+    }
+
+
+# =============================================================================
+# Responses Endpoint Fixtures
+# =============================================================================
+
+
+@pytest.fixture
+def reset_state_store() -> Generator[None, None, None]:
+    """Reset ResponseStateStore before and after test.
+
+    Use this fixture in tests that use the state store.
+    """
+    from src.responses.state_store import reset_state_store
+
+    reset_state_store()
+    yield
+    reset_state_store()
+
+
+@pytest.fixture
+def responses_harness(
+    clear_transport_registry: None,
+    reset_concurrency: None,
+    reset_state_store: None,
+) -> Generator[tuple[Any, Any], None, None]:
+    """Create a harness configured for /v1/responses endpoint testing.
+
+    Returns:
+        Tuple of (FakeUpstream, ProxyHarness)
+
+    Usage:
+        def test_responses(responses_harness):
+            upstream, harness = responses_harness
+            upstream.enqueue_openai_chat_response("Hello")
+            # ... test code ...
+    """
+    from src.core.upstream_transport import register_upstream_transport
+    from src.testing import FakeUpstream, ProxyHarness
+
+    base_url = "http://upstream.local/v1"
+    upstream = FakeUpstream()
+    register_upstream_transport("upstream.local", httpx.ASGITransport(app=upstream.app))
+
+    config = build_responses_config(base_url)
+    harness = ProxyHarness(
+        config,
+        enable_responses_endpoint=True,
+        enable_concurrency=True,
+        reset_concurrency=True,
+    )
+
+    try:
+        yield upstream, harness
+    finally:
+        harness.close()
+
+
+@pytest.fixture
+def parser_harness(
+    clear_transport_registry: None,
+) -> Generator[tuple[Any, Any, Any], None, None]:
+    """Create a harness for parser testing.
+
+    Returns:
+        Tuple of (FakeUpstream, base_url, harness_factory)
+        where harness_factory is a function that takes parser config and returns ProxyHarness
+
+    Usage:
+        def test_parser(parser_harness):
+            upstream, base_url, make_harness = parser_harness
+            harness = make_harness(parse_tags={"parse_thinking": True})
+            # ... test code ...
+    """
+    from src.core.upstream_transport import register_upstream_transport
+    from src.testing import FakeUpstream, ProxyHarness
+
+    base_url = "http://upstream.local/v1"
+    upstream = FakeUpstream()
+    register_upstream_transport("upstream.local", httpx.ASGITransport(app=upstream.app))
+
+    created_harnesses: list[ProxyHarness] = []
+
+    def make_harness(
+        parse_tags: dict[str, Any] | None = None,
+        swap_reasoning: dict[str, Any] | None = None,
+        paths: list[str] | None = None,
+    ) -> ProxyHarness:
+        config = build_parser_config(
+            base_url,
+            parse_tags=parse_tags,
+            swap_reasoning=swap_reasoning,
+            paths=paths,
+        )
+        harness = ProxyHarness(config)
+        created_harnesses.append(harness)
+        return harness
+
+    try:
+        yield upstream, base_url, make_harness
+    finally:
+        for harness in created_harnesses:
+            harness.close()

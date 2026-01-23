@@ -7,6 +7,10 @@ from .assertions import (
     assert_no_slot_leak,
     assert_openai_chat_valid,
     assert_response_content_equals,
+    assert_responses_api_valid,
+    assert_responses_has_tool_calls,
+    assert_responses_output_text_equals,
+    assert_responses_sse_valid,
     assert_slot_released,
     assert_sse_event_sequence_valid,
 )
@@ -18,7 +22,12 @@ from .response_builders import (
     build_anthropic_stream_events,
     build_openai_chat_response,
     build_openai_request,
+    build_openai_response_with_reasoning,
+    build_openai_response_with_tags,
     build_openai_stream_chunks,
+    build_openai_tool_call_response_k2,
+    build_openai_tool_call_response_xml,
+    build_responses_request,
 )
 from .template_unparse import (
     TemplateMarkers,
@@ -42,6 +51,11 @@ __all__ = [
     "build_anthropic_stream_events",
     "build_anthropic_request",
     "build_openai_request",
+    "build_responses_request",
+    "build_openai_response_with_tags",
+    "build_openai_response_with_reasoning",
+    "build_openai_tool_call_response_xml",
+    "build_openai_tool_call_response_k2",
     # Assertions
     "assert_anthropic_message_valid",
     "assert_openai_chat_valid",
@@ -51,6 +65,10 @@ __all__ = [
     "assert_no_slot_leak",
     "assert_messages_equal",
     "assert_response_content_equals",
+    "assert_responses_api_valid",
+    "assert_responses_sse_valid",
+    "assert_responses_output_text_equals",
+    "assert_responses_has_tool_calls",
     # Template utilities
     "TemplateMarkers",
     "detect_template_markers",

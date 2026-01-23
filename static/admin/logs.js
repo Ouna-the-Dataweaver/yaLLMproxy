@@ -1266,6 +1266,9 @@ const initLogsUi = () => {
     document.getElementById("applyFilters").addEventListener("click", applyFilters);
     document.getElementById("clearFilters").addEventListener("click", clearFilters);
 
+    // Reload button
+    document.getElementById("reloadLogs").addEventListener("click", fetchLogs);
+
     // Pagination
     document.getElementById("prevPage").addEventListener("click", prevPage);
     document.getElementById("nextPage").addEventListener("click", nextPage);

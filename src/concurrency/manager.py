@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import heapq
+import inspect
 import logging
 import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable, Union
 
 from .exceptions import ConcurrencyClientDisconnected, ConcurrencyQueueTimeout
 from .slot import ConcurrencySlot
@@ -139,7 +140,7 @@ class ConcurrencyManager:
         concurrency_limit: int,
         priority: int,
         timeout: float | None = None,
-        disconnect_checker: Callable[[], bool] | None = None,
+        disconnect_checker: Union[Callable[[], bool], Callable[[], Awaitable[bool]]] | None = None,
     ) -> ConcurrencySlot:
         """Acquire a concurrency slot for a request.
 
@@ -243,7 +244,7 @@ class ConcurrencyManager:
         self,
         queued: QueuedRequest,
         timeout: float | None,
-        disconnect_checker: Callable[[], bool] | None,
+        disconnect_checker: Union[Callable[[], bool], Callable[[], Awaitable[bool]]] | None,
     ) -> None:
         """Wait for a concurrency slot to become available.
 
@@ -271,10 +272,17 @@ class ConcurrencyManager:
                 wait_timeout = 0.5
 
             # Check for client disconnect
-            if disconnect_checker and disconnect_checker():
-                raise ConcurrencyClientDisconnected(
-                    f"Client disconnected while waiting: key={queued.key_identifier}"
-                )
+            if disconnect_checker:
+                result = disconnect_checker()
+                # Handle both sync and async disconnect checkers
+                if inspect.iscoroutine(result):
+                    is_disconnected = await result
+                else:
+                    is_disconnected = result
+                if is_disconnected:
+                    raise ConcurrencyClientDisconnected(
+                        f"Client disconnected while waiting: key={queued.key_identifier}"
+                    )
 
             # Wait for ready signal
             try:
