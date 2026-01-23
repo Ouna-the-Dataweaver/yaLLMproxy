@@ -10,6 +10,8 @@
     <link rel="stylesheet" href="/static/admin/theme.css">
     <link rel="stylesheet" href="/static/admin/ui.css">
     <link rel="stylesheet" href="/static/admin/usage.css">
+    <link rel="icon" type="image/png" href="/static/applogo.png">
+    <link rel="apple-touch-icon" href="/static/applogo.png">
     <style>
         /* Logs page specific styles */
         .logs-container {
@@ -72,6 +74,20 @@
             outline: none;
             border-color: var(--accent-primary);
             box-shadow: 0 0 0 3px var(--accent-primary-muted);
+        }
+
+        /* Calendar picker button - dark mode fix */
+        .filter-group input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+            cursor: pointer;
+            opacity: 0.7;
+        }
+
+        .filter-group input[type="datetime-local"]::-webkit-calendar-picker-indicator:hover {
+            opacity: 1;
+        }
+
+        [data-theme="dark"] .filter-group input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+            filter: invert(1);
         }
 
         .filter-actions {

@@ -11,6 +11,49 @@
   padding: 0;
 }
 
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 14px;
+  height: 14px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-soft, #f2e7d8);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--ink-muted, #6f6a60);
+  border-radius: 7px;
+  border: 3px solid var(--bg-soft, #f2e7d8);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--ink-soft, #4b473f);
+}
+
+[data-theme="dark"] ::-webkit-scrollbar-track {
+  background: var(--bg-soft, #161b22);
+}
+
+[data-theme="dark"] ::-webkit-scrollbar-thumb {
+  background: var(--ink-muted, #8b949e);
+  border: 3px solid var(--bg-soft, #161b22);
+}
+
+[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
+  background: var(--ink-soft, #b1bac4);
+}
+
+/* Firefox scrollbar */
+* {
+  scrollbar-width: auto;
+  scrollbar-color: var(--ink-muted, #6f6a60) var(--bg-soft, #f2e7d8);
+}
+
+[data-theme="dark"] * {
+  scrollbar-color: var(--ink-muted, #8b949e) var(--bg-soft, #161b22);
+}
+
 body {
   font-family: 'Hanken Grotesk', sans-serif;
   background: var(--bg);
@@ -29,26 +72,44 @@ body::before {
   content: "";
   position: fixed;
   inset: 0;
-  background-image: radial-gradient(rgba(30, 27, 22, 0.08) 1px, transparent 1px);
+  background-image: radial-gradient(rgba(30, 27, 22, 0.25) 1px, transparent 1px);
   background-size: 48px 48px;
-  opacity: 0.15;
+  opacity: 0.6;
   pointer-events: none;
 }
 
 [data-theme="dark"] body::before {
-  background-image: radial-gradient(rgba(230, 237, 243, 0.06) 1px, transparent 1px);
+  background-image: radial-gradient(rgba(230, 237, 243, 0.25) 1px, transparent 1px);
 }
 
 body::after {
   content: "";
   position: fixed;
-  width: 520px;
-  height: 520px;
-  right: -180px;
-  bottom: -240px;
-  background: radial-gradient(circle, rgba(238, 108, 77, 0.22) 0%, transparent 70%);
-  filter: blur(10px);
+  inset: 0;
+  background:
+    radial-gradient(ellipse 600px 500px at 85% 90%, rgba(238, 108, 77, 0.18) 0%, transparent 60%),
+    radial-gradient(ellipse 400px 350px at 10% 15%, rgba(15, 118, 110, 0.12) 0%, transparent 55%);
+  filter: blur(40px);
   pointer-events: none;
+  animation: bgFloat 25s ease-in-out infinite;
+}
+
+[data-theme="dark"] body::after {
+  background:
+    radial-gradient(ellipse 600px 500px at 85% 85%, rgba(255, 123, 92, 0.12) 0%, transparent 55%),
+    radial-gradient(ellipse 450px 400px at 8% 20%, rgba(57, 208, 214, 0.1) 0%, transparent 50%);
+}
+
+@keyframes bgFloat {
+  0%, 100% {
+    transform: translate(0, 0) scale(1);
+  }
+  33% {
+    transform: translate(-8px, 12px) scale(1.02);
+  }
+  66% {
+    transform: translate(10px, -8px) scale(0.98);
+  }
 }
 
 .page {
