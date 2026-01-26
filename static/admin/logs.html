@@ -10,34 +10,15 @@
     <link rel="stylesheet" href="/static/admin/theme.css">
     <link rel="stylesheet" href="/static/admin/ui.css">
     <link rel="stylesheet" href="/static/admin/usage.css">
-    <link rel="icon" type="image/png" href="/static/applogo.png">
-    <link rel="apple-touch-icon" href="/static/applogo.png">
+    <link rel="icon" type="image/png" href="/static/icon.png">
+    <link rel="apple-touch-icon" href="/static/icon.png">
     <style>
         /* Logs page specific styles */
-        .logs-container {
-            max-width: 1400px;
-            margin: 0 auto;
-            padding: 24px;
-        }
-
-        .logs-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 24px;
-        }
-
-        .logs-header h1 {
-            font-size: 28px;
-            font-weight: 600;
+        .panel + .panel {
+            margin-top: 24px;
         }
 
         .filters-panel {
-            background: var(--bg-secondary);
-            border: 1px solid var(--border-subtle);
-            border-radius: 12px;
-            padding: 20px;
-            margin-bottom: 24px;
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
             gap: 16px;
@@ -61,10 +42,9 @@
         .filter-group input[type="text"],
         .filter-group input[type="datetime-local"] {
             padding: 10px 12px;
-            border: 1px solid var(--border-subtle);
-            border-radius: 8px;
-            background: var(--bg-primary);
-            color: var(--ink-primary);
+            border: 1px solid var(--border);
+            background: var(--surface-strong);
+            color: var(--ink);
             font-size: 14px;
             font-family: inherit;
         }
@@ -72,8 +52,8 @@
         .filter-group select:focus,
         .filter-group input:focus {
             outline: none;
-            border-color: var(--accent-primary);
-            box-shadow: 0 0 0 3px var(--accent-primary-muted);
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.18);
         }
 
         /* Calendar picker button - dark mode fix */
@@ -97,9 +77,8 @@
         }
 
         .logs-table-container {
-            background: var(--bg-secondary);
-            border: 1px solid var(--border-subtle);
-            border-radius: 12px;
+            background: var(--surface-strong);
+            border: 1px solid var(--border);
             overflow: hidden;
         }
 
@@ -116,13 +95,13 @@
             color: var(--ink-muted);
             text-transform: uppercase;
             letter-spacing: 0.5px;
-            background: var(--bg-tertiary);
-            border-bottom: 1px solid var(--border-subtle);
+            background: var(--surface-strong);
+            border-bottom: 1px solid var(--border);
         }
 
         .logs-table td {
             padding: 14px 16px;
-            border-bottom: 1px solid var(--border-subtle);
+            border-bottom: 1px solid var(--border);
             font-size: 14px;
         }
 
@@ -131,12 +110,12 @@
         }
 
         .logs-table tr:hover td {
-            background: var(--bg-hover);
+            background: var(--surface);
         }
 
         .logs-table .clickable {
             cursor: pointer;
-            color: var(--accent-primary);
+            color: var(--accent);
         }
 
         .logs-table .clickable:hover {
@@ -147,34 +126,53 @@
             display: inline-flex;
             align-items: center;
             padding: 4px 10px;
-            border-radius: 9999px;
             font-size: 12px;
             font-weight: 500;
         }
 
         .badge-success {
-            background: var(--success-bg);
-            color: var(--success-ink);
+            background: rgba(16, 185, 129, 0.15);
+            color: #0f766e;
+        }
+
+        [data-theme="dark"] .badge-success {
+            background: rgba(16, 185, 129, 0.2);
+            color: #34d399;
         }
 
         .badge-error {
-            background: var(--error-bg);
-            color: var(--error-ink);
+            background: rgba(239, 68, 68, 0.15);
+            color: #dc2626;
+        }
+
+        [data-theme="dark"] .badge-error {
+            background: rgba(239, 68, 68, 0.2);
+            color: #f87171;
         }
 
         .badge-warning {
-            background: var(--warning-bg);
-            color: var(--warning-ink);
+            background: rgba(245, 158, 11, 0.15);
+            color: #b45309;
+        }
+
+        [data-theme="dark"] .badge-warning {
+            background: rgba(245, 158, 11, 0.2);
+            color: #fbbf24;
         }
 
         .badge-neutral {
-            background: var(--neutral-bg);
-            color: var(--neutral-ink);
+            background: rgba(107, 114, 128, 0.15);
+            color: #6b7280;
+        }
+
+        [data-theme="dark"] .badge-neutral {
+            background: rgba(107, 114, 128, 0.2);
+            color: #9ca3af;
         }
 
         .badge-tool-call {
-            background: var(--accent-primary-muted);
-            color: var(--accent-primary);
+            background: var(--accent-soft);
+            color: var(--accent);
         }
 
         .pagination {
@@ -182,7 +180,7 @@
             justify-content: space-between;
             align-items: center;
             padding: 16px 20px;
-            border-top: 1px solid var(--border-subtle);
+            border-top: 1px solid var(--border);
         }
 
         .pagination-info {
@@ -197,16 +195,15 @@
 
         .pagination-btn {
             padding: 8px 16px;
-            border: 1px solid var(--border-subtle);
-            border-radius: 8px;
-            background: var(--bg-primary);
-            color: var(--ink-primary);
+            border: 1px solid var(--border);
+            background: var(--surface);
+            color: var(--ink);
             font-size: 14px;
             cursor: pointer;
         }
 
         .pagination-btn:hover:not(:disabled) {
-            background: var(--bg-hover);
+            background: var(--surface-strong);
         }
 
         .pagination-btn:disabled {
@@ -270,7 +267,7 @@
         }
 
         .detail-close:hover {
-            color: var(--ink-primary);
+            color: var(--ink);
         }
 
         .detail-body {
@@ -350,7 +347,7 @@
             text-align: center;
             padding: 60px;
             color: var(--ink-muted);
-            background: var(--bg-secondary);
+            background: var(--surface-strong);
             min-height: 200px;
             display: flex;
             flex-direction: column;
@@ -365,7 +362,7 @@
         .empty-state h3 {
             font-size: 18px;
             font-weight: 600;
-            color: var(--ink-primary);
+            color: var(--ink);
             margin-bottom: 8px;
         }
 
@@ -423,16 +420,20 @@
         }
 
         .highlight-cached {
-            color: var(--success-ink);
+            color: #0f766e;
+        }
+
+        [data-theme="dark"] .highlight-cached {
+            color: #34d399;
         }
 
         .highlight-reasoning {
-            color: var(--accent-primary);
+            color: var(--accent);
         }
 
         .badge-primary {
-            background: var(--accent-primary-muted);
-            color: var(--accent-primary);
+            background: var(--accent-soft);
+            color: var(--accent);
         }
 
         /* Collapsible Sections */
@@ -451,7 +452,7 @@
         }
 
         .collapsible-header:hover {
-            background: var(--bg-hover);
+            background: var(--surface);
         }
 
         .collapsible-toggle {
@@ -506,19 +507,19 @@
         }
 
         .message-item.role-user {
-            border-left-color: var(--accent-primary);
+            border-left-color: var(--accent);
         }
 
         .message-item.role-assistant {
-            border-left-color: var(--success-ink);
+            border-left-color: #16a34a;
         }
 
         .message-item.role-system {
-            border-left-color: var(--warning-ink);
+            border-left-color: #f97316;
         }
 
         .message-item.role-tool {
-            border-left-color: var(--neutral-ink);
+            border-left-color: #6b7280;
         }
 
         .message-header {
@@ -530,7 +531,7 @@
         }
 
         .message-header:hover {
-            background: var(--bg-hover);
+            background: var(--surface);
         }
 
         .message-role {
@@ -538,23 +539,31 @@
             font-weight: 600;
             text-transform: uppercase;
             padding: 2px 6px;
-            background: var(--neutral-bg);
-            color: var(--neutral-ink);
+            background: rgba(107, 114, 128, 0.15);
+            color: #6b7280;
         }
 
         .message-item.role-user .message-role {
-            background: var(--accent-primary-muted);
-            color: var(--accent-primary);
+            background: var(--accent-soft);
+            color: var(--accent);
         }
 
         .message-item.role-assistant .message-role {
-            background: var(--success-bg);
-            color: var(--success-ink);
+            background: rgba(16, 185, 129, 0.15);
+            color: #0f766e;
+        }
+
+        [data-theme="dark"] .message-item.role-assistant .message-role {
+            color: #34d399;
         }
 
         .message-item.role-system .message-role {
-            background: var(--warning-bg);
-            color: var(--warning-ink);
+            background: rgba(245, 158, 11, 0.15);
+            color: #b45309;
+        }
+
+        [data-theme="dark"] .message-item.role-system .message-role {
+            color: #fbbf24;
         }
 
         .message-preview {
@@ -613,14 +622,14 @@
         }
 
         .tool-header:hover {
-            background: var(--bg-hover);
+            background: var(--surface);
         }
 
         .tool-name {
             font-family: "Space Mono", monospace;
             font-size: 13px;
             font-weight: 600;
-            color: var(--accent-primary);
+            color: var(--accent);
         }
 
         .tool-desc {
@@ -684,11 +693,11 @@
         }
 
         .json-tree-toggle:hover {
-            color: var(--ink-primary);
+            color: var(--ink);
         }
 
         .json-tree-key {
-            color: var(--accent-primary);
+            color: var(--accent);
             margin-right: 4px;
         }
 
@@ -698,19 +707,31 @@
         }
 
         .json-tree-value {
-            color: var(--ink-primary);
+            color: var(--ink);
         }
 
         .json-tree-string {
-            color: var(--success-ink);
+            color: #0f766e;
+        }
+
+        [data-theme="dark"] .json-tree-string {
+            color: #34d399;
         }
 
         .json-tree-number {
-            color: var(--warning-ink);
+            color: #b45309;
+        }
+
+        [data-theme="dark"] .json-tree-number {
+            color: #fbbf24;
         }
 
         .json-tree-boolean {
-            color: var(--error-ink);
+            color: #dc2626;
+        }
+
+        [data-theme="dark"] .json-tree-boolean {
+            color: #f87171;
         }
 
         .json-tree-null {
@@ -742,24 +763,36 @@
         }
 
         .json-tree-ellipsis:hover {
-            color: var(--ink-primary);
+            color: var(--ink);
         }
 
         /* Syntax Highlighting */
         .hl-key {
-            color: var(--accent-primary);
+            color: var(--accent);
         }
 
         .hl-string {
-            color: var(--success-ink);
+            color: #0f766e;
+        }
+
+        [data-theme="dark"] .hl-string {
+            color: #34d399;
         }
 
         .hl-number {
-            color: var(--warning-ink);
+            color: #b45309;
+        }
+
+        [data-theme="dark"] .hl-number {
+            color: #fbbf24;
         }
 
         .hl-boolean {
-            color: var(--error-ink);
+            color: #dc2626;
+        }
+
+        [data-theme="dark"] .hl-boolean {
+            color: #f87171;
         }
 
         .hl-null {
@@ -790,15 +823,15 @@
             max-width: 300px;
             padding: 6px 10px;
             border: 1px solid var(--border);
-            background: var(--bg-primary);
-            color: var(--ink-primary);
+            background: var(--surface);
+            color: var(--ink);
             font-family: inherit;
             font-size: 13px;
         }
 
         .detail-search input:focus {
             outline: none;
-            border-color: var(--accent-primary);
+            border-color: var(--accent);
         }
 
         .search-count {
@@ -810,14 +843,14 @@
         .search-nav-btn {
             padding: 4px 8px;
             border: 1px solid var(--border);
-            background: var(--bg-primary);
-            color: var(--ink-primary);
+            background: var(--surface);
+            color: var(--ink);
             cursor: pointer;
             font-size: 14px;
         }
 
         .search-nav-btn:hover:not(:disabled) {
-            background: var(--bg-hover);
+            background: var(--surface-strong);
         }
 
         .search-nav-btn:disabled {
@@ -826,13 +859,17 @@
         }
 
         .search-highlight {
-            background: var(--warning-bg);
-            color: var(--warning-ink);
+            background: rgba(245, 158, 11, 0.3);
+            color: #b45309;
             padding: 0 2px;
         }
 
+        [data-theme="dark"] .search-highlight {
+            color: #fbbf24;
+        }
+
         .search-highlight.current {
-            background: var(--accent-primary);
+            background: var(--accent);
             color: white;
         }
 
@@ -845,14 +882,14 @@
         .nav-btn {
             padding: 4px 10px;
             border: 1px solid var(--border);
-            background: var(--bg-primary);
-            color: var(--ink-primary);
+            background: var(--surface);
+            color: var(--ink);
             cursor: pointer;
             font-size: 14px;
         }
 
         .nav-btn:hover {
-            background: var(--bg-hover);
+            background: var(--surface-strong);
         }
 
         /* Download Controls */
@@ -867,8 +904,8 @@
             gap: 6px;
             padding: 4px 10px;
             border: 1px solid var(--border);
-            background: var(--bg-primary);
-            color: var(--ink-primary);
+            background: var(--surface);
+            color: var(--ink);
             cursor: pointer;
             font-size: 11px;
             text-transform: uppercase;
@@ -878,8 +915,8 @@
         }
 
         .download-btn:hover {
-            background: var(--bg-hover);
-            color: var(--accent-primary);
+            background: var(--surface-strong);
+            color: var(--accent);
         }
 
         .download-btn:active {
@@ -905,7 +942,7 @@
         .expand-btn {
             padding: 4px 10px;
             border: 1px solid var(--border);
-            background: var(--bg-primary);
+            background: var(--surface);
             color: var(--ink-muted);
             cursor: pointer;
             font-size: 11px;
@@ -914,8 +951,8 @@
         }
 
         .expand-btn:hover {
-            background: var(--bg-hover);
-            color: var(--ink-primary);
+            background: var(--surface-strong);
+            color: var(--ink);
         }
 
         /* Show More button for large strings */
@@ -924,14 +961,14 @@
             margin-top: 8px;
             padding: 4px 10px;
             border: 1px solid var(--border);
-            background: var(--bg-primary);
-            color: var(--accent-primary);
+            background: var(--surface);
+            color: var(--accent);
             cursor: pointer;
             font-size: 12px;
         }
 
         .show-more-btn:hover {
-            background: var(--bg-hover);
+            background: var(--surface-strong);
         }
 
         .truncated-notice {
@@ -957,22 +994,20 @@
                 </div>
             </div>
             <div class="top-actions">
-                <a href="/usage" class="btn btn-secondary">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <line x1="18" y1="20" x2="18" y2="10"/>
-                        <line x1="12" y1="20" x2="12" y2="4"/>
-                        <line x1="6" y1="20" x2="6" y2="14"/>
-                    </svg>
-                    Usage
-                </a>
                 <a href="/admin" class="btn btn-secondary">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/>
-                        <rect x="2" y="14" width="20" height="8" rx="2" ry="2"/>
-                        <line x1="6" y1="6" x2="6.01" y2="6"/>
-                        <line x1="6" y1="18" x2="6.01" y2="18"/>
+                        <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+                        <path d="M2 17l10 5 10-5"/>
+                        <path d="M2 12l10 5 10-5"/>
                     </svg>
                     Models
+                </a>
+                <a href="/usage" class="btn btn-secondary">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21.21 15.89A10 10 0 1 1 8 2.83"/>
+                        <path d="M22 12A10 10 0 0 0 12 2v10z"/>
+                    </svg>
+                    Usage
                 </a>
                 <button class="btn btn-secondary theme-toggle" type="button" title="Toggle dark mode">
                     <svg class="sun-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -986,9 +1021,12 @@
             </div>
         </header>
 
-        <div class="logs-container">
-            <div class="logs-header">
-                <h1>Request Logs</h1>
+        <main class="panel">
+            <div class="panel-header">
+                <div>
+                    <h2 class="panel-title">Filters</h2>
+                    <p class="panel-subtitle">Filter and search request logs.</p>
+                </div>
                 <button class="btn btn-secondary" id="reloadLogs" title="Reload logs">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <polyline points="23 4 23 10 17 10"/>
@@ -998,7 +1036,6 @@
                     Reload
                 </button>
             </div>
-
             <div class="filters-panel">
                 <div class="filter-group">
                     <label for="filterModel">Model</label>
@@ -1049,7 +1086,15 @@
                     <button class="btn btn-secondary" id="clearFilters">Clear</button>
                 </div>
             </div>
+        </main>
 
+        <main class="panel">
+            <div class="panel-header">
+                <div>
+                    <h2 class="panel-title">Request Logs</h2>
+                    <p class="panel-subtitle">Browse and inspect individual API requests.</p>
+                </div>
+            </div>
             <div class="logs-table-container">
                 <div id="loading" class="loading">
                     <div class="spinner"></div>
@@ -1082,7 +1127,7 @@
                     </div>
                 </div>
             </div>
-        </div>
+        </main>
     </div>
 
     <!-- Detail Modal -->

@@ -10,8 +10,8 @@
     <link rel="stylesheet" href="/static/admin/theme.css">
     <link rel="stylesheet" href="/static/admin/ui.css">
     <link rel="stylesheet" href="/static/admin/admin.css">
-    <link rel="icon" type="image/png" href="/static/applogo.png">
-    <link rel="apple-touch-icon" href="/static/applogo.png">
+    <link rel="icon" type="image/png" href="/static/icon.png">
+    <link rel="apple-touch-icon" href="/static/icon.png">
 </head>
 <body>
     <div class="page">
@@ -30,40 +30,6 @@
                 </div>
             </div>
             <div class="top-actions">
-                <div class="count-pill">
-                    <span>Protected</span>
-                    <strong id="protectedCount">0</strong>
-                </div>
-                <div class="count-pill">
-                    <span>Unprotected</span>
-                    <strong id="unprotectedCount">0</strong>
-                </div>
-                <div class="admin-access" id="adminAccess">
-                    <div class="admin-status" id="adminStatus">
-                        <span class="admin-status-dot"></span>
-                        <span class="admin-status-text" id="adminStatusText">Admin locked</span>
-                    </div>
-                    <button class="btn btn-secondary" id="adminAccessBtn" type="button" title="Unlock protected models">
-                        Unlock
-                    </button>
-                </div>
-                <button class="btn btn-secondary theme-toggle" type="button" title="Toggle dark mode">
-                    <svg class="sun-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <circle cx="12" cy="12" r="5"/>
-                        <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
-                    </svg>
-                    <svg class="moon-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
-                    </svg>
-                </button>
-                <button class="btn btn-secondary" id="reloadConfigBtn" type="button" title="Reload config from disk">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <polyline points="23 4 23 10 17 10"/>
-                        <polyline points="1 20 1 14 7 14"/>
-                        <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
-                    </svg>
-                    Reload
-                </button>
                 <a href="/usage" class="btn btn-secondary">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M21.21 15.89A10 10 0 1 1 8 2.83"/>
@@ -80,6 +46,45 @@
                     </svg>
                     Logs
                 </a>
+                <button class="btn btn-secondary theme-toggle" type="button" title="Toggle dark mode">
+                    <svg class="sun-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="5"/>
+                        <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
+                    </svg>
+                    <svg class="moon-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+                    </svg>
+                </button>
+            </div>
+        </header>
+
+        <section class="highlight-strip">
+            <div class="highlight">
+                <span>Protected</span>
+                <strong id="protectedCount">0</strong>
+            </div>
+            <div class="highlight">
+                <span>Unprotected</span>
+                <strong id="unprotectedCount">0</strong>
+            </div>
+            <div class="admin-access" id="adminAccess">
+                <div class="admin-status" id="adminStatus">
+                    <span class="admin-status-dot"></span>
+                    <span class="admin-status-text" id="adminStatusText">Admin locked</span>
+                </div>
+                <button class="btn btn-secondary" id="adminAccessBtn" type="button" title="Unlock protected models">
+                    Unlock
+                </button>
+            </div>
+            <div class="highlight-actions">
+                <button class="btn btn-secondary" id="reloadConfigBtn" type="button" title="Reload config from disk">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="23 4 23 10 17 10"/>
+                        <polyline points="1 20 1 14 7 14"/>
+                        <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+                    </svg>
+                    Reload Config
+                </button>
                 <button class="btn btn-primary" id="addModelBtn" type="button">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <line x1="12" y1="5" x2="12" y2="19"/>
@@ -87,21 +92,6 @@
                     </svg>
                     Add Model
                 </button>
-            </div>
-        </header>
-
-        <section class="highlight-strip">
-            <div class="highlight">
-                <span>Protected Models</span>
-                <strong>Require admin password to edit.</strong>
-            </div>
-            <div class="highlight">
-                <span>Config</span>
-                <strong>Loaded from config.yaml.</strong>
-            </div>
-            <div class="highlight">
-                <span>Hint</span>
-                <strong>Use ${ENV_VAR} for secure keys.</strong>
             </div>
         </section>
 
