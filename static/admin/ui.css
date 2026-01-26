@@ -64,9 +64,6 @@ body {
   overflow-x: hidden;
 }
 
-[data-theme="dark"] body {
-  background: linear-gradient(180deg, #0d1117 0%, #161b22 100%);
-}
 
 body::before {
   content: "";
@@ -87,8 +84,8 @@ body::after {
   position: fixed;
   inset: 0;
   background:
-    radial-gradient(ellipse 600px 500px at 85% 90%, rgba(238, 108, 77, 0.18) 0%, transparent 60%),
-    radial-gradient(ellipse 400px 350px at 10% 15%, rgba(15, 118, 110, 0.12) 0%, transparent 55%);
+    radial-gradient(ellipse 750px 620px at 85% 90%, rgba(238, 108, 77, 0.18) 0%, transparent 60%),
+    radial-gradient(ellipse 500px 440px at 10% 15%, rgba(15, 118, 110, 0.12) 0%, transparent 55%);
   filter: blur(40px);
   pointer-events: none;
   animation: bgFloat 25s ease-in-out infinite;
@@ -105,10 +102,10 @@ body::after {
     transform: translate(0, 0) scale(1);
   }
   33% {
-    transform: translate(-8px, 12px) scale(1.02);
+    transform: translate(-20px, 28px) scale(1.04);
   }
   66% {
-    transform: translate(10px, -8px) scale(0.98);
+    transform: translate(24px, -18px) scale(0.96);
   }
 }
 
