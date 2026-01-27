@@ -77,6 +77,7 @@ class DatabaseLogRecorder:
         stop_reason: str | None = None,
         full_response: str | None = None,
         is_tool_call: bool = False,
+        tool_calls: list[dict[str, Any]] | None = None,
         conversation_turn: int | None = None,
         modules_log: dict[str, Any] | None = None,
         app_key_id: str | None = None,
@@ -102,6 +103,7 @@ class DatabaseLogRecorder:
             stop_reason: Finish reason from the response (stop, tool_calls, length, etc.).
             full_response: Concatenated complete response text.
             is_tool_call: Whether this request resulted in tool calls.
+            tool_calls: Tool calls from the model response.
             conversation_turn: Turn number in agentic conversation sequence.
             modules_log: Debug logs from response modules (reasoning detection, tool calls, etc.).
             app_key_id: Optional app key identifier (reserved for future persistence).
@@ -139,6 +141,7 @@ class DatabaseLogRecorder:
             stop_reason=stop_reason,
             full_response=full_response,
             is_tool_call=is_tool_call,
+            tool_calls=tool_calls,
             conversation_turn=conversation_turn,
             modules_log=modules_log,
         )

@@ -146,6 +146,12 @@ class RequestLog(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         comment="Whether this request resulted in tool/function calls"
     )
 
+    tool_calls = Column(
+        JSON,
+        nullable=True,
+        comment="Tool calls from the model response"
+    )
+
     conversation_turn = Column(
         Integer,
         nullable=True,
@@ -204,6 +210,7 @@ class RequestLog(Base, UUIDPrimaryKeyMixin, TimestampMixin):
             "stop_reason": self.stop_reason,
             "full_response": self.full_response,
             "is_tool_call": self.is_tool_call,
+            "tool_calls": self.tool_calls,
             "conversation_turn": self.conversation_turn,
             "modules_log": self.modules_log,
             "created_at": self.created_at.isoformat() if self.created_at else None,

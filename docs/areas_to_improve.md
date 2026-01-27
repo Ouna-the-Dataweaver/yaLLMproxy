@@ -234,3 +234,17 @@
     - Show original messages, stored reasoning, and what would be injected.
     - Useful for debugging why a conversation went wrong.
     - Allow manual clearing of conversation state.
+
+
+## Other
+
+## Frontend enhancements:
+
+16. **App Keys Management Page (HIGH PRIORITY)**
+   - You have complete backend API endpoints for app key management (/admin/keys/*) but no dedicated UI. A page would include:
+     - List all app keys with metadata (name, enabled status, creation date, usage)
+     - Create new keys with custom settings (rate limits, concurrency limits, priority)
+     - Edit key properties
+     - Delete/revoke keys with confirmation
+     - Regenerate key secrets
+     - View key usage statistics

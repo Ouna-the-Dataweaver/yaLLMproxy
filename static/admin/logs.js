@@ -466,7 +466,12 @@ const showLogDetail = async (logId) => {
             html += renderToolChoiceSection(bodyObj);
         }
 
-        // 7. Full Response section
+        // 7. Response Tool Calls section (from model response)
+        if (log.tool_calls && log.tool_calls.length > 0) {
+            html += renderResponseToolCallsSection(log.tool_calls);
+        }
+
+        // 8. Full Response section
         if (log.full_response) {
             const truncatedNotice = log.full_response_truncated
                 ? '<span class="truncated-notice">(truncated)</span>'
@@ -480,7 +485,7 @@ const showLogDetail = async (logId) => {
             );
         }
 
-        // 8. Stream Chunks section
+        // 9. Stream Chunks section
         if (log.stream_chunks && log.stream_chunks.length > 0) {
             const truncatedNotice = log.stream_chunks_truncated
                 ? `<div class="truncated-notice" style="margin-bottom: 8px;">Showing ${log.stream_chunks.length} of ${log.stream_chunks_total} chunks</div>`
@@ -489,20 +494,20 @@ const showLogDetail = async (logId) => {
             html += renderCollapsibleSection("Stream Chunks", chunksContent, `${log.stream_chunks.length} chunks`, true);
         }
 
-        // 9. Usage Statistics section
+        // 10. Usage Statistics section
         if (log.usage_stats) {
             const usageContent = highlightJson(JSON.stringify(log.usage_stats, null, 2));
             html += renderCollapsibleSection("Usage Statistics (Raw)", `<pre style="margin: 0; white-space: pre-wrap;">${usageContent}</pre>`, "", true);
         }
 
-        // 10. Modules Log section
+        // 11. Modules Log section
         if (log.modules_log) {
             const modulesContent = `<div class="json-tree">${renderJsonTree(log.modules_log)}</div>`;
             const eventCount = log.modules_log.total_events || 0;
             html += renderCollapsibleSection("Modules Log", modulesContent, `${eventCount} events`, true);
         }
 
-        // 11. Backend Attempts section
+        // 12. Backend Attempts section
         if (log.backend_attempts && log.backend_attempts.length > 0) {
             const truncatedNotice = log.backend_attempts_truncated
                 ? `<div class="truncated-notice" style="margin-bottom: 8px;">Showing first ${log.backend_attempts.length} attempts</div>`
@@ -511,7 +516,7 @@ const showLogDetail = async (logId) => {
             html += renderCollapsibleSection("Backend Attempts", attemptsContent, `${log.backend_attempts.length} attempts`, true);
         }
 
-        // 12. Errors section (expanded by default if present)
+        // 13. Errors section (expanded by default if present)
         if (log.errors && log.errors.length > 0) {
             const errorsContent = `<div class="json-tree">${renderJsonTree(log.errors)}</div>`;
             html += renderCollapsibleSection("Errors", errorsContent, `${log.errors.length} errors`, false);
@@ -976,6 +981,39 @@ const initToolToggles = (container) => {
             }
         });
     });
+};
+
+// ============================================================================
+// Response Tool Calls Section
+// ============================================================================
+
+const renderResponseToolCallsSection = (toolCalls) => {
+    if (!toolCalls || !Array.isArray(toolCalls) || toolCalls.length === 0) {
+        return "";
+    }
+
+    const toolCallsHtml = toolCalls.map((tc, index) => {
+        const id = `resp-tool-${++toolId}`;
+
+        // Handle different tool call formats
+        const fn = tc.function || tc;
+        const name = fn.name || `tool_${index}`;
+        const args = fn.arguments || fn.arguments || "";
+        let argsPreview = "";
+
+        if (typeof args === "string") {
+            argsPreview = args.substring(0, 100);
+        } else if (typeof args === "object") {
+            argsPreview = JSON.stringify(args).substring(0, 100);
+        }
+
+        const fullContent = highlightJson(JSON.stringify(tc, null, 2));
+
+        return `<div class="tool-item"><div class="tool-header" data-target="${id}"><span class="tool-toggle collapsed">▼</span><span class="tool-name">${escapeHtml(name)}</span><span class="tool-desc">${escapeHtml(argsPreview)}${argsPreview.length >= 100 ? "..." : ""}</span></div><div class="tool-content" id="${id}">${fullContent}</div></div>`;
+    }).join("");
+
+    const sectionContent = `<div class="tools-list">${toolCallsHtml}</div>`;
+    return renderCollapsibleSection("Response Tool Calls", sectionContent, `${toolCalls.length} calls`, true);
 };
 
 // ============================================================================

@@ -351,6 +351,7 @@ class RequestLogRecorder:
         path: str,
         log_parsed_response: bool = False,
         log_parsed_stream: Optional[bool] = None,
+        log_to_disk: bool = True,
         db_log_target: Optional[DbLogTarget] = None,
     ) -> None:
         safe_model = self._safe_fragment(model_name or "unknown")
@@ -391,6 +392,7 @@ class RequestLogRecorder:
             self._log_parsed_stream = self._log_parsed_response
         else:
             self._log_parsed_stream = bool(log_parsed_stream)
+        self._log_to_disk = bool(log_to_disk)
         self._parsed_initialized = False
 
         # App key tracking
@@ -440,6 +442,11 @@ class RequestLogRecorder:
             self._log_parsed_stream = self._log_parsed_response
         else:
             self._log_parsed_stream = bool(log_parsed_stream)
+
+    def configure_disk_logging(self, log_to_disk: bool) -> None:
+        if self._finalized:
+            return
+        self._log_to_disk = bool(log_to_disk)
 
     def record_request(
         self, method: str, query: str, headers: Mapping[str, str], body: bytes
@@ -709,12 +716,39 @@ class RequestLogRecorder:
         if isinstance(content, str) and content:
             self._accumulated_response_parts.append(content)
 
-        # Accumulate tool calls
+        # Accumulate tool calls - merge by index to avoid duplicates from streaming
         tool_calls = delta.get("tool_calls")
         if isinstance(tool_calls, list):
             for tc in tool_calls:
                 if isinstance(tc, dict):
-                    self._accumulated_tool_calls.append(tc)
+                    index = tc.get("index")
+                    # Check if we already have a tool call with this index
+                    existing = None
+                    for i, existing_tc in enumerate(self._accumulated_tool_calls):
+                        if existing_tc.get("index") == index:
+                            existing = i
+                            break
+
+                    if existing is not None:
+                        # Merge with existing tool call - specifically merge function.arguments
+                        existing_tc = self._accumulated_tool_calls[existing]
+                        fn = tc.get("function") or tc.get("function_call")
+                        existing_fn = existing_tc.get("function") or existing_tc.get("function_call")
+                        if fn and existing_fn and "arguments" in fn:
+                            # Append arguments to existing tool call
+                            existing_args = existing_fn.get("arguments") or ""
+                            new_args = fn.get("arguments") or ""
+                            existing_fn["arguments"] = existing_args + new_args
+                            # Also merge other fields that might be updated
+                            if "name" in fn and fn["name"] != existing_fn.get("name"):
+                                existing_fn["name"] = fn["name"]
+                        # Also merge other top-level fields
+                        for key, value in tc.items():
+                            if key != "function" and key != "function_call" and key not in existing_tc:
+                                existing_tc[key] = value
+                    else:
+                        # Add as new tool call
+                        self._accumulated_tool_calls.append(tc.copy())
 
         # Accumulate reasoning content
         reasoning = delta.get("reasoning_content")
@@ -840,6 +874,7 @@ class RequestLogRecorder:
                     stop_reason=self._stop_reason,
                     full_response=full_response,
                     is_tool_call=self._is_tool_call,
+                    tool_calls=self._accumulated_tool_calls if self._accumulated_tool_calls else None,
                     conversation_turn=self._conversation_turn,
                     modules_log=self._modules_log,
                     # App key tracking
@@ -864,6 +899,8 @@ class RequestLogRecorder:
         data = bytes(self._buffer)
 
         def _write() -> None:
+            if not self._log_to_disk:
+                return
             tmp_path = self.log_path.with_suffix(self.log_path.suffix + ".tmp")
             with tmp_path.open("wb") as fh:
                 fh.write(data)
@@ -874,6 +911,8 @@ class RequestLogRecorder:
         await asyncio.to_thread(_write)
 
     def _write_to_disk(self) -> None:
+        if not self._log_to_disk:
+            return
         tmp_path = self.log_path.with_suffix(self.log_path.suffix + ".tmp")
         with tmp_path.open("wb") as fh:
             fh.write(self._buffer)

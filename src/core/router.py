@@ -58,6 +58,11 @@ class ProxyRouter:
             self.log_parsed_stream = self.log_parsed_response
         else:
             self.log_parsed_stream = _parse_bool(log_parsed_stream_raw)
+        log_to_disk_raw = logging_cfg.get("log_to_disk")
+        if log_to_disk_raw is None:
+            self.log_to_disk = True
+        else:
+            self.log_to_disk = _parse_bool(log_to_disk_raw)
 
         router_cfg = config.get("router_settings") or {}
         self.num_retries = max(1, int(router_cfg.get("num_retries", 1)))
@@ -83,6 +88,7 @@ class ProxyRouter:
             request_log.configure_parsed_logging(
                 self.log_parsed_response, self.log_parsed_stream
             )
+            request_log.configure_disk_logging(self.log_to_disk)
         
         try:
             route = await self._build_route(model_name)
@@ -202,6 +208,11 @@ class ProxyRouter:
                 self.log_parsed_stream = self.log_parsed_response
             else:
                 self.log_parsed_stream = _parse_bool(log_parsed_stream_raw)
+            log_to_disk_raw = logging_cfg.get("log_to_disk")
+            if log_to_disk_raw is None:
+                self.log_to_disk = True
+            else:
+                self.log_to_disk = _parse_bool(log_to_disk_raw)
 
             router_cfg = new_config.get("router_settings") or {}
             self.num_retries = max(1, int(router_cfg.get("num_retries", 1)))

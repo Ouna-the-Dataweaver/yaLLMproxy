@@ -141,8 +141,9 @@ proxy_settings:
   enable_responses_endpoint: false
   enable_messages_endpoint: true
   logging:
-    log_parsed_response: true
-    log_parsed_stream: true
+    log_parsed_response: false
+    log_parsed_stream: false
+    log_to_disk: false
   modules:
     upstream:
       enabled: false
