@@ -249,7 +249,7 @@ const buildQueryParams = () => {
     if (filters.model) params.set("model", filters.model);
     if (filters.outcome) params.set("outcome", filters.outcome);
     if (filters.stop_reason) params.set("stop_reason", filters.stop_reason);
-    if (filters.is_tool_call) params.set("is_tool_call", filters.is_tool_call);
+    if (filters.is_tool_call) params.set("is_tool_call", filters.is_tool_call === "true");
     if (filters.search) params.set("search", filters.search);
     if (filters.start_date) params.set("start_date", filters.start_date);
     if (filters.end_date) params.set("end_date", filters.end_date);
@@ -265,7 +265,8 @@ const fetchLogs = async () => {
 
     try {
         const query = buildQueryParams();
-        const response = await fetch(`${API_ENDPOINT}?${query}`, { cache: "no-store" });
+        const url = `${API_ENDPOINT}?${query}&_t=${Date.now()}`;
+        const response = await fetch(url, { cache: "no-store" });
 
         if (!response.ok) {
             throw new Error(`HTTP ${response.status}`);
@@ -285,10 +286,24 @@ const fetchLogs = async () => {
 };
 
 const showLoading = (show) => {
-    document.getElementById("loading").classList.toggle("hidden", !show);
-    document.getElementById("logsTable").classList.toggle("hidden", show);
-    document.getElementById("emptyState").classList.add("hidden");
-    document.getElementById("pagination").classList.add("hidden");
+    const loadingEl = document.getElementById("loading");
+    const logsTableEl = document.getElementById("logsTable");
+    const emptyStateEl = document.getElementById("emptyState");
+    const paginationEl = document.getElementById("pagination");
+
+    if (show) {
+        loadingEl.classList.remove("hidden");
+        loadingEl.style.display = "flex";
+        logsTableEl.classList.add("hidden");
+        logsTableEl.style.display = "none";
+        emptyStateEl.classList.add("hidden");
+        emptyStateEl.style.display = "none";
+        paginationEl.classList.add("hidden");
+        paginationEl.style.display = "none";
+    } else {
+        loadingEl.classList.add("hidden");
+        loadingEl.style.display = "none";
+    }
 };
 
 const showError = () => {
@@ -300,11 +315,38 @@ const showError = () => {
 };
 
 const showEmpty = () => {
-    document.getElementById("loading").classList.add("hidden");
-    document.getElementById("logsTable").classList.add("hidden");
-    document.getElementById("emptyState").classList.remove("hidden");
-    document.querySelector("#emptyState h3").textContent = "No logs found";
-    document.querySelector("#emptyState p").textContent = "Try adjusting your filters.";
+    // Explicitly manipulate elements
+    const loadingEl = document.getElementById("loading");
+    const logsTableEl = document.getElementById("logsTable");
+    const emptyStateEl = document.getElementById("emptyState");
+    const paginationEl = document.getElementById("pagination");
+
+    // Force hide using both class and direct style
+    loadingEl.classList.add("hidden");
+    loadingEl.style.display = "none";
+
+    logsTableEl.classList.add("hidden");
+    logsTableEl.style.display = "none";
+
+    emptyStateEl.classList.remove("hidden");
+    emptyStateEl.style.display = "flex";
+
+    paginationEl.classList.add("hidden");
+    paginationEl.style.display = "none";
+
+    const titleEl = document.getElementById("emptyStateTitle");
+    const messageEl = document.getElementById("emptyStateMessage");
+
+    // Check if any filters are active
+    const hasActiveFilters = Object.values(state.filters).some(v => v && v !== "");
+
+    if (hasActiveFilters) {
+        titleEl.textContent = "No matching logs";
+        messageEl.textContent = "Your filters didn't match any logs. Try adjusting your criteria.";
+    } else {
+        titleEl.textContent = "No logs found";
+        messageEl.textContent = "Try adjusting your filters or check back later.";
+    }
 };
 
 const renderLogs = () => {
@@ -315,9 +357,23 @@ const renderLogs = () => {
         return;
     }
 
-    document.getElementById("loading").classList.add("hidden");
-    document.getElementById("logsTable").classList.remove("hidden");
-    document.getElementById("pagination").classList.remove("hidden");
+    // Explicitly show logs table
+    const loadingEl = document.getElementById("loading");
+    const logsTableEl = document.getElementById("logsTable");
+    const emptyStateEl = document.getElementById("emptyState");
+    const paginationEl = document.getElementById("pagination");
+
+    loadingEl.classList.add("hidden");
+    loadingEl.style.display = "none";
+
+    logsTableEl.classList.remove("hidden");
+    logsTableEl.style.display = "table";
+
+    emptyStateEl.classList.add("hidden");
+    emptyStateEl.style.display = "none";
+
+    paginationEl.classList.remove("hidden");
+    paginationEl.style.display = "flex";
 
     tbody.innerHTML = state.logs.map(log => `
         <tr>

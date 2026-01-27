@@ -11,6 +11,11 @@
   padding: 0;
 }
 
+/* Utility class for hiding elements */
+.hidden {
+  display: none !important;
+}
+
 /* Custom scrollbars */
 ::-webkit-scrollbar {
   width: 14px;

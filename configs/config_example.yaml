@@ -1,13 +1,4 @@
 model_list:
-- model_name: GLM-4.6-nano
-  protected: true
-  model_params:
-    api_type: openai
-    model: z-ai/glm-4.6:thinking
-    api_base: https://nano-gpt.com/api/v1thinking
-    api_key: ${NANOGPT_API_KEY}
-    supports_reasoning: true
-    request_timeout: 540
 - model_name: GLM-4.7
   protected: true
   model_params:
@@ -99,33 +90,6 @@ model_list:
         allow_override: false
     api_key: ${GLM_API_KEY}
   protected: true
-- model_name: MiniMax-M2-nano
-  protected: true
-  model_params:
-    api_type: openai
-    model: MiniMax-M2
-    api_base: https://nano-gpt.com/api/v1thinking
-    api_key: ${NANOGPT_API_KEY}
-    supports_reasoning: true
-    request_timeout: 540
-- model_name: Kimi-K2-Thinking-nano
-  model_params:
-    api_base: https://nano-gpt.com/api/v1thinking
-    model: moonshotai/kimi-k2-thinking
-    request_timeout: 540
-    api_type: openai
-    supports_reasoning: true
-    api_key: ${NANOGPT_API_KEY}
-  modules:
-    upstream:
-      enabled: true
-      response:
-      - parse_tags
-      parse_tags:
-        template_path: configs/jinja_templates/k2thinking.jinja
-        parse_thinking: false
-        parse_tool_calls: true
-  protected: true
 - model_name: glm_local
   model_params:
     api_base: http://nid-sc-28:16667/v1
@@ -158,34 +122,19 @@ model_list:
         parse_thinking: true
         parse_tool_calls: true
   protected: false
-- model_name: giga-2-pro
+- model_name: Kimi-k2.5
   model_params:
-    api_base: http://nid-sc-29:9996/v1
-    model: GigaChat-2-Pro
-    request_timeout: 60
+    api_base: https://nano-gpt.com/api/v1thinking
+    api_key: ${NANOGPT_API_KEY}
+    model: moonshotai/kimi-k2.5:thinking
+    request_timeout: 540
     api_type: openai
-    supports_reasoning: false
-    parameters:
-      temperature:
-        default: 0.85
-        allow_override: true
-  protected: false
-- model_name: giga-3-ultra
-  model_params:
-    api_base: http://nid-sc-29:9996/v1
-    model: GigaChat-3-Ultra
-    request_timeout: 60
-    api_type: openai
-    supports_reasoning: false
-    parameters:
-      temperature:
-        default: 0.85
-        allow_override: true
-  protected: false
+    supports_reasoning: true
+  protected: true
 router_settings:
   num_retries: 1
 proxy_settings:
-  debug: false  # Enable debug logging -> logs/console.log
+  debug: false
   server:
     host: 0.0.0.0
     port: 7979
@@ -222,7 +171,7 @@ proxy_settings:
       enabled: false
       request: []
 forwarder_settings:
-  debug: false  # Enable debug logging -> logs/console_forwarder.log
+  debug: false
   listen:
     host: 0.0.0.0
     port: 6969
@@ -230,7 +179,7 @@ forwarder_settings:
     host: 127.0.0.1
     port: 7979
 http_forwarder_settings:
-  debug: false  # Enable debug logging -> logs/console_http_forwarder.log
+  debug: false
   preserve_host: true
   listen:
     host: 0.0.0.0
@@ -243,13 +192,9 @@ http_forwarder_settings:
     enabled: false
     cert_file: certs/cert.pem
     key_file: certs/key.pem
-    # Hostnames/IPs to include in certificate (used by generate_certs script)
-    # Add every address that clients will use to connect to the forwarder
     hosts:
-      - localhost
-      - 127.0.0.1
-      # - 192.168.1.100  # Your LAN IP (for LAN clients)
-      # - 203.0.113.50   # Your public IP (for internet clients)
+    - localhost
+    - 127.0.0.1
 database:
   backend: sqlite
   connection:
