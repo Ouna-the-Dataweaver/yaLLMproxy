@@ -172,7 +172,17 @@
 .data-table td:nth-child(3),
 .data-table td:nth-child(4) {
   font-family: 'Space Mono', monospace;
-  text-align: right;
+}
+
+.data-table th:nth-child(2),
+.data-table th:nth-child(3),
+.data-table th:nth-child(4),
+.data-table td:nth-child(2),
+.data-table td:nth-child(3),
+.data-table td:nth-child(4) {
+  width: 120px;
+  min-width: 120px;
+  max-width: 120px;
 }
 
 /* Vertical bar chart for usage trends */
@@ -189,6 +199,7 @@
   justify-content: space-between;
   align-items: flex-end;
   flex-shrink: 0;
+  width: 50px;
 }
 
 .y-label {

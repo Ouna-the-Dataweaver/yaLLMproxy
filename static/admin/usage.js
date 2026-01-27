@@ -8,6 +8,22 @@ const formatNumber = (value) => {
     return Number.isFinite(num) ? num.toLocaleString() : '0';
 };
 
+const formatNumberShort = (value) => {
+    const num = Number(value || 0);
+    if (!Number.isFinite(num)) return '0';
+
+    if (num >= 1_000_000_000) {
+        return (num / 1_000_000_000).toFixed(1).replace(/\.0$/, '') + 'b';
+    }
+    if (num >= 1_000_000) {
+        return (num / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'm';
+    }
+    if (num >= 1_000) {
+        return (num / 1_000).toFixed(1).replace(/\.0$/, '') + 'k';
+    }
+    return num.toLocaleString();
+};
+
 const formatTime = (value) => {
     if (!value) return '--';
     const date = new Date(value);
@@ -215,62 +231,62 @@ const renderHistorical = (historical) => {
 
         const maxCount = Math.max(...slots.map(t => t.count || 0), 1);
 
-        // Format hour label - show sparingly to avoid clutter
-        const formatHourLabel = (timestamp, index, all) => {
-            if (!timestamp) return '';
-            const date = new Date(timestamp);
-            if (Number.isNaN(date.getTime())) return '';
-            const hours = date.getHours();
-            const month = String(date.getMonth() + 1).padStart(2, '0');
-            const day = String(date.getDate()).padStart(2, '0');
+    // Format hour label - show sparingly to avoid clutter
+    const formatHourLabel = (timestamp, index, all) => {
+        if (!timestamp) return '';
+        const date = new Date(timestamp);
+        if (Number.isNaN(date.getTime())) return '';
+        const hours = date.getUTCHours();
+        const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+        const day = String(date.getUTCDate()).padStart(2, '0');
 
-            // Show date on first bar
-            if (index === 0) {
+        // Show date on first bar
+        if (index === 0) {
+            return `${month}/${day}`;
+        }
+        // Check if day changed from previous
+        if (index > 0 && all[index - 1]?.timestamp) {
+            const prevDate = new Date(all[index - 1].timestamp);
+            if (date.getUTCDate() !== prevDate.getUTCDate()) {
                 return `${month}/${day}`;
             }
-            // Check if day changed from previous
-            if (index > 0 && all[index - 1]?.timestamp) {
-                const prevDate = new Date(all[index - 1].timestamp);
-                if (date.getDate() !== prevDate.getDate()) {
-                    return `${month}/${day}`;
-                }
-            }
-            // Show label every 6 hours (00:00, 06:00, 12:00, 18:00)
-            if (hours % 6 === 0) {
-                return `${String(hours).padStart(2, '0')}:00`;
-            }
-            return '';
-        };
+        }
+        // Show label every 6 hours (00:00, 06:00, 12:00, 18:00)
+        if (hours % 6 === 0) {
+            return `${String(hours).padStart(2, '0')}:00`;
+        }
+        return '';
+    };
 
-        trendsEl.innerHTML = `
-            <div class="usage-chart">
-                <div class="chart-y-axis">
-                    <span class="y-label">${formatNumber(maxCount)}</span>
-                    <span class="y-label">${formatNumber(Math.round(maxCount / 2))}</span>
-                    <span class="y-label">0</span>
+    trendsEl.innerHTML = `
+        <div class="usage-chart">
+            <div class="chart-y-axis">
+                <span class="y-label">${formatNumber(maxCount)}</span>
+                <span class="y-label">${formatNumber(Math.round(maxCount / 2))}</span>
+                <span class="y-label">0</span>
+            </div>
+            <div class="chart-area">
+                <div class="chart-grid-lines">
+                    <div class="grid-line"></div>
+                    <div class="grid-line"></div>
+                    <div class="grid-line"></div>
                 </div>
-                <div class="chart-area">
-                    <div class="chart-grid-lines">
-                        <div class="grid-line"></div>
-                        <div class="grid-line"></div>
-                        <div class="grid-line"></div>
-                    </div>
-                    <div class="chart-bars">
-                        ${slots.map((item, idx) => {
-                            const count = item.count || 0;
-                            const height = maxCount > 0 ? (count / maxCount) * 100 : 0;
-                            const label = formatHourLabel(item.timestamp, idx, slots);
-                            return `
-                                <div class="chart-bar-container" title="${formatTime(item.timestamp)}: ${formatNumber(count)} requests">
-                                    <div class="chart-bar" style="height: ${height}%"></div>
-                                    <span class="chart-bar-label">${label}</span>
-                                </div>
-                            `;
-                        }).join('')}
-                    </div>
+                <div class="chart-bars">
+                    ${slots.map((item, idx) => {
+                        const count = item.count || 0;
+                        const height = maxCount > 0 ? (count / maxCount) * 100 : 0;
+                        const label = formatHourLabel(item.timestamp, idx, slots);
+                        return `
+                            <div class="chart-bar-container" title="${formatTime(item.timestamp)}: ${formatNumber(count)} requests">
+                                <div class="chart-bar" style="height: ${height}%"></div>
+                                <span class="chart-bar-label">${label}</span>
+                            </div>
+                        `;
+                    }).join('')}
                 </div>
             </div>
-        `;
+        </div>
+    `;
     }
 
     // Render stop reason breakdown
@@ -327,9 +343,22 @@ const renderTokenStats = (tokenStats, isHistorical = false) => {
     const reasoningTokens = tokenStats.total_reasoning_tokens || 0;
 
     if (isHistorical) {
-        setText('statTotalTokensAll', formatNumber(totalTokens));
-        setText('statPromptTokens', formatNumber(promptTokens));
-        setText('statCompletionTokens', formatNumber(completionTokens));
+        // Use formatNumberShort for token stats with title for exact value
+        const statTotalTokensEl = document.getElementById('statTotalTokensAll');
+        if (statTotalTokensEl) {
+            statTotalTokensEl.textContent = formatNumberShort(totalTokens);
+            statTotalTokensEl.title = formatNumber(totalTokens);
+        }
+        const statPromptTokensEl = document.getElementById('statPromptTokens');
+        if (statPromptTokensEl) {
+            statPromptTokensEl.textContent = formatNumberShort(promptTokens);
+            statPromptTokensEl.title = formatNumber(promptTokens);
+        }
+        const statCompletionTokensEl = document.getElementById('statCompletionTokens');
+        if (statCompletionTokensEl) {
+            statCompletionTokensEl.textContent = formatNumberShort(completionTokens);
+            statCompletionTokensEl.title = formatNumber(completionTokens);
+        }
         setText('statAvgTokens', formatNumber(avgTokens));
 
         // Show/hide cached tokens
@@ -337,7 +366,11 @@ const renderTokenStats = (tokenStats, isHistorical = false) => {
         if (cachedCard) {
             cachedCard.style.display = cachedTokens > 0 ? 'block' : 'none';
             if (cachedTokens > 0) {
-                setText('statCachedTokens', formatNumber(cachedTokens));
+                const statCachedTokensEl = document.getElementById('statCachedTokens');
+                if (statCachedTokensEl) {
+                    statCachedTokensEl.textContent = formatNumberShort(cachedTokens);
+                    statCachedTokensEl.title = formatNumber(cachedTokens);
+                }
             }
         }
 
@@ -346,7 +379,11 @@ const renderTokenStats = (tokenStats, isHistorical = false) => {
         if (reasoningCard) {
             reasoningCard.style.display = reasoningTokens > 0 ? 'block' : 'none';
             if (reasoningTokens > 0) {
-                setText('statReasoningTokens', formatNumber(reasoningTokens));
+                const statReasoningTokensEl = document.getElementById('statReasoningTokens');
+                if (statReasoningTokensEl) {
+                    statReasoningTokensEl.textContent = formatNumberShort(reasoningTokens);
+                    statReasoningTokensEl.title = formatNumber(reasoningTokens);
+                }
             }
         }
     }
@@ -364,9 +401,9 @@ const renderTokensByModel = (tokensByModel) => {
     tbody.innerHTML = tokensByModel.map(item => `
         <tr>
             <td>${escapeHtml(item.model_name || 'Unknown')}</td>
-            <td>${formatNumber(item.total_tokens)}</td>
-            <td>${formatNumber(item.prompt_tokens)}</td>
-            <td>${formatNumber(item.completion_tokens)}</td>
+            <td title="${formatNumber(item.total_tokens)}">${formatNumberShort(item.total_tokens)}</td>
+            <td title="${formatNumber(item.prompt_tokens)}">${formatNumberShort(item.prompt_tokens)}</td>
+            <td title="${formatNumber(item.completion_tokens)}">${formatNumberShort(item.completion_tokens)}</td>
         </tr>
     `).join('');
 };
@@ -416,9 +453,9 @@ const renderTokenTrends = (tokenTrends) => {
         if (!timestamp) return '';
         const date = new Date(timestamp);
         if (Number.isNaN(date.getTime())) return '';
-        const hours = date.getHours();
-        const month = String(date.getMonth() + 1).padStart(2, '0');
-        const day = String(date.getDate()).padStart(2, '0');
+        const hours = date.getUTCHours();
+        const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+        const day = String(date.getUTCDate()).padStart(2, '0');
 
         // Show date on first bar
         if (index === 0) {
@@ -427,7 +464,7 @@ const renderTokenTrends = (tokenTrends) => {
         // Check if day changed from previous
         if (index > 0 && all[index - 1]?.timestamp) {
             const prevDate = new Date(all[index - 1].timestamp);
-            if (date.getDate() !== prevDate.getDate()) {
+            if (date.getUTCDate() !== prevDate.getUTCDate()) {
                 return `${month}/${day}`;
             }
         }
@@ -441,8 +478,8 @@ const renderTokenTrends = (tokenTrends) => {
     trendsEl.innerHTML = `
         <div class="usage-chart">
             <div class="chart-y-axis">
-                <span class="y-label">${formatNumber(maxCount)}</span>
-                <span class="y-label">${formatNumber(Math.round(maxCount / 2))}</span>
+                <span class="y-label" title="${formatNumber(maxCount)}">${formatNumberShort(maxCount)}</span>
+                <span class="y-label" title="${formatNumber(Math.round(maxCount / 2))}">${formatNumberShort(Math.round(maxCount / 2))}</span>
                 <span class="y-label">0</span>
             </div>
             <div class="chart-area">
