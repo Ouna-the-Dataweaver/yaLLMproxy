@@ -23,6 +23,125 @@ let state = {
 // Current log data for download functionality
 let currentLogData = null;
 
+// Autocomplete state for model filter
+let autocompleteState = {
+    models: [],
+    selectedIndex: -1,
+    isVisible: false
+};
+
+// Fetch models for autocomplete
+const fetchModels = async () => {
+    try {
+        const response = await fetch("/v1/models");
+        if (!response.ok) return [];
+        const data = await response.json();
+        return data.data.map(model => model.id).sort();
+    } catch (error) {
+        console.error("Failed to fetch models:", error);
+        return [];
+    }
+};
+
+// Show autocomplete dropdown with suggestions
+const showAutocomplete = (suggestions) => {
+    const dropdown = document.getElementById("modelAutocomplete");
+    const input = document.getElementById("filterModel");
+
+    dropdown.innerHTML = "";
+
+    if (suggestions.length === 0) {
+        const item = document.createElement("div");
+        item.className = "autocomplete-item no-results";
+        item.textContent = "No matching models";
+        dropdown.appendChild(item);
+    } else {
+        suggestions.forEach((model, index) => {
+            const item = document.createElement("div");
+            item.className = "autocomplete-item";
+            item.textContent = model;
+            item.addEventListener("click", () => selectModel(model));
+            dropdown.appendChild(item);
+        });
+    }
+
+    dropdown.classList.add("visible");
+    autocompleteState.isVisible = true;
+    autocompleteState.selectedIndex = -1;
+};
+
+// Hide autocomplete dropdown
+const hideAutocomplete = () => {
+    const dropdown = document.getElementById("modelAutocomplete");
+    dropdown.classList.remove("visible");
+    autocompleteState.isVisible = false;
+    autocompleteState.selectedIndex = -1;
+};
+
+// Select a model from suggestions
+const selectModel = (modelName) => {
+    const input = document.getElementById("filterModel");
+    input.value = modelName;
+    hideAutocomplete();
+    input.focus();
+};
+
+// Filter models by search term
+const filterModels = (searchTerm) => {
+    if (!searchTerm) {
+        return autocompleteState.models;
+    }
+    const term = searchTerm.toLowerCase();
+    return autocompleteState.models.filter(model =>
+        model.toLowerCase().includes(term)
+    );
+};
+
+// Update autocomplete suggestions
+const updateAutocomplete = (searchTerm) => {
+    const suggestions = filterModels(searchTerm);
+    showAutocomplete(suggestions);
+};
+
+// Handle keyboard navigation in autocomplete
+const handleKeyDown = (event) => {
+    if (!autocompleteState.isVisible) return;
+
+    const dropdown = document.getElementById("modelAutocomplete");
+    const items = dropdown.querySelectorAll(".autocomplete-item:not(.no-results)");
+
+    if (items.length === 0) return;
+
+    if (event.key === "ArrowDown") {
+        event.preventDefault();
+        autocompleteState.selectedIndex = Math.min(
+            autocompleteState.selectedIndex + 1,
+            items.length - 1
+        );
+    } else if (event.key === "ArrowUp") {
+        event.preventDefault();
+        autocompleteState.selectedIndex = Math.max(
+            autocompleteState.selectedIndex - 1,
+            -1
+        );
+    } else if (event.key === "Enter") {
+        event.preventDefault();
+        if (autocompleteState.selectedIndex >= 0) {
+            const selectedModel = items[autocompleteState.selectedIndex].textContent;
+            selectModel(selectedModel);
+        } else {
+            hideAutocomplete();
+        }
+    } else if (event.key === "Escape") {
+        event.preventDefault();
+        hideAutocomplete();
+    }
+
+    items.forEach((item, index) => {
+        item.classList.toggle("active", index === autocompleteState.selectedIndex);
+    });
+};
+
 const formatDate = (isoString) => {
     if (!isoString) return "--";
     // Ensure timestamp is treated as UTC if no timezone specified
@@ -1286,6 +1405,35 @@ const initLogsUi = () => {
 
     // Theme icons
     updateThemeIcons(ThemeManager ? ThemeManager.getCurrent() : "light");
+
+    // Model autocomplete - fetch models on page load
+    fetchModels().then(models => {
+        autocompleteState.models = models;
+    });
+
+    // Model input event listeners
+    const modelInput = document.getElementById("filterModel");
+    if (modelInput) {
+        modelInput.addEventListener("focus", () => {
+            const searchTerm = modelInput.value;
+            updateAutocomplete(searchTerm);
+        });
+
+        modelInput.addEventListener("input", (e) => {
+            const searchTerm = e.target.value;
+            updateAutocomplete(searchTerm);
+        });
+
+        modelInput.addEventListener("keydown", handleKeyDown);
+    }
+
+    // Hide autocomplete when clicking outside
+    document.addEventListener("click", (e) => {
+        const container = document.querySelector(".filter-group[style*='position: relative']");
+        if (container && !container.contains(e.target)) {
+            hideAutocomplete();
+        }
+    });
 
     // Initial load
     fetchLogs();

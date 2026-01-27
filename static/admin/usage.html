@@ -75,6 +75,10 @@
                     <strong id="statOngoing">0</strong>
                 </div>
                 <div class="highlight">
+                    <span>Total Tokens</span>
+                    <strong id="statTotalTokens">--</strong>
+                </div>
+                <div class="highlight">
                     <span>Last Updated</span>
                     <strong id="statUpdated">--</strong>
                 </div>
@@ -140,34 +144,92 @@
                     </div>
 
                     <div class="history-section">
-                        <h3>Requests by Model</h3>
-                        <div class="table-container">
-                            <table class="data-table">
-                                <thead>
-                                    <tr>
-                                        <th>Model</th>
-                                        <th>Requests</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="requests-by-model">
-                                </tbody>
-                            </table>
+                        <h3>Token Statistics</h3>
+                        <div class="stats-grid" id="token-stats-grid">
+                            <div class="stat-card">
+                                <div class="stat-label">Total Tokens</div>
+                                <div class="stat-value" id="statTotalTokensAll">0</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-label">Prompt Tokens</div>
+                                <div class="stat-value" id="statPromptTokens">0</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-label">Completion Tokens</div>
+                                <div class="stat-value" id="statCompletionTokens">0</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-label">Avg Tokens/Req</div>
+                                <div class="stat-value" id="statAvgTokens">0</div>
+                            </div>
+                            <div class="stat-card" id="cached-tokens-card" style="display: none;">
+                                <div class="stat-label">Cached Tokens</div>
+                                <div class="stat-value highlight-cached" id="statCachedTokens">0</div>
+                            </div>
+                            <div class="stat-card" id="reasoning-tokens-card" style="display: none;">
+                                <div class="stat-label">Reasoning Tokens</div>
+                                <div class="stat-value highlight-reasoning" id="statReasoningTokens">0</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="history-section collapsible-section">
+                        <div class="collapsible-header" data-target="requests-by-model-section">
+                            <span class="collapsible-toggle collapsed">▶</span>
+                            <h3>Requests by Model</h3>
+                        </div>
+                        <div class="collapsible-body collapsed" id="requests-by-model-section">
+                            <div class="table-container">
+                                <table class="data-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Model</th>
+                                            <th>Requests</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="requests-by-model">
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="history-section collapsible-section">
+                        <div class="collapsible-header" data-target="error-rates-section">
+                            <span class="collapsible-toggle collapsed">▶</span>
+                            <h3>Error Rates by Model</h3>
+                        </div>
+                        <div class="collapsible-body collapsed" id="error-rates-section">
+                            <div class="table-container">
+                                <table class="data-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Model</th>
+                                            <th>Total</th>
+                                            <th>Errors</th>
+                                            <th>Error Rate</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="error-rates">
+                                    </tbody>
+                                </table>
+                            </div>
                         </div>
                     </div>
 
                     <div class="history-section">
-                        <h3>Error Rates by Model</h3>
+                        <h3>Tokens by Model</h3>
                         <div class="table-container">
                             <table class="data-table">
                                 <thead>
                                     <tr>
                                         <th>Model</th>
-                                        <th>Total</th>
-                                        <th>Errors</th>
-                                        <th>Error Rate</th>
+                                        <th>Total Tokens</th>
+                                        <th>Prompt</th>
+                                        <th>Completion</th>
                                     </tr>
                                 </thead>
-                                <tbody id="error-rates">
+                                <tbody id="tokens-by-model">
                                 </tbody>
                             </table>
                         </div>
@@ -184,6 +246,12 @@
                     <div class="history-section">
                         <h3>Usage Trends (Last 48 Hours)</h3>
                         <div id="usage-trends">
+                        </div>
+                    </div>
+
+                    <div class="history-section">
+                        <h3>Token Trends (Last 48 Hours)</h3>
+                        <div id="token-trends">
                         </div>
                     </div>
 

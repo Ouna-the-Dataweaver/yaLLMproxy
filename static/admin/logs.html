@@ -976,6 +976,46 @@
             font-size: 11px;
             font-style: italic;
         }
+
+        /* Autocomplete dropdown */
+        .autocomplete-dropdown {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            max-height: 250px;
+            overflow-y: auto;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-top: none;
+            z-index: 100;
+            display: none;
+            box-shadow: var(--shadow);
+        }
+
+        .autocomplete-dropdown.visible {
+            display: block;
+        }
+
+        .autocomplete-item {
+            padding: 10px 12px;
+            cursor: pointer;
+            font-size: 14px;
+            color: var(--ink);
+            font-family: "Space Mono", monospace;
+        }
+
+        .autocomplete-item:hover,
+        .autocomplete-item.active {
+            background: var(--surface-strong);
+            color: var(--accent);
+        }
+
+        .autocomplete-item.no-results {
+            cursor: default;
+            color: var(--ink-muted);
+            font-style: italic;
+        }
     </style>
 </head>
 <body>
@@ -1034,9 +1074,10 @@
                 </button>
             </div>
             <div class="filters-panel">
-                <div class="filter-group">
+                <div class="filter-group" style="position: relative;">
                     <label for="filterModel">Model</label>
-                    <input type="text" id="filterModel" placeholder="Filter by model...">
+                    <input type="text" id="filterModel" placeholder="Filter by model..." autocomplete="off">
+                    <div class="autocomplete-dropdown" id="modelAutocomplete"></div>
                 </div>
                 <div class="filter-group">
                     <label for="filterOutcome">Outcome</label>

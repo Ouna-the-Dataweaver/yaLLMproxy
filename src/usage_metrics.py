@@ -122,6 +122,27 @@ def build_usage_snapshot() -> dict[str, Any]:
                 end_time=end_time,
             )
 
+            # Get token statistics
+            token_stats = repository.get_token_stats(
+                start_time=start_time,
+                end_time=end_time,
+            )
+
+            # Get tokens by model
+            tokens_by_model = repository.get_tokens_by_model(
+                start_time=start_time,
+                end_time=end_time,
+                limit=10,
+            )
+
+            # Get token trends
+            token_trends = repository.get_token_trends(
+                start_time=trends_start_time,
+                end_time=end_time,
+                interval="hour",
+                limit=48,
+            )
+
             # Get model breakdown
             requests_by_model = repository.get_requests_per_model(
                 start_time=start_time,
@@ -161,6 +182,9 @@ def build_usage_snapshot() -> dict[str, Any]:
                 "provider": "database",
                 "message": "Historical data retrieved from database.",
                 "total_stats": total_stats,
+                "token_stats": token_stats,
+                "tokens_by_model": tokens_by_model,
+                "token_trends": token_trends,
                 "requests_by_model": requests_by_model,
                 "error_rates": error_rates,
                 "avg_response_times": avg_times,

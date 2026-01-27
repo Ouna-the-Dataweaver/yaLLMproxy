@@ -134,6 +134,18 @@ const renderHistorical = (historical) => {
         setText('historyDateRange', `${formatTime(start)} - ${formatTime(end)}`);
     }
 
+    // Render token stats
+    const tokenStats = historical.token_stats || {};
+    renderTokenStats(tokenStats, true);
+
+    // Render tokens by model
+    const tokensByModel = historical.tokens_by_model || [];
+    renderTokensByModel(tokensByModel);
+
+    // Render token trends
+    const tokenTrends = historical.token_trends || [];
+    renderTokenTrends(tokenTrends);
+
     // Render requests by model table
     const requestsByModel = historical.requests_by_model || [];
     const requestsBody = document.getElementById('requests-by-model');
@@ -296,6 +308,182 @@ const renderStopReasons = (stopReasons) => {
     `).join('');
 };
 
+const renderTokenStats = (tokenStats, isHistorical = false) => {
+    if (!tokenStats) {
+        if (isHistorical) {
+            setText('statTotalTokensAll', '0');
+            setText('statPromptTokens', '0');
+            setText('statCompletionTokens', '0');
+            setText('statAvgTokens', '0');
+        }
+        return;
+    }
+
+    const totalTokens = tokenStats.total_tokens || 0;
+    const promptTokens = tokenStats.total_prompt_tokens || 0;
+    const completionTokens = tokenStats.total_completion_tokens || 0;
+    const avgTokens = tokenStats.avg_tokens_per_request || 0;
+    const cachedTokens = tokenStats.total_cached_tokens || 0;
+    const reasoningTokens = tokenStats.total_reasoning_tokens || 0;
+
+    if (isHistorical) {
+        setText('statTotalTokensAll', formatNumber(totalTokens));
+        setText('statPromptTokens', formatNumber(promptTokens));
+        setText('statCompletionTokens', formatNumber(completionTokens));
+        setText('statAvgTokens', formatNumber(avgTokens));
+
+        // Show/hide cached tokens
+        const cachedCard = document.getElementById('cached-tokens-card');
+        if (cachedCard) {
+            cachedCard.style.display = cachedTokens > 0 ? 'block' : 'none';
+            if (cachedTokens > 0) {
+                setText('statCachedTokens', formatNumber(cachedTokens));
+            }
+        }
+
+        // Show/hide reasoning tokens
+        const reasoningCard = document.getElementById('reasoning-tokens-card');
+        if (reasoningCard) {
+            reasoningCard.style.display = reasoningTokens > 0 ? 'block' : 'none';
+            if (reasoningTokens > 0) {
+                setText('statReasoningTokens', formatNumber(reasoningTokens));
+            }
+        }
+    }
+};
+
+const renderTokensByModel = (tokensByModel) => {
+    const tbody = document.getElementById('tokens-by-model');
+    if (!tbody) return;
+
+    if (!tokensByModel || tokensByModel.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--ink-muted);">No token data available</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = tokensByModel.map(item => `
+        <tr>
+            <td>${escapeHtml(item.model_name || 'Unknown')}</td>
+            <td>${formatNumber(item.total_tokens)}</td>
+            <td>${formatNumber(item.prompt_tokens)}</td>
+            <td>${formatNumber(item.completion_tokens)}</td>
+        </tr>
+    `).join('');
+};
+
+const renderTokenTrends = (tokenTrends) => {
+    const trendsEl = document.getElementById('token-trends');
+    if (!trendsEl) return;
+
+    if (!tokenTrends || tokenTrends.length === 0) {
+        trendsEl.innerHTML = '<p style="color: var(--ink-muted);">No token trend data available</p>';
+        return;
+    }
+
+    // Always render 48 slots for consistent bar width
+    const SLOT_COUNT = 48;
+
+    // Build a map of existing data by truncated hour (in UTC)
+    const dataByHour = new Map();
+    for (const item of tokenTrends) {
+        if (item.timestamp) {
+            // Parse timestamp - append Z if no timezone to treat as UTC
+            let ts = item.timestamp;
+            if (!ts.endsWith('Z') && !ts.includes('+') && !ts.includes('-', 10)) {
+                ts = ts.replace(' ', 'T') + 'Z';
+            }
+            const date = new Date(ts);
+            // Truncate to hour in UTC for matching
+            date.setUTCMinutes(0, 0, 0);
+            dataByHour.set(date.getTime(), item.total_tokens || 0);
+        }
+    }
+
+    // Generate 48 hourly slots from now going back (in UTC)
+    const now = new Date();
+    now.setUTCMinutes(0, 0, 0); // Truncate to current hour in UTC
+    const slots = [];
+    for (let i = SLOT_COUNT - 1; i >= 0; i--) {
+        const slotTime = new Date(now.getTime() - i * 60 * 60 * 1000);
+        const count = dataByHour.get(slotTime.getTime()) || 0;
+        slots.push({ timestamp: slotTime.toISOString(), count });
+    }
+
+    const maxCount = Math.max(...slots.map(t => t.count || 0), 1);
+
+    // Format hour label - show sparingly to avoid clutter
+    const formatHourLabel = (timestamp, index, all) => {
+        if (!timestamp) return '';
+        const date = new Date(timestamp);
+        if (Number.isNaN(date.getTime())) return '';
+        const hours = date.getHours();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+
+        // Show date on first bar
+        if (index === 0) {
+            return `${month}/${day}`;
+        }
+        // Check if day changed from previous
+        if (index > 0 && all[index - 1]?.timestamp) {
+            const prevDate = new Date(all[index - 1].timestamp);
+            if (date.getDate() !== prevDate.getDate()) {
+                return `${month}/${day}`;
+            }
+        }
+        // Show label every 6 hours (00:00, 06:00, 12:00, 18:00)
+        if (hours % 6 === 0) {
+            return `${String(hours).padStart(2, '0')}:00`;
+        }
+        return '';
+    };
+
+    trendsEl.innerHTML = `
+        <div class="usage-chart">
+            <div class="chart-y-axis">
+                <span class="y-label">${formatNumber(maxCount)}</span>
+                <span class="y-label">${formatNumber(Math.round(maxCount / 2))}</span>
+                <span class="y-label">0</span>
+            </div>
+            <div class="chart-area">
+                <div class="chart-grid-lines">
+                    <div class="grid-line"></div>
+                    <div class="grid-line"></div>
+                    <div class="grid-line"></div>
+                </div>
+                <div class="chart-bars">
+                    ${slots.map((item, idx) => {
+                        const count = item.count || 0;
+                        const height = maxCount > 0 ? (count / maxCount) * 100 : 0;
+                        const label = formatHourLabel(item.timestamp, idx, slots);
+                        return `
+                            <div class="chart-bar-container" title="${formatTime(item.timestamp)}: ${formatNumber(count)} tokens">
+                                <div class="chart-bar" style="height: ${height}%"></div>
+                                <span class="chart-bar-label">${label}</span>
+                            </div>
+                        `;
+                    }).join('')}
+                </div>
+            </div>
+        </div>
+    `;
+};
+
+// Collapsible section handlers
+const initCollapsibleSections = () => {
+    document.querySelectorAll('.collapsible-header').forEach(header => {
+        header.addEventListener('click', () => {
+            const targetId = header.dataset.target;
+            const target = document.getElementById(targetId);
+            const toggle = header.querySelector('.collapsible-toggle');
+            if (target && toggle) {
+                target.classList.toggle('expanded');
+                toggle.classList.toggle('expanded');
+            }
+        });
+    });
+};
+
 // Simple HTML escape to prevent XSS
 const escapeHtml = (text) => {
     const div = document.createElement('div');
@@ -347,6 +535,9 @@ const initUsageUi = () => {
     if (refreshButton) {
         refreshButton.addEventListener('click', () => loadUsage(true));
     }
+
+    // Initialize collapsible sections
+    initCollapsibleSections();
 
     updateThemeIcons(ThemeManager.getCurrent());
     loadUsage(true);
