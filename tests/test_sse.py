@@ -6,7 +6,7 @@ from pathlib import Path
 # Add src directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from src.core.sse import detect_sse_stream_error, STREAM_ERROR_CHECK_BUFFER_SIZE
+from src.core.sse import detect_sse_stream_error, STREAM_ERROR_CHECK_BUFFER_SIZE, SSEJSONDecoder
 from src.modules.response_pipeline import SSEDecoder
 
 
@@ -86,3 +86,75 @@ def test_sse_decoder_buffers_until_flush():
     events = decoder.feed(b"data: hello")
     assert events == []
     assert decoder.flush() == b"data: hello"
+
+
+class TestSSEJSONDecoderFlush:
+    """Tests for SSEJSONDecoder flush functionality."""
+
+    def test_flush_empty_buffer(self):
+        """Test that flush returns empty list for empty buffer."""
+        decoder = SSEJSONDecoder()
+        assert decoder.flush() == []
+
+    def test_flush_whitespace_only(self):
+        """Test that flush returns empty list for whitespace-only buffer."""
+        decoder = SSEJSONDecoder()
+        decoder.feed(b"   \n  ")
+        assert decoder.flush() == []
+
+    def test_flush_done_signal(self):
+        """Test that flush returns empty list for [DONE] signal."""
+        decoder = SSEJSONDecoder()
+        decoder.feed(b"data: [DONE]")
+        assert decoder.flush() == []
+
+    def test_flush_extracts_json_payload(self):
+        """Test that flush extracts JSON payload from incomplete event."""
+        decoder = SSEJSONDecoder()
+        # Feed incomplete event (no trailing \n\n)
+        decoder.feed(b'data: {"usage": {"prompt_tokens": 100}}')
+        result = decoder.flush()
+        assert len(result) == 1
+        assert result[0] == {"usage": {"prompt_tokens": 100}}
+
+    def test_flush_handles_complex_usage_payload(self):
+        """Test that flush handles complex usage payload like GLM returns."""
+        decoder = SSEJSONDecoder()
+        payload = b'data: {"choices": [{"finish_reason": "stop"}], "usage": {"prompt_tokens": 17293, "completion_tokens": 97}}'
+        decoder.feed(payload)
+        result = decoder.flush()
+        assert len(result) == 1
+        assert result[0]["usage"]["prompt_tokens"] == 17293
+        assert result[0]["usage"]["completion_tokens"] == 97
+
+    def test_flush_clears_buffer(self):
+        """Test that flush clears the buffer."""
+        decoder = SSEJSONDecoder()
+        decoder.feed(b'data: {"test": 1}')
+        decoder.flush()
+        # Second flush should return empty
+        assert decoder.flush() == []
+
+    def test_flush_handles_invalid_json(self):
+        """Test that flush handles invalid JSON gracefully."""
+        decoder = SSEJSONDecoder()
+        decoder.feed(b'data: {invalid json}')
+        assert decoder.flush() == []
+
+    def test_flush_handles_non_dict_json(self):
+        """Test that flush handles non-dict JSON gracefully."""
+        decoder = SSEJSONDecoder()
+        decoder.feed(b'data: ["array", "not", "dict"]')
+        assert decoder.flush() == []
+
+    def test_normal_feed_followed_by_flush(self):
+        """Test that normal feed with flush catches remaining data."""
+        decoder = SSEJSONDecoder()
+        # First event complete
+        payloads = decoder.feed(b'data: {"id": 1}\n\ndata: {"id": 2}')
+        assert len(payloads) == 1
+        assert payloads[0]["id"] == 1
+        # Second event incomplete, need flush
+        remaining = decoder.flush()
+        assert len(remaining) == 1
+        assert remaining[0]["id"] == 2

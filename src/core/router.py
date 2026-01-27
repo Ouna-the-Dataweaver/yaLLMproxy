@@ -918,6 +918,18 @@ async def _streaming_request(
                         request_log.record_stop_reason(stop_reason)
                         if stop_reason in ("tool_calls", "function_call", "tool_use"):
                             request_log.mark_as_tool_call()
+                        # Record usage stats on early stop from buffered chunks
+                        if last_usage_stats:
+                            logger.debug(
+                                "Recording usage stats from buffered early stop: %s",
+                                last_usage_stats,
+                            )
+                            request_log.record_usage_stats(last_usage_stats)
+                        elif sse_decoder:
+                            for payload in sse_decoder.flush():
+                                _handle_payload(payload, chunk_count)
+                            if last_usage_stats:
+                                request_log.record_usage_stats(last_usage_stats)
                     await close_stream()
                     for out_chunk in _stop_chunks(stop_reason):
                         if request_log:
@@ -949,7 +961,7 @@ async def _streaming_request(
                         for out_chunk in _process_chunk(chunk):
                             yield out_chunk
                         if stream_parser and stream_parser.stop_requested and not stop_early:
-                            stop_reason = stream_parser.stop_reason or "tool_calls"
+                            stop_reason = stream_parser.stop_reason or stream_parser._last_finish_reason or "stop"
                             stop_early = True
                             last_finish_reason = stop_reason
                             logger.debug(
@@ -966,6 +978,23 @@ async def _streaming_request(
                                     modules_log = stream_parser.get_module_logs()
                                     if modules_log:
                                         request_log.record_modules_log(modules_log)
+                                # Record usage stats on early stop (may have been captured in final chunk)
+                                if last_usage_stats:
+                                    logger.debug(
+                                        "Recording usage stats from early stop: %s",
+                                        last_usage_stats,
+                                    )
+                                    request_log.record_usage_stats(last_usage_stats)
+                                elif sse_decoder:
+                                    # Flush SSE decoder to get any remaining buffered payloads
+                                    for payload in sse_decoder.flush():
+                                        _handle_payload(payload, chunk_count)
+                                    if last_usage_stats:
+                                        logger.debug(
+                                            "Recording usage stats from flush on early stop: %s",
+                                            last_usage_stats,
+                                        )
+                                        request_log.record_usage_stats(last_usage_stats)
                             await close_stream()
                             for out_chunk in _stop_chunks(stop_reason):
                                 if request_log:
@@ -1057,6 +1086,12 @@ async def _streaming_request(
                                     key,
                                     choice_for_debug.get(key),
                                 )
+
+                    # Flush SSE decoder to get any remaining buffered payloads
+                    # (final chunk may not end with \n\n)
+                    if sse_decoder and not last_usage_stats:
+                        for payload in sse_decoder.flush():
+                            _handle_payload(payload, chunk_count)
 
                     # Record usage stats from the final chunk
                     if last_usage_stats:

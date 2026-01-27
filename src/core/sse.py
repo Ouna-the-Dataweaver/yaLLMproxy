@@ -100,3 +100,45 @@ class SSEJSONDecoder:
                 payloads.append(parsed)
 
         return payloads
+
+    def flush(self) -> list[dict[str, Any]]:
+        """Flush any remaining data in the buffer.
+
+        Call this at the end of the stream to process any final events
+        that may not have been followed by a double newline.
+        """
+        if not self._buffer.strip():
+            return []
+
+        payloads: list[dict[str, Any]] = []
+
+        # Process remaining buffer as potential events
+        remaining = self._buffer.strip()
+        self._buffer = ""
+
+        if not remaining:
+            return []
+
+        # Try to parse remaining data as SSE events
+        data_lines: list[str] = []
+        for line in remaining.split("\n"):
+            line = line.strip()
+            if line.startswith("data:"):
+                data_lines.append(line[5:].lstrip())
+
+        if not data_lines:
+            return []
+
+        data = "\n".join(data_lines)
+        if data.strip() == "[DONE]":
+            return []
+
+        try:
+            parsed = json.loads(data)
+        except json.JSONDecodeError:
+            return []
+
+        if isinstance(parsed, dict):
+            payloads.append(parsed)
+
+        return payloads
