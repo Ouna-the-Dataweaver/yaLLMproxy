@@ -212,23 +212,28 @@
                         </div>
                     </div>
 
-                    <div class="history-section">
-                        <h3>Stop Reason Breakdown</h3>
-                        <p class="panel-subtitle">Distribution of how requests completed</p>
-                        <div id="stop-reasons-container">
-                            <div class="stats-grid" id="stop-reasons-grid"></div>
+                    <div class="history-section collapsible-section">
+                        <div class="collapsible-header" data-target="stop-reasons-section">
+                            <span class="collapsible-toggle collapsed">▶</span>
+                            <h3>Stop Reason Breakdown</h3>
                         </div>
-                    </div>
-
-                    <div class="history-section">
-                        <h3>Usage Trends (Last 48 Hours)</h3>
-                        <div id="usage-trends">
+                        <div class="collapsible-body collapsed" id="stop-reasons-section">
+                            <p class="panel-subtitle">Distribution of how requests completed</p>
+                            <div id="stop-reasons-container">
+                                <div class="stats-grid" id="stop-reasons-grid"></div>
+                            </div>
                         </div>
                     </div>
 
                     <div class="history-section">
                         <h3>Token Trends (Last 48 Hours)</h3>
                         <div id="token-trends">
+                        </div>
+                    </div>
+
+                    <div class="history-section">
+                        <h3>Usage Trends (Last 48 Hours)</h3>
+                        <div id="usage-trends">
                         </div>
                     </div>
 
