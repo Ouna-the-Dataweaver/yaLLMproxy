@@ -819,9 +819,12 @@ class RequestLogRecorder:
     def _calculate_throughput_metrics(self, duration_ms: Optional[int]) -> Optional[dict[str, Any]]:
         """Calculate throughput metrics based on total duration.
 
-        Uses a simple formula: (prompt_tokens - cached_tokens + completion_tokens) / duration
-        This gives a reliable "processed tokens per second" metric that works consistently
-        across all providers without depending on unreliable timing instrumentation.
+        Uses a weighted formula that accounts for different processing speeds:
+        - Output (decode) tokens: baseline (1x)
+        - Input (prefill) tokens: ~10x faster than decode, so /10
+        - Cached tokens: ~100x faster than decode, so /100
+
+        Formula: (input - cached) / 10 + cached / 100 + output
 
         Returns:
             Dictionary with tokens_per_second (throughput), or None if cannot be calculated.
@@ -838,19 +841,23 @@ class RequestLogRecorder:
         if isinstance(prompt_details, dict):
             cached_tokens = prompt_details.get("cached_tokens", 0)
 
-        # Calculate processed tokens: input (minus cached) + output
-        processed_tokens = (prompt_tokens - cached_tokens) + completion_tokens
+        # Calculate weighted tokens:
+        # - non-cached input: 10x faster than decode -> /10
+        # - cached input: 100x faster than decode -> /100
+        # - output: baseline
+        non_cached_input = prompt_tokens - cached_tokens
+        weighted_tokens = (non_cached_input / 10) + (cached_tokens / 100) + completion_tokens
 
-        if processed_tokens <= 0:
+        if weighted_tokens <= 0:
             return None
 
         # Calculate throughput
         duration_seconds = duration_ms / 1000.0
-        tokens_per_second = processed_tokens / duration_seconds
+        tokens_per_second = weighted_tokens / duration_seconds
 
         return {
             "tokens_per_second": round(tokens_per_second, 2),
-            "processed_tokens": processed_tokens,
+            "weighted_tokens": round(weighted_tokens, 2),
         }
 
     def _build_full_response(self) -> Optional[str]:
@@ -895,7 +902,7 @@ class RequestLogRecorder:
             self._usage_stats.update(throughput_metrics)
             self._append_text(
                 f"throughput={throughput_metrics['tokens_per_second']} tok/s "
-                f"processed_tokens={throughput_metrics['processed_tokens']}\n"
+                f"weighted_tokens={throughput_metrics['weighted_tokens']}\n"
             )
 
         # Build the full concatenated response

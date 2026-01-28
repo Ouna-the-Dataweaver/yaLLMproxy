@@ -37,24 +37,25 @@ class TestRequestLogRecorderThroughput:
             log_to_disk=False,
         )
 
-        # Set usage stats: 50 prompt + 100 completion = 150 tokens
+        # Set usage stats: 50 prompt + 100 completion
+        # Weighted: 50/10 + 100 = 5 + 100 = 105
         recorder._usage_stats = {
             "completion_tokens": 100,
             "prompt_tokens": 50,
             "total_tokens": 150,
         }
 
-        # 150 tokens in 1000ms = 150 tok/s
+        # 105 weighted tokens in 1000ms = 105 tok/s
         metrics = recorder._calculate_throughput_metrics(duration_ms=1000)
 
         assert metrics is not None
         assert "tokens_per_second" in metrics
-        assert "processed_tokens" in metrics
-        assert metrics["processed_tokens"] == 150
-        assert metrics["tokens_per_second"] == 150.0
+        assert "weighted_tokens" in metrics
+        assert metrics["weighted_tokens"] == 105.0
+        assert metrics["tokens_per_second"] == 105.0
 
     def test_calculate_throughput_with_cached_tokens(self):
-        """Test throughput calculation excludes cached tokens."""
+        """Test throughput calculation weights cached tokens differently."""
         recorder = RequestLogRecorder(
             model_name="test-model",
             is_stream=True,
@@ -62,7 +63,8 @@ class TestRequestLogRecorderThroughput:
             log_to_disk=False,
         )
 
-        # 100 prompt - 30 cached + 50 completion = 120 processed tokens
+        # 100 prompt, 30 cached, 50 completion
+        # Weighted: (100-30)/10 + 30/100 + 50 = 7 + 0.3 + 50 = 57.3
         recorder._usage_stats = {
             "completion_tokens": 50,
             "prompt_tokens": 100,
@@ -72,12 +74,11 @@ class TestRequestLogRecorderThroughput:
             },
         }
 
-        # 120 tokens in 1000ms = 120 tok/s
         metrics = recorder._calculate_throughput_metrics(duration_ms=1000)
 
         assert metrics is not None
-        assert metrics["processed_tokens"] == 120
-        assert metrics["tokens_per_second"] == 120.0
+        assert metrics["weighted_tokens"] == 57.3
+        assert metrics["tokens_per_second"] == 57.3
 
     def test_calculate_throughput_without_tokens(self):
         """Test that throughput returns None without token data."""
@@ -140,9 +141,10 @@ class TestRequestLogRecorderThroughput:
         recorder.finalize("success")
 
         # Check that throughput was merged into usage_stats
+        # Weighted: 50/10 + 100 = 105
         assert "tokens_per_second" in recorder._usage_stats
-        assert "processed_tokens" in recorder._usage_stats
-        assert recorder._usage_stats["processed_tokens"] == 150
+        assert "weighted_tokens" in recorder._usage_stats
+        assert recorder._usage_stats["weighted_tokens"] == 105.0
         assert recorder._usage_stats["tokens_per_second"] > 0
 
     def test_finalize_without_usage_data(self):
