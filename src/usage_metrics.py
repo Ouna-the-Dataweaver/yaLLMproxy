@@ -143,6 +143,19 @@ def build_usage_snapshot() -> dict[str, Any]:
                 limit=48,
             )
 
+            # Get TPS statistics
+            tps_stats = repository.get_tps_stats(
+                start_time=start_time,
+                end_time=end_time,
+            )
+
+            # Get TPS by model
+            tps_by_model = repository.get_avg_tps_by_model(
+                start_time=start_time,
+                end_time=end_time,
+                limit=10,
+            )
+
             # Get model breakdown
             requests_by_model = repository.get_requests_per_model(
                 start_time=start_time,
@@ -190,6 +203,8 @@ def build_usage_snapshot() -> dict[str, Any]:
                 "avg_response_times": avg_times,
                 "usage_trends": usage_trends,
                 "stop_reasons": stop_reasons,
+                "tps_stats": tps_stats,
+                "tps_by_model": tps_by_model,
             }
         except Exception as e:
             logger.debug(f"Failed to retrieve historical usage data: {e}")

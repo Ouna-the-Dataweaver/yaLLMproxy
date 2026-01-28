@@ -805,6 +805,7 @@ async def _streaming_request(
         sse_decoder = SSEJSONDecoder() if request_log else None
         stop_early = False
         stop_reason: Optional[str] = None
+        first_content_detected = False
 
         def _extract_finish_reason(choice: Mapping[str, Any]) -> Optional[str]:
             finish_reason = (
@@ -834,7 +835,7 @@ async def _streaming_request(
             return []
 
         def _handle_payload(payload: dict[str, Any], chunk_index: int) -> None:
-            nonlocal last_chunk_data, last_choice_data, last_finish_reason, last_usage_stats
+            nonlocal last_chunk_data, last_choice_data, last_finish_reason, last_usage_stats, first_content_detected
             last_chunk_data = payload
 
             if not isinstance(payload, dict):
@@ -847,38 +848,48 @@ async def _streaming_request(
                     last_usage_stats = usage
 
             # Anthropic streaming format detection
+            # Known Anthropic SSE event types:
+            # - message_start: initial message metadata
+            # - content_block_start: start of a content block
+            # - content_block_delta: content update (text_delta or input_json_delta)
+            # - content_block_stop: end of content block
+            # - message_delta: final stop_reason and usage
+            # - message_stop: end of message
             event_type = payload.get("type")
-            if event_type:
-                # Anthropic SSE event types:
-                # - message_start: initial message metadata
-                # - content_block_start: start of a content block
-                # - content_block_delta: content update (text_delta or input_json_delta)
-                # - content_block_stop: end of content block
-                # - message_delta: final stop_reason and usage
-                # - message_stop: end of message
-                if event_type == "content_block_delta":
-                    delta = payload.get("delta", {})
-                    if isinstance(delta, dict):
-                        delta_type = delta.get("type")
-                        if delta_type == "text_delta":
-                            text = delta.get("text", "")
-                            if text and request_log:
+            is_anthropic_event = False
+            if event_type == "content_block_delta":
+                is_anthropic_event = True
+                delta = payload.get("delta", {})
+                if isinstance(delta, dict):
+                    delta_type = delta.get("type")
+                    if delta_type == "text_delta":
+                        text = delta.get("text", "")
+                        if text:
+                            # Record first content time for TPS calculation
+                            if not first_content_detected and request_log:
+                                first_content_detected = True
+                                request_log.record_first_content_time()
+                            if request_log:
                                 request_log._accumulated_response_parts.append(text)
-                        elif delta_type == "input_json_delta":
-                            # Tool use input streaming - could accumulate if needed
-                            pass
-                elif event_type == "message_delta":
-                    delta = payload.get("delta", {})
-                    if isinstance(delta, dict):
-                        stop_reason = delta.get("stop_reason")
-                        if isinstance(stop_reason, str) and stop_reason:
-                            last_finish_reason = stop_reason
-                    # Usage is at top level of message_delta, not inside delta
-                    # (already captured above)
-                elif event_type == "message_start":
-                    # Could extract message id/model from payload["message"] if needed
-                    pass
-                # Return early - anthropic events don't have "choices"
+                    elif delta_type == "input_json_delta":
+                        # Tool use input streaming - could accumulate if needed
+                        pass
+            elif event_type == "message_delta":
+                is_anthropic_event = True
+                delta = payload.get("delta", {})
+                if isinstance(delta, dict):
+                    stop_reason = delta.get("stop_reason")
+                    if isinstance(stop_reason, str) and stop_reason:
+                        last_finish_reason = stop_reason
+                # Usage is at top level of message_delta, not inside delta
+                # (already captured above)
+            elif event_type in ("message_start", "content_block_start", "content_block_stop", "message_stop"):
+                is_anthropic_event = True
+                # Could extract message id/model from payload["message"] if needed
+
+            # Return early only for actual Anthropic events - they don't have "choices"
+            # Other providers may use "type" field for different purposes
+            if is_anthropic_event:
                 return
 
             # OpenAI streaming format: extract from choices array
@@ -891,6 +902,13 @@ async def _streaming_request(
                     continue
                 delta = choice.get("delta")
                 if isinstance(delta, dict):
+                    # Detect first content for TPS calculation
+                    if not first_content_detected and request_log:
+                        content = delta.get("content")
+                        reasoning_content = delta.get("reasoning_content")
+                        if content or reasoning_content:
+                            first_content_detected = True
+                            request_log.record_first_content_time()
                     request_log.record_stream_delta(delta, chunk_index)
                 finish_reason = _extract_finish_reason(choice)
                 if finish_reason:
@@ -1135,12 +1153,14 @@ async def _streaming_request(
         except asyncio.CancelledError as cancel_exc:
             logger.info(f"Streaming request to {url} cancelled by client")
             if request_log and not request_log.finalized:
+                request_log.record_generation_end_time()
                 request_log.record_error("stream cancelled by client")
                 request_log.finalize("cancelled")
             raise cancel_exc
         except Exception as e:
             logger.error(f"Error during streaming from {url}: {e}")
             if request_log:
+                request_log.record_generation_end_time()
                 request_log.record_error(f"streaming error: {e}")
                 request_log.finalize("error")
             raise
@@ -1148,6 +1168,7 @@ async def _streaming_request(
             logger.debug(f"Stream completed for {url}, total chunks: {chunk_count}")
             await close_stream()
             if request_log and not request_log.finalized:
+                request_log.record_generation_end_time()
                 request_log.finalize("success")
 
     return StreamingResponse(

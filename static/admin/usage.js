@@ -141,7 +141,6 @@ const renderHistorical = (historical) => {
     setText('statSuccessful', formatNumber(total.successful_requests));
     setText('statFailed', formatNumber(total.failed_requests));
     setText('statSuccessRate', `${total.success_rate || 0}%`);
-    setText('statAvgDuration', total.avg_duration_ms ? `${Math.round(total.avg_duration_ms)}ms` : '--');
 
     // Render date range
     if (total.start_time && total.end_time) {
@@ -154,9 +153,14 @@ const renderHistorical = (historical) => {
     const tokenStats = historical.token_stats || {};
     renderTokenStats(tokenStats, true);
 
-    // Render tokens by model
+    // Render tokens by model (with TPS data merged in)
     const tokensByModel = historical.tokens_by_model || [];
-    renderTokensByModel(tokensByModel);
+    const tpsByModel = historical.tps_by_model || [];
+    renderTokensByModel(tokensByModel, tpsByModel);
+
+    // Render TPS stats
+    const tpsStats = historical.tps_stats || {};
+    renderTpsStats(tpsStats);
 
     // Render token trends
     const tokenTrends = historical.token_trends || [];
@@ -389,23 +393,50 @@ const renderTokenStats = (tokenStats, isHistorical = false) => {
     }
 };
 
-const renderTokensByModel = (tokensByModel) => {
+const renderTpsStats = (tpsStats) => {
+    const tpsCard = document.getElementById('tps-card');
+    const avgTpsEl = document.getElementById('statAvgTps');
+
+    if (!tpsCard || !avgTpsEl) return;
+
+    if (!tpsStats || tpsStats.request_count === 0 || tpsStats.overall_avg_tps === null) {
+        tpsCard.style.display = 'none';
+        return;
+    }
+
+    tpsCard.style.display = 'block';
+    avgTpsEl.textContent = `${tpsStats.overall_avg_tps} tok/s`;
+    avgTpsEl.title = `Based on ${formatNumber(tpsStats.request_count)} requests`;
+};
+
+const renderTokensByModel = (tokensByModel, tpsByModel = []) => {
     const tbody = document.getElementById('tokens-by-model');
     if (!tbody) return;
 
     if (!tokensByModel || tokensByModel.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--ink-muted);">No token data available</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="5" style="text-align: center; color: var(--ink-muted);">No token data available</td></tr>';
         return;
     }
 
-    tbody.innerHTML = tokensByModel.map(item => `
+    // Build a map of TPS by model for quick lookup
+    const tpsMap = new Map();
+    for (const tps of tpsByModel) {
+        tpsMap.set(tps.model_name, tps.avg_tps);
+    }
+
+    tbody.innerHTML = tokensByModel.map(item => {
+        const modelName = item.model_name || 'Unknown';
+        const avgTps = tpsMap.get(modelName);
+        const tpsDisplay = avgTps !== undefined ? `${avgTps}` : '--';
+        return `
         <tr>
-            <td>${escapeHtml(item.model_name || 'Unknown')}</td>
+            <td>${escapeHtml(modelName)}</td>
             <td title="${formatNumber(item.total_tokens)}">${formatNumberShort(item.total_tokens)}</td>
             <td title="${formatNumber(item.prompt_tokens)}">${formatNumberShort(item.prompt_tokens)}</td>
             <td title="${formatNumber(item.completion_tokens)}">${formatNumberShort(item.completion_tokens)}</td>
+            <td>${tpsDisplay}</td>
         </tr>
-    `).join('');
+    `}).join('');
 };
 
 const renderTokenTrends = (tokenTrends) => {

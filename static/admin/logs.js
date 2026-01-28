@@ -214,12 +214,20 @@ const getTokens = (usageStats) => {
     const cached = usageStats.prompt_tokens_details?.cached_tokens || 0;
     const reasoning = usageStats.completion_tokens_details?.reasoning_tokens || 0;
 
+    // Extract TPS metrics
+    const tps = usageStats.tokens_per_second;
+    const generationTimeMs = usageStats.generation_time_ms;
+    const isStreamingTps = usageStats.is_streaming_tps;
+
     return {
         total: formatNumber(total),
         input: formatNumber(prompt),
         output: formatNumber(completion),
         cached: cached > 0 ? formatNumber(cached) : null,
-        reasoning: reasoning > 0 ? formatNumber(reasoning) : null
+        reasoning: reasoning > 0 ? formatNumber(reasoning) : null,
+        tps: tps !== undefined && tps !== null ? tps : null,
+        generationTimeMs: generationTimeMs !== undefined && generationTimeMs !== null ? generationTimeMs : null,
+        isStreamingTps: isStreamingTps === true
     };
 };
 
@@ -1276,6 +1284,13 @@ const renderDetailToolbar = () => {
 const renderStatsGrid = (log) => {
     const tokens = getTokens(log.usage_stats);
 
+    // Format generation time
+    const formatGenTime = (ms) => {
+        if (ms === null || ms === undefined) return '--';
+        if (ms < 1000) return `${ms}ms`;
+        return `${(ms / 1000).toFixed(2)}s`;
+    };
+
     const tokenStatsHtml = `
         <div class="token-stats-grid">
             <div class="token-stat-item">
@@ -1299,6 +1314,16 @@ const renderStatsGrid = (log) => {
             <div class="token-stat-item">
                 <div class="label">Reasoning Tokens</div>
                 <div class="value highlight-reasoning">${escapeHtml(tokens.reasoning)}</div>
+            </div>` : ''}
+            ${tokens.tps !== null ? `
+            <div class="token-stat-item">
+                <div class="label">TPS${tokens.isStreamingTps ? '' : ' (est.)'}</div>
+                <div class="value" title="${tokens.isStreamingTps ? 'Measured from first content token' : 'Estimated from total duration'}">${tokens.tps} tok/s</div>
+            </div>` : ''}
+            ${tokens.generationTimeMs !== null ? `
+            <div class="token-stat-item">
+                <div class="label">Generation Time</div>
+                <div class="value">${formatGenTime(tokens.generationTimeMs)}</div>
             </div>` : ''}
         </div>
     `;

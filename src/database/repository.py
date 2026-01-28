@@ -533,6 +533,141 @@ class UsageRepository:
                 for row in result.fetchall()
             ]
 
+    def get_avg_tps_by_model(
+        self,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Get weighted average TPS (Tokens Per Second) per model.
+
+        TPS is weighted by completion tokens, so models with more output
+        have more influence on the average.
+
+        Args:
+            start_time: Start of time range (default: 24 hours ago).
+            end_time: End of time range (default: now).
+            limit: Maximum number of models to return.
+
+        Returns:
+            List of dicts with model_name, avg_tps, total_completion_tokens, request_count.
+        """
+        self._database.initialize()
+
+        if start_time is None:
+            start_time = datetime.now(timezone.utc) - timedelta(days=1)
+        if end_time is None:
+            end_time = datetime.now(timezone.utc)
+
+        # Weighted average: sum(tps * completion_tokens) / sum(completion_tokens)
+        tps_expr = _get_json_value('tokens_per_second')
+        completion_expr = _get_json_value('completion_tokens')
+
+        with self._database.session() as sess:
+            query = (
+                select(
+                    RequestLog.model_name,
+                    # Weighted sum: tps * completion_tokens
+                    func.sum(tps_expr * completion_expr).label("weighted_tps_sum"),
+                    func.sum(completion_expr).label("total_completion_tokens"),
+                    func.count().label("request_count"),
+                )
+                .where(RequestLog.request_time >= start_time)
+                .where(RequestLog.request_time <= end_time)
+                .where(RequestLog.outcome == "success")
+                .where(RequestLog.usage_stats.isnot(None))
+                # Only include records that have TPS data
+                .where(tps_expr > 0)
+                .group_by(RequestLog.model_name)
+                .order_by(func.sum(completion_expr).desc())
+                .limit(limit)
+            )
+            result = sess.execute(query)
+            rows = []
+            for row in result.fetchall():
+                model_name = row[0] or "Unknown"
+                weighted_sum = row[1] or 0
+                total_completion = row[2] or 0
+                request_count = row[3] or 0
+
+                # Calculate weighted average
+                avg_tps = 0.0
+                if total_completion > 0:
+                    avg_tps = weighted_sum / total_completion
+
+                rows.append({
+                    "model_name": model_name,
+                    "avg_tps": round(avg_tps, 2),
+                    "total_completion_tokens": total_completion,
+                    "request_count": request_count,
+                })
+            return rows
+
+    def get_tps_stats(
+        self,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
+    ) -> dict[str, Any]:
+        """Get overall TPS (Tokens Per Second) statistics.
+
+        Args:
+            start_time: Start of time range (default: 24 hours ago).
+            end_time: End of time range (default: now).
+
+        Returns:
+            Dictionary with overall_avg_tps, min_tps, max_tps, request_count.
+        """
+        self._database.initialize()
+
+        if start_time is None:
+            start_time = datetime.now(timezone.utc) - timedelta(days=1)
+        if end_time is None:
+            end_time = datetime.now(timezone.utc)
+
+        tps_expr = _get_json_value('tokens_per_second')
+        completion_expr = _get_json_value('completion_tokens')
+
+        with self._database.session() as sess:
+            query = (
+                select(
+                    # Weighted sum for average: sum(tps * completion_tokens)
+                    func.sum(tps_expr * completion_expr).label("weighted_tps_sum"),
+                    func.sum(completion_expr).label("total_completion_tokens"),
+                    func.min(tps_expr).label("min_tps"),
+                    func.max(tps_expr).label("max_tps"),
+                    func.count().label("request_count"),
+                )
+                .where(RequestLog.request_time >= start_time)
+                .where(RequestLog.request_time <= end_time)
+                .where(RequestLog.outcome == "success")
+                .where(RequestLog.usage_stats.isnot(None))
+                # Only include records that have TPS data
+                .where(tps_expr > 0)
+            )
+            result = sess.execute(query).one_or_none()
+
+            if result is None or result.request_count == 0:
+                return {
+                    "overall_avg_tps": None,
+                    "min_tps": None,
+                    "max_tps": None,
+                    "request_count": 0,
+                }
+
+            # Calculate weighted average
+            weighted_sum = result.weighted_tps_sum or 0
+            total_completion = result.total_completion_tokens or 0
+            avg_tps = 0.0
+            if total_completion > 0:
+                avg_tps = weighted_sum / total_completion
+
+            return {
+                "overall_avg_tps": round(avg_tps, 2),
+                "min_tps": round(result.min_tps, 2) if result.min_tps else None,
+                "max_tps": round(result.max_tps, 2) if result.max_tps else None,
+                "request_count": result.request_count or 0,
+            }
+
 
 # Global repository instance
 _usage_repository: Optional[UsageRepository] = None

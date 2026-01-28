@@ -114,10 +114,6 @@
                             <div class="stat-label">Success Rate</div>
                             <div class="stat-value" id="statSuccessRate">0%</div>
                         </div>
-                        <div class="stat-card">
-                            <div class="stat-label">Avg Response</div>
-                            <div class="stat-value" id="statAvgDuration">0ms</div>
-                        </div>
                     </div>
 
                     <div class="history-section">
@@ -135,10 +131,6 @@
                                 <div class="stat-label">Completion Tokens</div>
                                 <div class="stat-value" id="statCompletionTokens">0</div>
                             </div>
-                            <div class="stat-card">
-                                <div class="stat-label">Avg Tokens/Req</div>
-                                <div class="stat-value" id="statAvgTokens">0</div>
-                            </div>
                             <div class="stat-card" id="cached-tokens-card" style="display: none;">
                                 <div class="stat-label">Cached Tokens</div>
                                 <div class="stat-value highlight-cached" id="statCachedTokens">0</div>
@@ -146,6 +138,14 @@
                             <div class="stat-card" id="reasoning-tokens-card" style="display: none;">
                                 <div class="stat-label">Reasoning Tokens</div>
                                 <div class="stat-value highlight-reasoning" id="statReasoningTokens">0</div>
+                            </div>
+                            <div class="stat-card" id="tps-card" style="display: none;">
+                                <div class="stat-label">Avg TPS</div>
+                                <div class="stat-value" id="statAvgTps">--</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-label">Avg Tokens/Req</div>
+                                <div class="stat-value" id="statAvgTokens">0</div>
                             </div>
                         </div>
                     </div>
@@ -204,6 +204,7 @@
                                         <th>Total Tokens</th>
                                         <th>Prompt</th>
                                         <th>Completion</th>
+                                        <th>Avg TPS</th>
                                     </tr>
                                 </thead>
                                 <tbody id="tokens-by-model">

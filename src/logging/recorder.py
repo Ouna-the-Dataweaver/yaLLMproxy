@@ -808,6 +808,51 @@ class RequestLogRecorder:
         """Get the app key ID for this request."""
         return self._app_key_id
 
+    def record_first_content_time(self) -> None:
+        """No-op, kept for API compatibility. Throughput is now calculated from duration."""
+        pass
+
+    def record_generation_end_time(self) -> None:
+        """No-op, kept for API compatibility. Throughput is now calculated from duration."""
+        pass
+
+    def _calculate_throughput_metrics(self, duration_ms: Optional[int]) -> Optional[dict[str, Any]]:
+        """Calculate throughput metrics based on total duration.
+
+        Uses a simple formula: (prompt_tokens - cached_tokens + completion_tokens) / duration
+        This gives a reliable "processed tokens per second" metric that works consistently
+        across all providers without depending on unreliable timing instrumentation.
+
+        Returns:
+            Dictionary with tokens_per_second (throughput), or None if cannot be calculated.
+        """
+        if not self._usage_stats or not duration_ms or duration_ms <= 0:
+            return None
+
+        prompt_tokens = self._usage_stats.get("prompt_tokens", 0)
+        completion_tokens = self._usage_stats.get("completion_tokens", 0)
+
+        # Get cached tokens from prompt_tokens_details if available
+        cached_tokens = 0
+        prompt_details = self._usage_stats.get("prompt_tokens_details")
+        if isinstance(prompt_details, dict):
+            cached_tokens = prompt_details.get("cached_tokens", 0)
+
+        # Calculate processed tokens: input (minus cached) + output
+        processed_tokens = (prompt_tokens - cached_tokens) + completion_tokens
+
+        if processed_tokens <= 0:
+            return None
+
+        # Calculate throughput
+        duration_seconds = duration_ms / 1000.0
+        tokens_per_second = processed_tokens / duration_seconds
+
+        return {
+            "tokens_per_second": round(tokens_per_second, 2),
+            "processed_tokens": processed_tokens,
+        }
+
     def _build_full_response(self) -> Optional[str]:
         """Build the complete concatenated response from accumulated parts.
 
@@ -841,6 +886,17 @@ class RequestLogRecorder:
             duration_ms = int((finished_dt - started_dt).total_seconds() * 1000)
         except Exception:
             duration_ms = None
+
+        # Calculate and merge throughput metrics into usage_stats
+        throughput_metrics = self._calculate_throughput_metrics(duration_ms)
+        if throughput_metrics:
+            if self._usage_stats is None:
+                self._usage_stats = {}
+            self._usage_stats.update(throughput_metrics)
+            self._append_text(
+                f"throughput={throughput_metrics['tokens_per_second']} tok/s "
+                f"processed_tokens={throughput_metrics['processed_tokens']}\n"
+            )
 
         # Build the full concatenated response
         full_response = self._build_full_response()
