@@ -1,5 +1,9 @@
 # y(et) a(nother) LLM proxy (yallmp)
 
+<div align="center">
+  <img src="static/logo.png" alt="yaLLMproxy Logo" width="200">
+</div>
+
 Yet Another LLM Proxy - A lightweight, modular LLM proxy with OpenAI-compatible API, fallback routing, and response parsing.
 
 ## Features
@@ -7,7 +11,7 @@ Yet Another LLM Proxy - A lightweight, modular LLM proxy with OpenAI-compatible 
 - **Modular Architecture**: Clean separation of concepts with dedicated modules for routing, logging, API endpoints, and configuration
 - **Backend Failover**: Automatically routes to fallback backends when primary backends fail
 - **Request/Response Logging**: Detailed logs of all requests and responses for debugging
-- **Database Support**: SQLite (default) or PostgreSQL for persistent logging with JSONB columns
+- **Database Support**: SQLite (default) or PostgreSQL(TODO test) for persistent logging with JSONB columns
 - **OpenAI Compatibility**: Works with OpenAI-compatible clients and tools
 - **Chat, Embeddings, Rerank & Messages**: Supports `/v1/chat/completions`, `/v1/embeddings`, `/v1/rerank`, and `/v1/messages` (Anthropic API) endpoints
 - **Anthropic API Translation**: Route Anthropic Messages API requests to OpenAI-compatible backends with automatic format conversion
