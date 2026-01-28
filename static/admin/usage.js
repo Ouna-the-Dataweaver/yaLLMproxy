@@ -406,7 +406,7 @@ const renderTpsStats = (tpsStats) => {
 
     tpsCard.style.display = 'block';
     avgTpsEl.textContent = `${tpsStats.overall_avg_tps} tok/s`;
-    avgTpsEl.title = `Based on ${formatNumber(tpsStats.request_count)} requests`;
+    avgTpsEl.title = `Weighted TPS: (prompt_tokens + completion_tokens × 4) ÷ total_duration\nBased on ${formatNumber(tpsStats.request_count)} requests`;
 };
 
 const renderTokensByModel = (tokensByModel, tpsByModel = []) => {

@@ -320,3 +320,27 @@
 .collapsible-body.expanded {
   display: block;
 }
+
+/* Tooltip icon for metric explanations */
+.tooltip-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--surface-strong);
+  border: 1px solid var(--border);
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: var(--ink-muted);
+  cursor: help;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+.tooltip-icon:hover {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}

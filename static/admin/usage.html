@@ -140,7 +140,10 @@
                                 <div class="stat-value highlight-reasoning" id="statReasoningTokens">0</div>
                             </div>
                             <div class="stat-card" id="tps-card" style="display: none;">
-                                <div class="stat-label">Avg TPS</div>
+                                <div class="stat-label">
+                                    Avg est. TPS
+                                    <span class="tooltip-icon" title="Estimated weighted throughput: ((non-cached_input / 10) + (cached_input / 100) + completion_tokens)÷ total_duration_seconds">?</span>
+                                </div>
                                 <div class="stat-value" id="statAvgTps">--</div>
                             </div>
                             <div class="stat-card">
