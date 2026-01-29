@@ -130,6 +130,13 @@ model_list:
     request_timeout: 540
     api_type: openai
     supports_reasoning: true
+    parameters:
+      temperature:
+        default: 1
+        allow_override: false
+      top_p:
+        default: 0.95
+        allow_override: false
   protected: true
 router_settings:
   num_retries: 1

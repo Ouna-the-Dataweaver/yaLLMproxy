@@ -525,6 +525,12 @@ class ProxyRouter:
                                     )
                                     if isinstance(finish_reason, str) and finish_reason:
                                         request_log.record_stop_reason(finish_reason)
+                                    # Extract message content for full_response accumulation
+                                    message = choice.get("message")
+                                    if isinstance(message, dict):
+                                        content = message.get("content")
+                                        if isinstance(content, str) and content:
+                                            request_log._accumulated_response_parts.append(content)
                 except (json_module.JSONDecodeError, TypeError):
                     pass
             return _build_response_from_httpx(resp, parsed_body)
