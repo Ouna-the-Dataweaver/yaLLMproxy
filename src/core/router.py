@@ -475,64 +475,70 @@ class ProxyRouter:
         parsed_body = pipeline.transform_response_body(
             resp.content, resp.headers.get("content-type"), parser_context
         )
-        if parsed_body is not None:
-            if request_log:
+
+        # Extract logging data from response (works with or without parsed_body)
+        if request_log:
+            # Use parsed_body if available, otherwise fall back to raw content
+            body_to_log = parsed_body if parsed_body is not None else resp.content
+            if parsed_body is not None:
                 request_log.record_parsed_response(
                     resp.status_code, resp.headers, parsed_body
                 )
-                # Extract and record usage stats from the parsed response
-                try:
-                    import json as json_module
-                    payload = json_module.loads(parsed_body)
-                    if isinstance(payload, dict):
-                        if "usage" in payload:
-                            request_log.record_usage_stats(payload["usage"])
+            # Extract usage stats and response content for logging
+            try:
+                import json as json_module
+                payload = json_module.loads(body_to_log)
+                if isinstance(payload, dict):
+                    if "usage" in payload:
+                        request_log.record_usage_stats(payload["usage"])
 
-                        # Detect anthropic format: has "type": "message" or
-                        # has "content" + "stop_reason" at top level without "choices"
-                        is_anthropic = (
-                            payload.get("type") == "message"
-                            or (
-                                "content" in payload
-                                and "stop_reason" in payload
-                                and "choices" not in payload
-                            )
+                    # Detect anthropic format: has "type": "message" or
+                    # has "content" + "stop_reason" at top level without "choices"
+                    is_anthropic = (
+                        payload.get("type") == "message"
+                        or (
+                            "content" in payload
+                            and "stop_reason" in payload
+                            and "choices" not in payload
                         )
+                    )
 
-                        if is_anthropic:
-                            # Anthropic format: extract stop_reason directly
-                            stop_reason = payload.get("stop_reason")
-                            if isinstance(stop_reason, str) and stop_reason:
-                                request_log.record_stop_reason(stop_reason)
-                            # Extract content for full_response accumulation
-                            content = payload.get("content", [])
-                            if isinstance(content, list):
-                                for block in content:
-                                    if isinstance(block, dict) and block.get("type") == "text":
-                                        text = block.get("text", "")
-                                        if text:
-                                            request_log._accumulated_response_parts.append(text)
-                        else:
-                            # OpenAI format: extract from choices[0]
-                            choices = payload.get("choices")
-                            if isinstance(choices, list) and choices:
-                                choice = choices[0]
-                                if isinstance(choice, dict):
-                                    finish_reason = (
-                                        choice.get("finish_reason")
-                                        or choice.get("stop_reason")
-                                        or choice.get("reason")
-                                    )
-                                    if isinstance(finish_reason, str) and finish_reason:
-                                        request_log.record_stop_reason(finish_reason)
-                                    # Extract message content for full_response accumulation
-                                    message = choice.get("message")
-                                    if isinstance(message, dict):
-                                        content = message.get("content")
-                                        if isinstance(content, str) and content:
-                                            request_log._accumulated_response_parts.append(content)
-                except (json_module.JSONDecodeError, TypeError):
-                    pass
+                    if is_anthropic:
+                        # Anthropic format: extract stop_reason directly
+                        stop_reason = payload.get("stop_reason")
+                        if isinstance(stop_reason, str) and stop_reason:
+                            request_log.record_stop_reason(stop_reason)
+                        # Extract content for full_response accumulation
+                        content = payload.get("content", [])
+                        if isinstance(content, list):
+                            for block in content:
+                                if isinstance(block, dict) and block.get("type") == "text":
+                                    text = block.get("text", "")
+                                    if text:
+                                        request_log._accumulated_response_parts.append(text)
+                    else:
+                        # OpenAI format: extract from choices[0]
+                        choices = payload.get("choices")
+                        if isinstance(choices, list) and choices:
+                            choice = choices[0]
+                            if isinstance(choice, dict):
+                                finish_reason = (
+                                    choice.get("finish_reason")
+                                    or choice.get("stop_reason")
+                                    or choice.get("reason")
+                                )
+                                if isinstance(finish_reason, str) and finish_reason:
+                                    request_log.record_stop_reason(finish_reason)
+                                # Extract message content for full_response accumulation
+                                message = choice.get("message")
+                                if isinstance(message, dict):
+                                    content = message.get("content")
+                                    if isinstance(content, str) and content:
+                                        request_log._accumulated_response_parts.append(content)
+            except (json_module.JSONDecodeError, TypeError):
+                pass
+
+        if parsed_body is not None:
             return _build_response_from_httpx(resp, parsed_body)
         return _build_response_from_httpx(resp)
 
