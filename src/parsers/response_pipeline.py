@@ -163,12 +163,59 @@ ARG_PAIR_RE = re.compile(
     r"<arg_key>(?P<key>.*?)</arg_key>\s*<arg_value>(?P<value>.*?)</arg_value>",
     re.DOTALL,
 )
+LEGACY_FUNCTION_EQUALS_RE = re.compile(
+    r"^<function\s*=\s*(?P<name>[A-Za-z_][\w.-]*)\s*>(?P<body>.*?)</function>$",
+    re.DOTALL,
+)
+LEGACY_FUNCTION_TAG_RE = re.compile(
+    r"^<function>(?P<name>.*?)</function>(?P<body>.*)$",
+    re.DOTALL,
+)
+
+
+def _parse_xml_arg_pairs(args_text: str) -> Optional[dict[str, Any]]:
+    args: dict[str, Any] = {}
+    last_end = 0
+    for match in ARG_PAIR_RE.finditer(args_text):
+        gap = args_text[last_end:match.start()]
+        if gap.strip():
+            return None
+        key = match.group("key").strip()
+        value_text = match.group("value").strip()
+        if not key:
+            continue
+        args[key] = _maybe_json(value_text)
+        last_end = match.end()
+    if args_text[last_end:].strip():
+        return None
+    return args
+
+
+def _parse_legacy_function_tool_call(stripped: str) -> Optional[dict[str, Any]]:
+    for pattern in (LEGACY_FUNCTION_EQUALS_RE, LEGACY_FUNCTION_TAG_RE):
+        match = pattern.match(stripped)
+        if match is None:
+            continue
+        name = match.group("name").strip()
+        if not name or any(ch.isspace() for ch in name):
+            return None
+        body = match.group("body").strip()
+        if not body:
+            return {"name": name, "arguments": {}}
+        args = _parse_xml_arg_pairs(body)
+        if args is None:
+            return None
+        return {"name": name, "arguments": args}
+    return None
 
 
 def _parse_tool_call_block(text: str) -> Optional[dict[str, Any]]:
     stripped = text.strip()
     if not stripped:
         return None
+    legacy_function_call = _parse_legacy_function_tool_call(stripped)
+    if legacy_function_call is not None:
+        return legacy_function_call
     arg_start = stripped.find("<arg_key>")
     if arg_start == -1:
         name = stripped
@@ -180,20 +227,10 @@ def _parse_tool_call_block(text: str) -> Optional[dict[str, Any]]:
         if not name or any(ch.isspace() for ch in name):
             return None
         args_text = stripped[arg_start:]
-        args = {}
-        last_end = 0
-        for match in ARG_PAIR_RE.finditer(args_text):
-            gap = args_text[last_end:match.start()]
-            if gap.strip():
-                return None
-            key = match.group("key").strip()
-            value_text = match.group("value").strip()
-            if not key:
-                continue
-            args[key] = _maybe_json(value_text)
-            last_end = match.end()
-        if args_text[last_end:].strip():
+        parsed_args = _parse_xml_arg_pairs(args_text)
+        if parsed_args is None:
             return None
+        args = parsed_args
     if not name:
         return None
     return {"name": name, "arguments": args}
@@ -314,6 +351,7 @@ class TagScanner:
         drop_tags: Optional[Iterable[str]] = None,
         tool_buffer_limit: Optional[int] = None,
         drop_after_tool_call: bool = False,
+        start_mode: str = "text",
     ) -> None:
         self.parse_thinking = parse_thinking
         self.parse_tool_calls = parse_tool_calls
@@ -333,7 +371,7 @@ class TagScanner:
         ]
         if self.drop_tags:
             self._open_tags.extend(self.drop_tags)
-        self.mode = "text"
+        self.mode = start_mode if start_mode in {"text", "think"} else "text"
         self.buffer = ""
         self.tool_buffer = ""
         self.tool_parent_mode = "text"
@@ -402,6 +440,9 @@ class TagScanner:
                 continue
 
             if self.mode == "think":
+                if self.parse_thinking and self.buffer.startswith(self.think_open):
+                    self.buffer = self.buffer[len(self.think_open):]
+                    continue
                 if self.parse_tool_calls and self.buffer.startswith(self.tool_open):
                     _enter_tool("think")
                     continue
@@ -680,6 +721,7 @@ class ParseTagsParser(ResponseParser):
 
         self.parse_thinking = _parse_bool(config.get("parse_thinking", True))
         self.parse_tool_calls = _parse_bool(config.get("parse_tool_calls", True))
+        self.start_in_think = _parse_bool(config.get("start_in_think", False))
         self.think_tag = str(_get("think_tag", "think"))
         self.tool_tag = str(_get("tool_tag", "tool_call"))
         self.tool_buffer_limit = _parse_int(config.get("tool_buffer_limit"))
@@ -770,6 +812,7 @@ class ParseTagsParser(ResponseParser):
                 "think_tag": self.think_tag,
                 "tool_tag": self.tool_tag,
                 "tool_arg_format": self.tool_arg_format,
+                "start_in_think": self.start_in_think,
                 "tool_open": self.tool_open,
                 "tool_close": self.tool_close,
                 "tool_arg_separator": self.tool_arg_separator,
@@ -791,6 +834,7 @@ class ParseTagsParser(ResponseParser):
         effective_parse_tool_calls = (
             parse_tool_calls if parse_tool_calls is not None else self.parse_tool_calls
         )
+        start_mode = "think" if self.start_in_think and effective_parse_thinking else "text"
 
         tool_parser: Optional[Callable[[str], Optional[dict[str, Any]]]] = None
         tool_open: Optional[str] = None
@@ -812,6 +856,7 @@ class ParseTagsParser(ResponseParser):
             drop_tags=self.drop_tags if self.drop_tags else None,
             tool_buffer_limit=self.tool_buffer_limit,
             drop_after_tool_call=effective_parse_tool_calls,
+            start_mode=start_mode,
         )
 
     def apply_response(self, payload: dict[str, Any], ctx: ParserContext) -> dict[str, Any]:
