@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+jinja2 = pytest.importorskip("jinja2")
+
 # Add src directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
@@ -15,6 +17,7 @@ from src.modules.response_pipeline import ModuleContext, TemplateParseParser
 PROJECT_ROOT = Path(__file__).parent.parent
 K2_TEMPLATE = PROJECT_ROOT / "configs" / "jinja_templates" / "k2thinking.jinja"
 XML_TEMPLATE = PROJECT_ROOT / "configs" / "jinja_templates" / "template_example.jinja"
+QWEN_TEMPLATE = PROJECT_ROOT / "configs" / "jinja_templates" / "qwen.jinja"
 
 
 def _build_payload(content: str) -> dict:
@@ -23,6 +26,24 @@ def _build_payload(content: str) -> dict:
             {"index": 0, "message": {"role": "assistant", "content": content}}
         ]
     }
+
+
+def _tojson_filter(value: object, *, ensure_ascii: bool = True, **_kwargs: object) -> str:
+    import json
+
+    return json.dumps(value, ensure_ascii=ensure_ascii)
+
+
+def _render_chat_template(template_path: Path, messages: list[dict]) -> str:
+    env = jinja2.Environment(autoescape=False, trim_blocks=False, lstrip_blocks=False)
+    env.filters["tojson"] = _tojson_filter
+    template = env.from_string(template_path.read_text(encoding="utf-8"))
+    return template.render(
+        messages=messages,
+        tools=[],
+        add_generation_prompt=False,
+        add_vision_id=False,
+    )
 
 
 def test_parse_template_k2_non_stream() -> None:
@@ -213,3 +234,186 @@ def test_parse_template_autodetect_think_tag(tmp_path: Path) -> None:
 
     assert message["reasoning_content"] == "Reason"
     assert message["content"] == "Answer"
+
+
+def test_parse_template_qwen_start_in_think_stream() -> None:
+    parser = TemplateParseParser(
+        {
+            "template_path": str(QWEN_TEMPLATE),
+            "parse_thinking": True,
+            "parse_tool_calls": True,
+            "start_in_think": True,
+        }
+    )
+    state = parser.create_stream_state()
+    ctx = ModuleContext(
+        path="/chat/completions",
+        model="test-model",
+        backend="test-backend",
+        is_stream=True,
+    )
+
+    events = [
+        {"choices": [{"index": 0, "delta": {"content": "Need to inspect files"}}]},
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "content": (
+                            "</think>\n\n<tool_call>\nshow_files"
+                            "\n<arg_key>path</arg_key>\n<arg_value>/tmp</arg_value>"
+                        )
+                    },
+                }
+            ]
+        },
+        {"choices": [{"index": 0, "delta": {"content": "\n</tool_call>"}}]},
+    ]
+
+    parsed_events: list[dict] = []
+    for event in events:
+        updated = parser.apply_stream_event(event, state, ctx)
+        parsed_events.extend(updated if isinstance(updated, list) else [updated])
+    parsed_events.extend(parser.finalize_stream(state, ctx))
+
+    reasoning_parts: list[str] = []
+    content_parts: list[str] = []
+    tool_calls: list[dict] = []
+    finish_reasons: list[str | None] = []
+    for event in parsed_events:
+        choice = event["choices"][0]
+        finish_reasons.append(choice.get("finish_reason"))
+        delta = choice.get("delta", {})
+        reasoning = delta.get("reasoning_content")
+        if isinstance(reasoning, str):
+            reasoning_parts.append(reasoning)
+        content = delta.get("content")
+        if isinstance(content, str):
+            content_parts.append(content)
+        delta_tool_calls = delta.get("tool_calls")
+        if isinstance(delta_tool_calls, list):
+            tool_calls.extend(delta_tool_calls)
+
+    assert "".join(reasoning_parts) == "Need to inspect files"
+    assert "".join(content_parts).strip() == ""
+    assert tool_calls[0]["function"]["name"] == "show_files"
+    assert tool_calls[0]["function"]["arguments"] == "{\"path\": \"/tmp\"}"
+    assert "tool_calls" in finish_reasons
+
+
+def test_parse_template_qwen_legacy_function_equals_non_stream() -> None:
+    parser = TemplateParseParser(
+        {
+            "template_path": str(QWEN_TEMPLATE),
+            "parse_thinking": True,
+            "parse_tool_calls": True,
+        }
+    )
+    payload = _build_payload(
+        "<think>Need a simple tool.</think>\n\n<tool_call>\n<function=show_files>\n</function>\n</tool_call>"
+    )
+    updated = parser.apply_response(
+        payload,
+        ModuleContext(
+            path="/chat/completions",
+            model="test-model",
+            backend="test-backend",
+            is_stream=False,
+        ),
+    )
+
+    message = updated["choices"][0]["message"]
+    assert message["reasoning_content"] == "Need a simple tool."
+    assert message["content"] is None
+    assert message["tool_calls"][0]["function"]["name"] == "show_files"
+    assert message["tool_calls"][0]["function"]["arguments"] == "{}"
+    assert updated["choices"][0]["finish_reason"] == "tool_calls"
+
+
+def test_parse_template_qwen_legacy_function_equals_stream() -> None:
+    parser = TemplateParseParser(
+        {
+            "template_path": str(QWEN_TEMPLATE),
+            "parse_thinking": True,
+            "parse_tool_calls": True,
+            "start_in_think": True,
+        }
+    )
+    state = parser.create_stream_state()
+    ctx = ModuleContext(
+        path="/chat/completions",
+        model="test-model",
+        backend="test-backend",
+        is_stream=True,
+    )
+
+    events = [
+        {"choices": [{"index": 0, "delta": {"content": "Need a simple tool."}}]},
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"content": "</think>\n\n<tool_call>\n<function=show_files>\n"},
+                }
+            ]
+        },
+        {"choices": [{"index": 0, "delta": {"content": "</function>\n</tool_call>"}}]},
+    ]
+
+    parsed_events: list[dict] = []
+    for event in events:
+        updated = parser.apply_stream_event(event, state, ctx)
+        parsed_events.extend(updated if isinstance(updated, list) else [updated])
+    parsed_events.extend(parser.finalize_stream(state, ctx))
+
+    reasoning_parts: list[str] = []
+    content_parts: list[str] = []
+    tool_calls: list[dict] = []
+    finish_reasons: list[str | None] = []
+    for event in parsed_events:
+        choice = event["choices"][0]
+        finish_reasons.append(choice.get("finish_reason"))
+        delta = choice.get("delta", {})
+        reasoning = delta.get("reasoning_content")
+        if isinstance(reasoning, str):
+            reasoning_parts.append(reasoning)
+        content = delta.get("content")
+        if isinstance(content, str):
+            content_parts.append(content)
+        delta_tool_calls = delta.get("tool_calls")
+        if isinstance(delta_tool_calls, list):
+            tool_calls.extend(delta_tool_calls)
+
+    assert "".join(reasoning_parts) == "Need a simple tool."
+    assert "".join(content_parts).strip() == ""
+    assert tool_calls[0]["function"]["name"] == "show_files"
+    assert tool_calls[0]["function"]["arguments"] == "{}"
+    assert "tool_calls" in finish_reasons
+
+
+def test_qwen_template_renders_repo_xml_tool_calls() -> None:
+    rendered = _render_chat_template(
+        QWEN_TEMPLATE,
+        [
+            {"role": "user", "content": "List files."},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "function": {
+                            "name": "show_files",
+                            "arguments": {"path": "/tmp"},
+                        }
+                    }
+                ],
+            },
+        ],
+    )
+
+    assert "<function=" not in rendered
+    assert "<parameter=" not in rendered
+    assert "<tool_call>\nshow_files" in rendered
+    assert "<arg_key>path</arg_key>" in rendered
+    assert "<arg_value>/tmp</arg_value>" in rendered
