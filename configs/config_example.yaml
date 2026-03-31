@@ -1,17 +1,17 @@
 model_list:
-- model_name: GLM-4.7
+- model_name: GLM-5.1-cursor
   protected: true
   model_params:
     api_type: openai
-    model: GLM-4.7
+    model: glm-5.1
     api_base: https://api.z.ai/api/coding/paas/v4
-    api_key: ${GLM_API_KEY}
+    api_key: ${Z_AI_API_KEY}
     thinking:
       type: enabled
     request_timeout: 540
     parameters:
       temperature:
-        default: 0.9
+        default: 1.0
         allow_override: false
       top_p:
         default: 0.95
@@ -31,11 +31,47 @@ model_list:
           prefix: ''
           suffix: ''
         include_newline: false
-- model_name: MiniMax-M2.1
+- model_name: GLM-5.1
   protected: true
   model_params:
     api_type: openai
-    model: MiniMax-M2.1
+    model: glm-5.1
+    api_base: https://api.z.ai/api/coding/paas/v4
+    api_key: ${Z_AI_API_KEY}
+    thinking:
+      type: enabled
+    request_timeout: 540
+    parameters:
+      temperature:
+        default: 1.0
+        allow_override: false
+      top_p:
+        default: 0.95
+        allow_override: false
+      thinking.clear_thinking: false
+- model_name: GLM-5-turbo
+  protected: true
+  model_params:
+    api_type: openai
+    model: glm-5-turbo
+    api_base: https://api.z.ai/api/coding/paas/v4
+    api_key: ${Z_AI_API_KEY}
+    thinking:
+      type: enabled
+    request_timeout: 540
+    parameters:
+      temperature:
+        default: 1.0
+        allow_override: false
+      top_p:
+        default: 0.95
+        allow_override: false
+      thinking.clear_thinking: false
+- model_name: MiniMax-M2.7-cursor
+  protected: true
+  model_params:
+    api_type: openai
+    model: MiniMax-M2.7
     api_base: https://api.minimax.io/v1
     api_key: ${MINIMAX_API_KEY}
     request_timeout: 540
@@ -46,17 +82,13 @@ model_list:
       top_p:
         default: 0.95
         allow_override: false
-      top_k:
-        default: 40
-        allow_override: false
-- model_name: MiniMax-M2.1:oc
+- model_name: MiniMax-M2.7
   protected: true
   model_params:
-    api_type: anthropic
-    model: MiniMax-M2.1
-    api_base: https://api.minimax.io/anthropic/v1
+    api_type: openai
+    model: MiniMax-M2.7
+    api_base: https://api.minimax.io/v1
     api_key: ${MINIMAX_API_KEY}
-    anthropic_version: '2023-06-01'
     request_timeout: 540
     parameters:
       temperature:
@@ -65,38 +97,20 @@ model_list:
       top_p:
         default: 0.95
         allow_override: false
-      top_k:
-        default: 40
+      reasoning_split:
+        default: true
         allow_override: false
-- model_name: GLM-4.7:oc
-  model_params:
-    api_base: https://api.z.ai/api/anthropic/v1
-    model: GLM-4.7
-    request_timeout: 540
-    api_type: anthropic
-    supports_reasoning: true
-    parameters:
-      temperature:
-        default: 1
-        allow_override: false
-      top_p:
-        default: 0.95
-        allow_override: false
-      top_k:
-        default: 40
-        allow_override: false
-      effort:
-        default: high
-        allow_override: false
-    api_key: ${GLM_API_KEY}
-  protected: true
 - model_name: glm_local
   model_params:
-    api_base: http://nid-sc-28:16667/v1
+    api_base: http://nid-sc-27:16667/v1
     model: GLM_air_fp8
-    request_timeout: 180
+    request_timeout: 540
     api_type: openai
     supports_reasoning: true
+    parameters:
+      stream_options.include_usage:
+        default: true
+        allow_override: false
   protected: false
 - model_name: glm_local_AWQ
   model_params:
@@ -122,22 +136,49 @@ model_list:
         parse_thinking: true
         parse_tool_calls: true
   protected: false
-- model_name: Kimi-k2.5
+- model_name: glm_flash
   model_params:
-    api_base: https://nano-gpt.com/api/v1thinking
-    api_key: ${NANOGPT_API_KEY}
-    model: moonshotai/kimi-k2.5:thinking
-    request_timeout: 540
+    api_base: http://nid-sc-01:9999/v1
+    model: GLM_4.7f
+    request_timeout: 180
     api_type: openai
     supports_reasoning: true
     parameters:
+      tool_choice:
+        default: none
+        allow_override: false
+  modules:
+    upstream:
+      enabled: false
+  protected: false
+- model_name: Qwen3.5
+  model_params:
+    api_base: http://nid-sc-27:8128/v1
+    model: Qwen3.5-122B-A10B-AWQ-4bit
+    request_timeout: 180
+    api_type: openai
+    supports_reasoning: false
+    parameters:
       temperature:
-        default: 1
+        default: 0.7
+        allow_override: true
+      tool_choice:
+        default: none
         allow_override: false
-      top_p:
-        default: 0.95
-        allow_override: false
-  protected: true
+  modules:
+    upstream:
+      enabled: true
+      response:
+      - parse_tags
+      parse_tags:
+        think_tag: think
+        tool_arg_format: xml
+        tool_tag: tool_call
+        parse_thinking: true
+        parse_tool_calls: true
+        start_in_think: true
+        template_path: configs/jinja_templates/qwen.jinja
+  protected: false
 router_settings:
   num_retries: 1
 proxy_settings:
@@ -148,9 +189,15 @@ proxy_settings:
   enable_responses_endpoint: false
   enable_messages_endpoint: true
   logging:
-    log_parsed_response: false
-    log_parsed_stream: false
-    log_to_disk: false
+    log_parsed_response: true
+    log_parsed_stream: true
+    log_to_disk: true
+    full_request_storage:
+      enabled: true
+      path: logs/requests
+      retention_hours: 48
+      cleanup_on_startup: true
+      cleanup_interval_hours: 24
   modules:
     upstream:
       enabled: false
@@ -194,7 +241,7 @@ http_forwarder_settings:
     port: 6969
   target:
     scheme: http
-    host: 127.0.0.1
+    host: 0.0.0.0
     port: 7979
   ssl:
     enabled: false

@@ -210,7 +210,7 @@ class TestUsageRepositoryTps:
         db.initialize()
 
         # Insert test data directly
-        from src.database.models import RequestLog
+        from src.database.models import RequestMetadata
         from datetime import datetime, timezone
         import uuid
 
@@ -220,29 +220,25 @@ class TestUsageRepositoryTps:
             # Request 2: TPS=100, completion=200 -> weighted = 20000
             # Total completion = 300, weighted sum = 25000
             # Weighted avg = 25000 / 300 = 83.33
-            session.add(RequestLog(
+            session.add(RequestMetadata(
                 id=uuid.uuid4(),
                 model_name="model-a",
                 is_stream=True,
                 path="/v1/chat/completions",
                 outcome="success",
                 request_time=datetime.now(timezone.utc),
-                usage_stats={
-                    "completion_tokens": 100,
-                    "tokens_per_second": 50,
-                },
+                completion_tokens=100,
+                tokens_per_second=50,
             ))
-            session.add(RequestLog(
+            session.add(RequestMetadata(
                 id=uuid.uuid4(),
                 model_name="model-a",
                 is_stream=True,
                 path="/v1/chat/completions",
                 outcome="success",
                 request_time=datetime.now(timezone.utc),
-                usage_stats={
-                    "completion_tokens": 200,
-                    "tokens_per_second": 100,
-                },
+                completion_tokens=200,
+                tokens_per_second=100,
             ))
             session.commit()
 
@@ -265,24 +261,22 @@ class TestUsageRepositoryTps:
         db = get_database(sqlite_config)
         db.initialize()
 
-        from src.database.models import RequestLog
+        from src.database.models import RequestMetadata
         from datetime import datetime, timezone
         import uuid
 
         with db.session() as session:
             # Add requests with various TPS values
             for tps, completion in [(50, 100), (100, 200), (150, 100)]:
-                session.add(RequestLog(
+                session.add(RequestMetadata(
                     id=uuid.uuid4(),
                     model_name="test-model",
                     is_stream=True,
                     path="/v1/chat/completions",
                     outcome="success",
                     request_time=datetime.now(timezone.utc),
-                    usage_stats={
-                        "completion_tokens": completion,
-                        "tokens_per_second": tps,
-                    },
+                    completion_tokens=completion,
+                    tokens_per_second=tps,
                 ))
             session.commit()
 
@@ -319,35 +313,31 @@ class TestUsageRepositoryTps:
         db = get_database(sqlite_config)
         db.initialize()
 
-        from src.database.models import RequestLog
+        from src.database.models import RequestMetadata
         from datetime import datetime, timezone
         import uuid
 
         with db.session() as session:
             # Request with TPS
-            session.add(RequestLog(
+            session.add(RequestMetadata(
                 id=uuid.uuid4(),
                 model_name="model-with-tps",
                 is_stream=True,
                 path="/v1/chat/completions",
                 outcome="success",
                 request_time=datetime.now(timezone.utc),
-                usage_stats={
-                    "completion_tokens": 100,
-                    "tokens_per_second": 50,
-                },
+                completion_tokens=100,
+                tokens_per_second=50,
             ))
             # Request without TPS
-            session.add(RequestLog(
+            session.add(RequestMetadata(
                 id=uuid.uuid4(),
                 model_name="model-without-tps",
                 is_stream=False,
                 path="/v1/chat/completions",
                 outcome="success",
                 request_time=datetime.now(timezone.utc),
-                usage_stats={
-                    "completion_tokens": 100,
-                },
+                completion_tokens=100,
             ))
             session.commit()
 

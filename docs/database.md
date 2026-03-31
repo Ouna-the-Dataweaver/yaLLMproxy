@@ -1,12 +1,12 @@
 # Database Support
 
-yaLLMproxy supports SQLite (default) and PostgreSQL databases for persistent logging and usage tracking.
-Database request logging is enabled by default when the database module is configured and reachable.
+yaLLMproxy supports SQLite (default) and PostgreSQL databases for persistent request metadata and usage tracking.
+Full request payloads are stored separately on disk for short-term debugging retention.
 
 ## Overview
 
 The database module provides:
-- **Request Logging**: Store all request/response data with JSON columns
+- **Request Metadata**: Store narrow per-request analytics and listing fields in SQL
 - **Response State Storage**: Persist responses for the Responses API with conversation chaining
 - **Error Tracking**: Log errors with optional references to request logs
 - **Usage Statistics**: Query historical usage data by model, time period, etc.
@@ -56,9 +56,9 @@ DB_PASSWORD=your_postgres_password
 
 ## Database Schema
 
-### request_logs Table
+### request_metadata Table
 
-Stores all chat completion requests and responses.
+Stores long-term request metadata for analytics and log listing.
 
 | Column | Type | Description |
 |--------|------|-------------|
@@ -69,22 +69,30 @@ Stores all chat completion requests and responses.
 | `path` | String | Request path (e.g., /v1/chat/completions) |
 | `method` | String | HTTP method (e.g., POST) |
 | `query` | String | Query string if present |
-| `headers` | JSON | Request headers (sanitized) |
-| `body` | JSON | Request body as JSON |
-| `route` | JSON | Routing information (list of backends tried) |
-| `backend_attempts` | JSON | Backend attempts with responses |
-| `stream_chunks` | JSON | Stream chunks data (if logged) |
-| `errors` | JSON | Error information if any errors occurred |
-| `usage_stats` | JSON | Usage statistics from the response |
+| `backend_name` | String | Last backend name used |
+| `backend_status` | Integer | Last backend HTTP status |
 | `outcome` | String | Request outcome: success, error, cancelled (indexed) |
 | `duration_ms` | Integer | Request duration in milliseconds |
 | `request_path` | String | Full request path including query |
 | `stop_reason` | String | Finish reason from the response: stop, tool_calls, length, content_filter, etc. (indexed) |
-| `full_response` | Text | Concatenated complete response text (especially for streaming) |
 | `is_tool_call` | Boolean | Whether this request resulted in tool/function calls |
 | `conversation_turn` | Integer | Turn number in agentic conversation sequence |
-| `modules_log` | JSON | Debug logs from response modules (reasoning detection, tool calls, swaps, etc.) |
+| `prompt_tokens` | Integer | Input token count |
+| `completion_tokens` | Integer | Output token count |
+| `total_tokens` | Integer | Total token count |
+| `cached_tokens` | Integer | Cached prompt tokens |
+| `reasoning_tokens` | Integer | Reasoning token count |
+| `tokens_per_second` | Float | Weighted throughput metric |
+| `weighted_tokens` | Float | Weighted token count used for TPS |
+| `full_request_path` | String | Canonical JSON payload file path |
+| `full_request_expires_at` | DateTime | Expiration time for the file payload |
 | `created_at` | DateTime | Record creation time (indexed) |
+
+### Full Request Payload Files
+
+Canonical request payloads are stored on disk under `logs/requests/YYYY/MM/DD/{request_id}.json`.
+These files contain sanitized request data, response/debug payloads, and `expires_at`.
+They are cleaned up independently from SQL metadata according to `proxy_settings.logging.full_request_storage`.
 
 ### error_logs Table
 

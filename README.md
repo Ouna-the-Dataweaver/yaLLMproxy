@@ -330,8 +330,8 @@ Useful for applying config changes without interrupting active requests. Note: C
 
 ## Database Configuration
 
-yaLLMproxy supports SQLite (default) and PostgreSQL databases for persistent logging.
-Database request logging is enabled by default when the database module is configured and reachable.
+yaLLMproxy supports SQLite (default) and PostgreSQL databases for persistent metadata storage.
+Request analytics and log listing use the configured database. Full request payloads are stored on disk under `proxy_settings.logging.full_request_storage`.
 
 ### SQLite (Default)
 
@@ -345,6 +345,20 @@ database:
       path: logs/yaLLM.db
   pool_size: 5                  # Connection pool size (PostgreSQL; ignored for file-based SQLite)
   max_overflow: 10              # Extra overflow connections above pool_size (PostgreSQL)
+```
+
+```yaml
+proxy_settings:
+  logging:
+    log_parsed_response: false
+    log_parsed_stream: false
+    log_to_disk: false
+    full_request_storage:
+      enabled: true
+      path: logs/requests
+      retention_hours: 48
+      cleanup_on_startup: true
+      cleanup_interval_hours: 24
 ```
 
 ### PostgreSQL

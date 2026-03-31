@@ -1,9 +1,11 @@
 """SQLite database implementation."""
 
 import logging
+import sqlite3
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy import event
 from sqlalchemy.pool import NullPool, StaticPool
 
 from .base import DatabaseBase
@@ -77,3 +79,16 @@ class SQLiteDatabase(DatabaseBase):
 
         super().initialize()
         logger.info(f"SQLite database initialized at: {self.config.get('connection', {}).get('sqlite', {}).get('path', 'logs/yaLLM.db')}")
+
+    def configure_engine(self, engine) -> None:
+        sqlite_config = self.config.get("connection", {}).get("sqlite", {})
+        busy_timeout_ms = int(sqlite_config.get("busy_timeout_ms", 5000))
+
+        @event.listens_for(engine, "connect")
+        def _set_sqlite_pragmas(dbapi_connection, _connection_record) -> None:
+            if not isinstance(dbapi_connection, sqlite3.Connection):
+                return
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute(f"PRAGMA busy_timeout={busy_timeout_ms}")
+            cursor.close()

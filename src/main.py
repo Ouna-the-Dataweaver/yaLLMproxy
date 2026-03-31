@@ -12,6 +12,10 @@ from fastapi.responses import Response
 # Import logging setup FIRST before anything that might log
 from .logging import setup_logging
 from .logging.setup import reconfigure_logging, CONSOLE_LOG_PATH
+from .logging.full_request_store import (
+    get_full_request_storage_settings,
+    get_full_request_store,
+)
 
 # Initialize logging BEFORE importing config_store (initially INFO level)
 logger = setup_logging()
@@ -117,6 +121,9 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="yaLLMp Proxy", lifespan=lifespan)
 logger.info("FastAPI application created")
 
+_FULL_REQUEST_CLEANUP_TASK: asyncio.Task | None = None
+_FULL_REQUEST_CLEANUP_STOP: asyncio.Event | None = None
+
 # Mount static files for admin UI
 static_dir = Path(__file__).parent.parent / "static"
 if static_dir.exists():
@@ -181,12 +188,24 @@ async def startup_event():
     else:
         logger.debug("Database module not available")
 
+    await _start_full_request_cleanup_loop()
+
     logger.info("yaLLMp Proxy server ready to handle requests")
 
 
 async def shutdown_event():
     """Handle application shutdown."""
     from .logging.recorder import _PENDING_LOG_TASKS
+
+    global _FULL_REQUEST_CLEANUP_TASK
+    global _FULL_REQUEST_CLEANUP_STOP
+
+    if _FULL_REQUEST_CLEANUP_STOP is not None:
+        _FULL_REQUEST_CLEANUP_STOP.set()
+    if _FULL_REQUEST_CLEANUP_TASK is not None:
+        await asyncio.gather(_FULL_REQUEST_CLEANUP_TASK, return_exceptions=True)
+        _FULL_REQUEST_CLEANUP_TASK = None
+        _FULL_REQUEST_CLEANUP_STOP = None
 
     # Wait for pending log tasks first
     if _PENDING_LOG_TASKS:
@@ -203,6 +222,44 @@ async def shutdown_event():
             logger.info("Database connections closed")
         except Exception as e:
             logger.warning(f"Error closing database connections: {e}")
+
+
+async def _start_full_request_cleanup_loop() -> None:
+    global _FULL_REQUEST_CLEANUP_TASK
+    global _FULL_REQUEST_CLEANUP_STOP
+
+    settings = get_full_request_storage_settings()
+    if not settings.enabled:
+        return
+
+    if settings.cleanup_on_startup:
+        deleted = await asyncio.to_thread(get_full_request_store().cleanup_expired)
+        if deleted:
+            logger.info("Deleted %d expired full request payloads on startup", deleted)
+
+    if _FULL_REQUEST_CLEANUP_TASK is not None:
+        return
+
+    stop_event = asyncio.Event()
+    _FULL_REQUEST_CLEANUP_STOP = stop_event
+
+    async def _cleanup_loop() -> None:
+        while not stop_event.is_set():
+            interval_seconds = get_full_request_storage_settings().cleanup_interval_hours * 3600
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=interval_seconds)
+                break
+            except asyncio.TimeoutError:
+                pass
+
+            current_settings = get_full_request_storage_settings()
+            if not current_settings.enabled:
+                continue
+            deleted = await asyncio.to_thread(get_full_request_store().cleanup_expired)
+            if deleted:
+                logger.info("Deleted %d expired full request payloads", deleted)
+
+    _FULL_REQUEST_CLEANUP_TASK = asyncio.create_task(_cleanup_loop())
 
 
 # Register routes

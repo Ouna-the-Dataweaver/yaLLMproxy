@@ -14,6 +14,62 @@ from typing import Any, Callable, Iterable, Mapping, Optional
 logger = logging.getLogger("yallmp-proxy")
 
 
+def _extract_reasoning_text(value: Any) -> str:
+    """Extract text fragments from provider-specific reasoning payloads."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return "".join(_extract_reasoning_text(item) for item in value)
+    if not isinstance(value, dict):
+        return ""
+
+    text = value.get("text")
+    if isinstance(text, str):
+        return text
+
+    # Be permissive with nested payloads because providers vary here.
+    for key in ("content", "reasoning", "reasoning_text"):
+        nested = value.get(key)
+        extracted = _extract_reasoning_text(nested)
+        if extracted:
+            return extracted
+    return ""
+
+
+def _normalize_reasoning_details_in_message(message: dict[str, Any]) -> bool:
+    """Map MiniMax/OpenAI-compatible reasoning_details to reasoning_content."""
+    reasoning = message.get("reasoning_content")
+    if isinstance(reasoning, str) and reasoning:
+        return False
+
+    reasoning_details = message.get("reasoning_details")
+    extracted = _extract_reasoning_text(reasoning_details)
+    if not extracted or not extracted.strip():
+        return False
+
+    message["reasoning_content"] = extracted
+    return True
+
+
+def normalize_reasoning_details_payload(payload: dict[str, Any]) -> bool:
+    """Normalize provider-specific reasoning fields across chat responses."""
+    changed = False
+    choices = payload.get("choices")
+    if not isinstance(choices, list):
+        return False
+
+    for choice in choices:
+        if not isinstance(choice, dict):
+            continue
+        delta = choice.get("delta")
+        if isinstance(delta, dict):
+            changed = _normalize_reasoning_details_in_message(delta) or changed
+        message = choice.get("message")
+        if isinstance(message, dict):
+            changed = _normalize_reasoning_details_in_message(message) or changed
+    return changed
+
+
 @dataclass(frozen=True)
 class ParserContext:
     path: str
@@ -1726,6 +1782,7 @@ class ResponseStreamParser:
         if not isinstance(payload, dict):
             return [event.encode()]
 
+        normalize_reasoning_details_payload(payload)
         updated_events = self._apply_event(payload)
         if not updated_events:
             return [event.encode()]
@@ -1764,8 +1821,6 @@ class ResponseParserPipeline:
     def transform_response_body(
         self, body: bytes, content_type: Optional[str], ctx: ParserContext
     ) -> Optional[bytes]:
-        if not self.applies(ctx):
-            return None
         if not content_type or "application/json" not in content_type.lower():
             return None
         try:
@@ -1774,12 +1829,15 @@ class ResponseParserPipeline:
             return None
         if not isinstance(payload, dict):
             return None
+        changed = normalize_reasoning_details_payload(payload)
+        if not self.applies(ctx) and not changed:
+            return None
         for parser in self.parsers:
             payload = parser.apply_response(payload, ctx)
         return json.dumps(payload, ensure_ascii=False).encode("utf-8")
 
     def create_stream_parser(self, ctx: ParserContext) -> Optional[ResponseStreamParser]:
-        if not self.applies(ctx):
+        if not self.applies(ctx) and "/chat/completions" not in ctx.path:
             return None
         return ResponseStreamParser(self, ctx)
 

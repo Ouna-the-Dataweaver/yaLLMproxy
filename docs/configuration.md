@@ -526,6 +526,13 @@ proxy_settings:
   logging:
     log_parsed_response: true  # Log parsed response bodies
     log_parsed_stream: true    # Log parsed stream chunks
+    log_to_disk: true          # Write human-readable *.log / *.parsed.log sidecars
+    full_request_storage:
+      enabled: true
+      path: logs/requests
+      retention_hours: 48
+      cleanup_on_startup: true
+      cleanup_interval_hours: 24
 ```
 
 ## App Key Authentication

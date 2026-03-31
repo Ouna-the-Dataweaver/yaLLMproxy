@@ -124,11 +124,11 @@ class TestDatabaseLogRecorder:
 
         # Verify the data was saved
         with db.session() as session:
-            from src.database.models import RequestLog
+            from src.database.models import RequestMetadata
             from sqlalchemy import select
 
             result = session.execute(
-                select(RequestLog).where(RequestLog.id == UUID(request_id))
+                select(RequestMetadata).where(RequestMetadata.id == UUID(request_id))
             )
             log = result.scalar_one_or_none()
             assert log is not None
@@ -136,8 +136,9 @@ class TestDatabaseLogRecorder:
             assert log.is_stream is True
             assert log.outcome == "success"
             assert log.duration_ms == 2500
-            assert len(log.backend_attempts) == 1
-            assert len(log.stream_chunks) == 2
+            assert log.prompt_tokens == 10
+            assert log.completion_tokens == 50
+            assert log.total_tokens == 60
 
     def test_log_error(self, sqlite_config: dict[str, Any]) -> None:
         """Test logging an error."""
@@ -272,10 +273,10 @@ class TestDatabaseLoggerIntegration:
 
         # Verify all requests were saved
         with db.session() as session:
-            from src.database.models import RequestLog
+            from src.database.models import RequestMetadata
             from sqlalchemy import select
 
-            result = session.execute(select(RequestLog))
+            result = session.execute(select(RequestMetadata))
             logs = result.scalars().all()
             assert len(logs) == 5
 
@@ -310,11 +311,11 @@ class TestDatabaseLoggerIntegration:
 
         # Verify counts
         with db.session() as session:
-            from src.database.models import RequestLog, ErrorLog
+            from src.database.models import ErrorLog, RequestMetadata
             from sqlalchemy import func, select
 
             request_count = session.execute(
-                select(func.count()).select_from(RequestLog)
+                select(func.count()).select_from(RequestMetadata)
             ).scalar_one()
             error_count = session.execute(
                 select(func.count()).select_from(ErrorLog)

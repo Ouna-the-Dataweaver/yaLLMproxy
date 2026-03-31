@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from ..database.factory import get_database
-from ..database.models import RequestLog, ErrorLog
+from ..database.models import ErrorLog, RequestMetadata
 
 logger = logging.getLogger("yallmp-proxy")
 
@@ -81,6 +81,11 @@ class DatabaseLogRecorder:
         conversation_turn: int | None = None,
         modules_log: dict[str, Any] | None = None,
         app_key_id: str | None = None,
+        request_id: str | None = None,
+        backend_name: str | None = None,
+        backend_status: int | None = None,
+        full_request_path: str | None = None,
+        full_request_expires_at: datetime | None = None,
     ) -> str:
         """Log a request event to the database.
 
@@ -111,7 +116,7 @@ class DatabaseLogRecorder:
         Returns:
             The UUID of the created request log.
         """
-        request_uuid = uuid.uuid4()
+        request_uuid = uuid.UUID(request_id) if request_id else uuid.uuid4()
         self._ensure_initialized()
         if not self._initialized:
             logger.warning("Database not initialized, skipping database logging")
@@ -120,7 +125,12 @@ class DatabaseLogRecorder:
         if request_time is None:
             request_time = datetime.now(timezone.utc)
 
-        request_log = RequestLog(
+        prompt_details = usage_stats.get("prompt_tokens_details") if usage_stats else None
+        completion_details = usage_stats.get("completion_tokens_details") if usage_stats else None
+        cached_tokens = prompt_details.get("cached_tokens") if isinstance(prompt_details, dict) else None
+        reasoning_tokens = completion_details.get("reasoning_tokens") if isinstance(completion_details, dict) else None
+
+        request_log = RequestMetadata(
             id=request_uuid,
             request_time=request_time,
             model_name=model_name,
@@ -128,22 +138,24 @@ class DatabaseLogRecorder:
             path=path,
             method=method,
             query=query or "",
-            headers=headers,
-            body=body,
-            route=route,
-            backend_attempts=backend_attempts,
-            stream_chunks=stream_chunks,
-            errors=errors,
-            usage_stats=usage_stats,
             outcome=outcome,
             duration_ms=duration_ms,
-            # Enhanced logging fields
+            request_path=path if not query else f"{path}?{query}",
             stop_reason=stop_reason,
-            full_response=full_response,
             is_tool_call=is_tool_call,
-            tool_calls=tool_calls,
             conversation_turn=conversation_turn,
-            modules_log=modules_log,
+            app_key_id=app_key_id,
+            backend_name=backend_name,
+            backend_status=backend_status,
+            prompt_tokens=usage_stats.get("prompt_tokens") if usage_stats else None,
+            completion_tokens=usage_stats.get("completion_tokens") if usage_stats else None,
+            total_tokens=usage_stats.get("total_tokens") if usage_stats else None,
+            cached_tokens=cached_tokens,
+            reasoning_tokens=reasoning_tokens,
+            tokens_per_second=usage_stats.get("tokens_per_second") if usage_stats else None,
+            weighted_tokens=usage_stats.get("weighted_tokens") if usage_stats else None,
+            full_request_path=full_request_path,
+            full_request_expires_at=full_request_expires_at,
         )
 
         # Capture the ID before starting async task

@@ -1,35 +1,27 @@
-"""Tests for logs repository functionality."""
+"""Tests for metadata-backed logs repository functionality."""
 
-import sys
-from datetime import datetime, timezone
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
 
-# Add src directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent / "src"))
-
-# Skip tests if database module is not available
 pytest.importorskip("src.database")
 
-from src.database.base import Base
 from src.database.factory import get_database, reset_database_instance
 from src.database.logs_repository import BODY_MAX_CHARS_DEFAULT, LogsRepository
-from src.database.models import RequestLog, ErrorLog
+from src.database.models import ErrorLog, RequestMetadata
+from src.logging import full_request_store as full_request_store_module
 
 
 @pytest.fixture
 def sqlite_config() -> dict[str, Any]:
-    """Create a SQLite configuration for testing."""
     return {
         "backend": "sqlite",
-        "connection": {
-            "sqlite": {
-                "path": ":memory:",  # In-memory database for testing
-            }
-        },
+        "connection": {"sqlite": {"path": ":memory:"}},
         "pool_size": 2,
         "max_overflow": 0,
     }
@@ -37,502 +29,298 @@ def sqlite_config() -> dict[str, Any]:
 
 @pytest.fixture(autouse=True)
 def reset_db() -> None:
-    """Reset the database instances before each test."""
     reset_database_instance()
     yield
     reset_database_instance()
 
 
+@pytest.fixture
+def storage_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    requests_root = tmp_path / "requests"
+    runtime_config = {
+        "proxy_settings": {
+            "logging": {
+                "full_request_storage": {
+                    "enabled": True,
+                    "path": str(requests_root),
+                    "retention_hours": 48,
+                    "cleanup_on_startup": True,
+                    "cleanup_interval_hours": 24,
+                }
+            }
+        }
+    }
+    monkeypatch.setattr(
+        full_request_store_module.CONFIG_STORE,
+        "get_runtime_config",
+        lambda: runtime_config,
+    )
+    full_request_store_module._FULL_REQUEST_STORE = None
+    full_request_store_module._FULL_REQUEST_STORE_KEY = None
+    return requests_root
+
+
+def _create_repo(sqlite_config: dict[str, Any]) -> LogsRepository:
+    db = get_database(sqlite_config)
+    db.initialize()
+    return LogsRepository()
+
+
+def _create_metadata(
+    repo: LogsRepository,
+    *,
+    request_id: str | None = None,
+    model_name: str = "test-model",
+    outcome: str = "success",
+    request_time: datetime | None = None,
+    full_request_path: str | None = None,
+    full_request_expires_at: datetime | None = None,
+    usage_tokens: tuple[int, int, int] | None = None,
+    is_tool_call: bool = False,
+    stop_reason: str | None = None,
+) -> RequestMetadata:
+    request_time = request_time or datetime.now(timezone.utc)
+    prompt_tokens = completion_tokens = total_tokens = None
+    if usage_tokens:
+        prompt_tokens, completion_tokens, total_tokens = usage_tokens
+
+    with repo._database.session() as session:
+        metadata_id = UUID(request_id) if request_id else None
+        log = RequestMetadata(
+            id=metadata_id,
+            request_time=request_time,
+            model_name=model_name,
+            outcome=outcome,
+            is_stream=False,
+            path="/v1/chat/completions",
+            method="POST",
+            duration_ms=1500,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+            is_tool_call=is_tool_call,
+            stop_reason=stop_reason,
+            full_request_path=full_request_path,
+            full_request_expires_at=full_request_expires_at,
+        )
+        session.add(log)
+        session.flush()
+        session.expunge(log)
+        return log
+
+
 class TestLogsRepository:
-    """Tests for LogsRepository class."""
+    def test_get_logs_pagination_and_filters(
+        self,
+        sqlite_config: dict[str, Any],
+        storage_config: Path,
+    ) -> None:
+        repo = _create_repo(sqlite_config)
 
-    def _create_repo(self, sqlite_config: dict[str, Any]) -> LogsRepository:
-        """Create a LogsRepository with the test database."""
-        db = get_database(sqlite_config)
-        db.initialize()
-        repo = LogsRepository()
-        return repo
+        _create_metadata(repo, model_name="gpt-4", outcome="success")
+        _create_metadata(repo, model_name="gpt-4", outcome="success")
+        _create_metadata(repo, model_name="claude", outcome="error")
 
-    def test_get_logs_pagination(self, sqlite_config: dict[str, Any]) -> None:
-        """Test getting paginated logs."""
-        repo = self._create_repo(sqlite_config)
-
-        # Create some logs
-        with repo._database.session() as session:
-            for i in range(10):
-                log = RequestLog(
-                    request_time=datetime.now(timezone.utc),
-                    model_name=f"model-{i}",
-                    outcome="success",
-                    duration_ms=1000,
-                )
-                session.add(log)
-
-        # Get first page
-        result = repo.get_logs(limit=5, offset=0)
-        assert result["logs"] is not None
-        assert len(result["logs"]) == 5
-        assert result["total"] == 10
-        assert result["limit"] == 5
-        assert result["offset"] == 0
+        result = repo.get_logs(limit=2, offset=0)
+        assert len(result["logs"]) == 2
+        assert result["total"] == 3
         assert result["has_more"] is True
 
-        # Get second page
-        result = repo.get_logs(limit=5, offset=5)
-        assert len(result["logs"]) == 5
-        assert result["offset"] == 5
-        assert result["has_more"] is False
+        filtered = repo.get_logs(model_name="gpt-4")
+        assert filtered["total"] == 2
 
-    def test_get_logs_with_filters(self, sqlite_config: dict[str, Any]) -> None:
-        """Test getting logs with filters."""
-        repo = self._create_repo(sqlite_config)
+        failed = repo.get_logs(outcome="error")
+        assert failed["total"] == 1
 
-        # Create logs with different models and outcomes
-        with repo._database.session() as session:
-            for i in range(5):
-                log = RequestLog(
-                    request_time=datetime.now(timezone.utc),
-                    model_name="gpt-4",
-                    outcome="success",
-                )
-                session.add(log)
-            for i in range(3):
-                log = RequestLog(
-                    request_time=datetime.now(timezone.utc),
-                    model_name="claude-3",
-                    outcome="error",
-                )
-                session.add(log)
+    def test_get_log_by_id_reads_payload_file(
+        self,
+        sqlite_config: dict[str, Any],
+        storage_config: Path,
+    ) -> None:
+        repo = _create_repo(sqlite_config)
+        store = full_request_store_module.get_full_request_store()
 
-        # Filter by model
-        result = repo.get_logs(model_name="gpt-4")
-        assert result["total"] == 5
-
-        # Filter by outcome
-        result = repo.get_logs(outcome="error")
-        assert result["total"] == 3
-
-        # Filter by both
-        result = repo.get_logs(model_name="gpt-4", outcome="error")
-        assert result["total"] == 0
-
-
-class TestGetLogById:
-    """Tests for get_log_by_id method."""
-
-    def _create_repo(self, sqlite_config: dict[str, Any]) -> LogsRepository:
-        """Create a LogsRepository with the test database."""
-        db = get_database(sqlite_config)
-        db.initialize()
-        repo = LogsRepository()
-        return repo
-
-    def test_get_log_by_id_basic(self, sqlite_config: dict[str, Any]) -> None:
-        """Test getting a log by ID."""
-        repo = self._create_repo(sqlite_config)
-
-        # Create a log
-        with repo._database.session() as session:
-            log = RequestLog(
-                request_time=datetime.now(timezone.utc),
-                model_name="test-model",
-                outcome="success",
-                duration_ms=1500,
-                body={"messages": [{"role": "user", "content": "Hello"}]},
-            )
-            session.add(log)
-            session.flush()
-            log_id = log.id
-
-        # Retrieve the log
-        result = repo.get_log_by_id(log_id)
-
-        assert result is not None
-        assert result["model_name"] == "test-model"
-        assert result["outcome"] == "success"
-        assert result["duration_ms"] == 1500
-        assert result["body"] == {"messages": [{"role": "user", "content": "Hello"}]}
-
-    def test_get_log_by_id_not_found(self, sqlite_config: dict[str, Any]) -> None:
-        """Test getting a non-existent log."""
-        repo = self._create_repo(sqlite_config)
-
-        result = repo.get_log_by_id(uuid4())
-        assert result is None
-
-    def test_get_log_by_id_with_large_stream_chunks(self, sqlite_config: dict[str, Any]) -> None:
-        """Test that get_log_by_id truncates large stream_chunks to prevent timeouts.
-
-        This test verifies that logs with many stream chunks don't cause
-        performance issues by truncating to the first 50 chunks.
-        """
-        repo = self._create_repo(sqlite_config)
-
-        # Create a log with many stream chunks (simulating a real streaming response)
-        large_stream_chunks = [
-            {"id": f"chunk-{i}", "choices": [{"delta": {"content": f"This is chunk {i} "}}]}
-            for i in range(1000)  # 1000 chunks is not unrealistic for long responses
-        ]
-
-        with repo._database.session() as session:
-            log = RequestLog(
-                request_time=datetime.now(timezone.utc),
-                model_name="test-model",
-                outcome="success",
-                is_stream=True,
-                stream_chunks=large_stream_chunks,
-            )
-            session.add(log)
-            session.flush()
-            log_id = log.id
-
-        # Retrieve the log - should be truncated to 50 chunks
-        result = repo.get_log_by_id(log_id)
-
-        assert result is not None
-        assert result["is_stream"] is True
-        assert result["stream_chunks"] is not None
-        # Should be truncated to 50
-        assert len(result["stream_chunks"]) == 50
-        # Should indicate truncation
-        assert result.get("stream_chunks_truncated") is True
-        assert result.get("stream_chunks_total") == 1000
-
-    def test_get_log_by_id_with_large_full_response(self, sqlite_config: dict[str, Any]) -> None:
-        """Test that get_log_by_id truncates very large full_response to prevent timeouts.
-
-        This test verifies that logs with huge response text don't cause
-        performance issues by truncating to 100KB.
-        """
-        repo = self._create_repo(sqlite_config)
-
-        # Create a log with a very large full_response
-        large_response = "This is a very long response. " * 10000  # ~260KB of text
-
-        with repo._database.session() as session:
-            log = RequestLog(
-                request_time=datetime.now(timezone.utc),
-                model_name="test-model",
-                outcome="success",
-                full_response=large_response,
-            )
-            session.add(log)
-            session.flush()
-            log_id = log.id
-
-        # Retrieve the log - should be truncated to 100KB
-        result = repo.get_log_by_id(log_id)
-
-        assert result is not None
-        # Should be truncated
-        assert len(result["full_response"]) == 100000
-        assert result.get("full_response_truncated") is True
-
-    def test_get_log_by_id_with_large_body(self, sqlite_config: dict[str, Any]) -> None:
-        """Test that get_log_by_id truncates very large bodies by default."""
-        repo = self._create_repo(sqlite_config)
-
-        # Create a log with a large request body (long conversation history)
-        large_content = "x" * 2000
-        large_body = {
-            "model": "test-model",
-            "messages": [
-                {"role": "user" if i % 2 == 0 else "assistant", "content": large_content}
-                for i in range(120)
-            ],
-            "max_tokens": 4000,
-            "temperature": 0.7,
-        }
-
-        with repo._database.session() as session:
-            log = RequestLog(
-                request_time=datetime.now(timezone.utc),
-                model_name="test-model",
-                outcome="success",
-                body=large_body,
-            )
-            session.add(log)
-            session.flush()
-            log_id = log.id
-
-        # Retrieve the log (default truncation)
-        result = repo.get_log_by_id(log_id)
-
-        assert result is not None
-        assert result.get("body_truncated") is True
-        assert isinstance(result["body"], str)
-        assert len(result["body"]) == BODY_MAX_CHARS_DEFAULT
-        assert result.get("body_total_chars", 0) > BODY_MAX_CHARS_DEFAULT
-
-    def test_get_log_by_id_with_large_body_no_limit(self, sqlite_config: dict[str, Any]) -> None:
-        """Test that get_log_by_id can return the full body when truncation is disabled."""
-        repo = self._create_repo(sqlite_config)
-
-        large_content = "x" * 2000
-        large_body = {
-            "model": "test-model",
-            "messages": [
-                {"role": "user" if i % 2 == 0 else "assistant", "content": large_content}
-                for i in range(120)
-            ],
-            "max_tokens": 4000,
-            "temperature": 0.7,
-        }
-
-        with repo._database.session() as session:
-            log = RequestLog(
-                request_time=datetime.now(timezone.utc),
-                model_name="test-model",
-                outcome="success",
-                body=large_body,
-            )
-            session.add(log)
-            session.flush()
-            log_id = log.id
-
-        result = repo.get_log_by_id(log_id, body_max_chars=0)
-
-        assert result is not None
-        assert result["body"] == large_body
-        assert result.get("body_truncated") is None
-
-    def test_get_log_by_id_with_large_backend_attempts(self, sqlite_config: dict[str, Any]) -> None:
-        """Test that get_log_by_id truncates large backend_attempts to prevent timeouts.
-
-        Backend attempts with full responses can be very large.
-        """
-        repo = self._create_repo(sqlite_config)
-
-        # Create a log with many backend attempts
-        large_backend_attempts = [
+        request_time = datetime.now(timezone.utc)
+        request_id = uuid4()
+        payload_path, expires_at = store.write_payload(
+            request_id,
+            request_time,
             {
-                "backend": f"backend-{i}",
-                "status": 200,
-                "url": "https://api.example.com/v1/chat/completions",
-                "response": {"choices": [{"message": {"content": f"Response {i}"}}]}
-            }
-            for i in range(20)  # 20 attempts is a lot
-        ]
+                "id": str(request_id),
+                "request_time": request_time.isoformat(),
+                "headers": {"content-type": "application/json"},
+                "body": {"messages": [{"role": "user", "content": "hello"}]},
+                "backend_attempts": [{"backend": "test", "status": 200}],
+                "stream_chunks": [{"delta": "one"} for _ in range(80)],
+                "errors": [{"type": "timeout", "message": "oops"}],
+                "full_response": "x" * 120000,
+                "tool_calls": [{"name": "tool"}],
+                "modules_log": {"total_events": 2},
+                "usage_stats": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+            },
+        )
+        assert payload_path is not None
+        log = _create_metadata(
+            repo,
+            request_time=request_time,
+            full_request_path=str(payload_path),
+            full_request_expires_at=expires_at,
+            usage_tokens=(10, 20, 30),
+        )
 
-        with repo._database.session() as session:
-            log = RequestLog(
-                request_time=datetime.now(timezone.utc),
-                model_name="test-model",
-                outcome="success",
-                backend_attempts=large_backend_attempts,
-            )
-            session.add(log)
-            session.flush()
-            log_id = log.id
-
-        # Retrieve the log - should be truncated to 5
-        result = repo.get_log_by_id(log_id)
-
+        result = repo.get_log_by_id(log.id)
         assert result is not None
-        # Should be truncated to 5
-        assert len(result["backend_attempts"]) == 5
-        assert result.get("backend_attempts_truncated") is True
+        assert result["full_request_status"] == "available"
+        assert result["body"]["messages"][0]["content"] == "hello"
+        assert result["backend_attempts"][0]["backend"] == "test"
+        assert result["errors"][0]["type"] == "timeout"
+        assert result["tool_calls"][0]["name"] == "tool"
+        assert result["stream_chunks_truncated"] is True
+        assert len(result["stream_chunks"]) == 50
+        assert result["full_response_truncated"] is True
+        assert len(result["full_response"]) == 100000
 
-    def test_get_log_by_id_includes_linked_error_logs(self, sqlite_config: dict[str, Any]) -> None:
-        """Test that get_log_by_id returns linked error logs."""
-        repo = self._create_repo(sqlite_config)
+    def test_get_log_by_id_marks_expired_payload(
+        self,
+        sqlite_config: dict[str, Any],
+        storage_config: Path,
+    ) -> None:
+        repo = _create_repo(sqlite_config)
+        log = _create_metadata(
+            repo,
+            full_request_path=str(storage_config / "missing.json"),
+            full_request_expires_at=datetime.now(timezone.utc) - timedelta(hours=1),
+            usage_tokens=(10, 20, 30),
+        )
 
-        # Create a request log with linked error logs
+        result = repo.get_log_by_id(log.id)
+        assert result is not None
+        assert result["full_request_status"] == "expired"
+        assert result["usage_stats"]["total_tokens"] == 30
+        assert "body" not in result
+
+    def test_get_log_by_id_includes_linked_error_logs(
+        self,
+        sqlite_config: dict[str, Any],
+        storage_config: Path,
+    ) -> None:
+        repo = _create_repo(sqlite_config)
+        log = _create_metadata(repo, outcome="error")
+
         with repo._database.session() as session:
-            request_log = RequestLog(
-                request_time=datetime.now(timezone.utc),
-                model_name="test-model",
-                outcome="error",
-            )
-            session.add(request_log)
-            session.flush()
-
-            # Create error logs linked to this request
-            for i in range(3):
-                error_log = ErrorLog(
+            session.add(
+                ErrorLog(
                     timestamp=datetime.now(timezone.utc),
                     model_name="test-model",
                     error_type="timeout",
-                    error_message=f"Timeout {i}",
-                    request_log_id=request_log.id,
+                    error_message="Timed out",
+                    request_log_id=log.id,
                 )
-                session.add(error_log)
-
-            log_id = request_log.id
-
-        # Retrieve the log
-        result = repo.get_log_by_id(log_id)
-
-        assert result is not None
-        assert "error_logs" in result
-        assert len(result["error_logs"]) == 3
-
-        # Verify the error logs have the expected structure
-        for i, error_log in enumerate(result["error_logs"]):
-            assert error_log["error_type"] == "timeout"
-            assert error_log["error_message"] == f"Timeout {i}"
-
-
-class TestGetLogsExcludesLargeFields:
-    """Tests verifying that get_logs excludes large fields for performance."""
-
-    def _create_repo(self, sqlite_config: dict[str, Any]) -> LogsRepository:
-        """Create a LogsRepository with the test database."""
-        db = get_database(sqlite_config)
-        db.initialize()
-        repo = LogsRepository()
-        return repo
-
-    def test_get_logs_excludes_full_response(self, sqlite_config: dict[str, Any]) -> None:
-        """Test that get_logs (list endpoint) does NOT include full_response.
-
-        The list endpoint should exclude large fields like full_response
-        and stream_chunks to ensure fast response times.
-        """
-        repo = self._create_repo(sqlite_config)
-
-        with repo._database.session() as session:
-            log = RequestLog(
-                request_time=datetime.now(timezone.utc),
-                model_name="test-model",
-                outcome="success",
-                full_response="This is a very long response. " * 1000,
-                stream_chunks=[{"chunk": f"data-{i}"} for i in range(100)],
             )
-            session.add(log)
-            session.flush()
-            log_id = log.id
 
-        # Get logs list - should NOT include full_response or stream_chunks
-        result = repo.get_logs(limit=1, offset=0)
-
-        assert result["logs"] is not None
-        assert len(result["logs"]) == 1
-
-        log_summary = result["logs"][0]
-        # These large fields should NOT be in the summary
-        assert "full_response" not in log_summary, "get_logs should exclude full_response"
-        assert "stream_chunks" not in log_summary, "get_logs should exclude stream_chunks"
-        # But the body should be excluded too for performance
-        assert "body" not in log_summary, "get_logs should exclude body"
-
-    def test_get_logs_includes_essential_fields(self, sqlite_config: dict[str, Any]) -> None:
-        """Test that get_logs includes all essential fields for the list view."""
-        repo = self._create_repo(sqlite_config)
-
-        with repo._database.session() as session:
-            log = RequestLog(
-                request_time=datetime.now(timezone.utc),
-                model_name="test-model",
-                outcome="success",
-                is_stream=False,
-                duration_ms=1500,
-                usage_stats={"prompt_tokens": 10, "completion_tokens": 50, "total_tokens": 60},
-                is_tool_call=False,
-            )
-            session.add(log)
-            session.flush()
-
-        result = repo.get_logs(limit=1, offset=0)
-        log_summary = result["logs"][0]
-
-        # Essential fields should be present
-        assert "id" in log_summary
-        assert "request_time" in log_summary
-        assert "model_name" in log_summary
-        assert "outcome" in log_summary
-        assert "duration_ms" in log_summary
-        assert "usage_stats" in log_summary
-        assert "is_tool_call" in log_summary
-
-
-class TestLogsRepositoryAnalytics:
-    """Tests for analytics methods in LogsRepository."""
-
-    def _create_repo(self, sqlite_config: dict[str, Any]) -> LogsRepository:
-        """Create a LogsRepository with the test database."""
-        db = get_database(sqlite_config)
-        db.initialize()
-        repo = LogsRepository()
-        return repo
-
-    def test_get_stop_reason_counts(self, sqlite_config: dict[str, Any]) -> None:
-        """Test getting stop reason counts."""
-        repo = self._create_repo(sqlite_config)
-
-        # Create logs with different stop reasons
-        with repo._database.session() as session:
-            for _ in range(5):
-                log = RequestLog(
-                    request_time=datetime.now(timezone.utc),
-                    model_name="test-model",
-                    stop_reason="stop",
-                )
-                session.add(log)
-            for _ in range(3):
-                log = RequestLog(
-                    request_time=datetime.now(timezone.utc),
-                    model_name="test-model",
-                    stop_reason="tool_calls",
-                )
-                session.add(log)
-
-        result = repo.get_stop_reason_counts()
-
+        result = repo.get_log_by_id(log.id)
         assert result is not None
-        assert len(result) == 2
+        assert len(result["error_logs"]) == 1
+        assert result["error_logs"][0]["error_type"] == "timeout"
 
-    def test_get_tool_call_rate(self, sqlite_config: dict[str, Any]) -> None:
-        """Test getting tool call rate."""
-        repo = self._create_repo(sqlite_config)
+    def test_search_only_matches_retained_payloads(
+        self,
+        sqlite_config: dict[str, Any],
+        storage_config: Path,
+    ) -> None:
+        repo = _create_repo(sqlite_config)
+        store = full_request_store_module.get_full_request_store()
 
-        # Create logs with and without tool calls
-        with repo._database.session() as session:
-            for _ in range(7):
-                log = RequestLog(
-                    request_time=datetime.now(timezone.utc),
-                    model_name="test-model",
-                    is_tool_call=False,
-                )
-                session.add(log)
-            for _ in range(3):
-                log = RequestLog(
-                    request_time=datetime.now(timezone.utc),
-                    model_name="test-model",
-                    is_tool_call=True,
-                )
-                session.add(log)
+        request_time = datetime.now(timezone.utc)
+        retained_id = uuid4()
+        retained_path, retained_expires = store.write_payload(
+            retained_id,
+            request_time,
+            {
+                "id": str(retained_id),
+                "request_time": request_time.isoformat(),
+                "body": {"messages": [{"content": "find-me"}]},
+            },
+        )
+        _create_metadata(
+            repo,
+            request_id=str(retained_id),
+            request_time=request_time,
+            full_request_path=str(retained_path),
+            full_request_expires_at=retained_expires,
+        )
 
-        result = repo.get_tool_call_rate()
+        expired_log = _create_metadata(
+            repo,
+            request_time=request_time - timedelta(days=3),
+            full_request_path=str(storage_config / "expired.json"),
+            full_request_expires_at=datetime.now(timezone.utc) - timedelta(hours=1),
+        )
 
-        assert result["total_requests"] == 10
-        assert result["tool_call_requests"] == 3
-        assert result["tool_call_rate"] == 30.0
+        result = repo.get_logs(search="find-me")
+        assert result["total"] == 1
+        assert result["logs"][0]["id"] != str(expired_log.id)
 
-    def test_get_requests_per_model(self, sqlite_config: dict[str, Any]) -> None:
-        """Test getting requests per model."""
-        repo = self._create_repo(sqlite_config)
+    def test_analytics_use_metadata_rows(
+        self,
+        sqlite_config: dict[str, Any],
+        storage_config: Path,
+    ) -> None:
+        repo = _create_repo(sqlite_config)
 
-        # Create logs for different models
-        with repo._database.session() as session:
-            for _ in range(10):
-                log = RequestLog(
-                    request_time=datetime.now(timezone.utc),
-                    model_name="gpt-4",
-                )
-                session.add(log)
-            for _ in range(5):
-                log = RequestLog(
-                    request_time=datetime.now(timezone.utc),
-                    model_name="claude-3",
-                )
-                session.add(log)
+        for _ in range(3):
+            _create_metadata(repo, model_name="model-a", stop_reason="stop", is_tool_call=False)
+        for _ in range(2):
+            _create_metadata(repo, model_name="model-b", stop_reason="tool_calls", is_tool_call=True)
 
-        result = repo.get_requests_per_model_with_stop_reason(limit=10)
+        stop_reasons = repo.get_stop_reason_counts()
+        assert {item["reason"] for item in stop_reasons} == {"stop", "tool_calls"}
 
-        assert result is not None
-        assert len(result) == 2
+        tool_rate = repo.get_tool_call_rate()
+        assert tool_rate["total_requests"] == 5
+        assert tool_rate["tool_call_requests"] == 2
 
-        # Should be sorted by count descending
-        assert result[0]["model_name"] == "gpt-4"
-        assert result[0]["total_requests"] == 10
+
+def test_cleanup_deletes_expired_payloads_and_sidecars(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requests_root = tmp_path / "requests"
+    runtime_config = {
+        "proxy_settings": {
+            "logging": {
+                "full_request_storage": {
+                    "enabled": True,
+                    "path": str(requests_root),
+                    "retention_hours": 1,
+                    "cleanup_on_startup": True,
+                    "cleanup_interval_hours": 24,
+                }
+            }
+        }
+    }
+    monkeypatch.setattr(
+        full_request_store_module.CONFIG_STORE,
+        "get_runtime_config",
+        lambda: runtime_config,
+    )
+    full_request_store_module._FULL_REQUEST_STORE = None
+    full_request_store_module._FULL_REQUEST_STORE_KEY = None
+    store = full_request_store_module.get_full_request_store()
+
+    request_time = datetime.now(timezone.utc) - timedelta(hours=2)
+    request_id = uuid4()
+    payload_path, _ = store.write_payload(
+        request_id,
+        request_time,
+        {"id": str(request_id), "request_time": request_time.isoformat()},
+    )
+    assert payload_path is not None
+    payload_path.with_suffix(".log").write_text("log", encoding="utf-8")
+    payload_path.with_suffix(".parsed.log").write_text("parsed", encoding="utf-8")
+
+    deleted = store.cleanup_expired(now=datetime.now(timezone.utc))
+    assert deleted == 1
+    assert not payload_path.exists()
+    assert not payload_path.with_suffix(".log").exists()
+    assert not payload_path.with_suffix(".parsed.log").exists()

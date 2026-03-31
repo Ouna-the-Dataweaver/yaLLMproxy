@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 from uuid import UUID
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Column, DateTime, Integer, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.types import JSON
 
@@ -72,9 +72,8 @@ class ErrorLog(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     # Foreign key to request log (optional)
     request_log_id = Column(
         UUID(as_uuid=True),
-        ForeignKey("request_logs.id", ondelete="SET NULL"),
         nullable=True,
-        comment="Reference to the request log (if error occurred during a request)"
+        comment="Reference to the request metadata row (best-effort link)"
     )
 
     # Additional context as JSON

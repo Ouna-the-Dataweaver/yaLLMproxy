@@ -1,5 +1,7 @@
 """Request logging and error tracking for the proxy."""
 
+from __future__ import annotations
+
 import asyncio
 import base64
 import copy
@@ -7,15 +9,18 @@ import json
 import logging
 import os
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Collection, Mapping, Optional
+from uuid import uuid4
 
 # Import database logger for integration
 try:
     from ..database.logger import get_db_logger
 except ImportError:
     get_db_logger = None  # type: ignore
+
+from .full_request_store import get_full_request_store
 
 logger = logging.getLogger("yallmp-proxy")
 
@@ -264,6 +269,7 @@ def log_error_event(
     http_status: Optional[int] = None,
     request_path: Optional[str] = None,
     request_log_path: Optional[Path] = None,
+    request_log_id: Optional[str] = None,
     extra_context: Optional[dict[str, Any]] = None,
     db_log_target: Optional[DbLogTarget] = None,
 ) -> None:
@@ -334,7 +340,7 @@ def log_error_event(
                 backend_name=backend_name,
                 http_status=http_status,
                 request_path=request_path,
-                request_log_id=None,  # Will be linked if available
+                request_log_id=request_log_id,
                 extra_context=extra_context,
             )
         except Exception as e:
@@ -354,15 +360,17 @@ class RequestLogRecorder:
         log_to_disk: bool = True,
         db_log_target: Optional[DbLogTarget] = None,
     ) -> None:
-        safe_model = self._safe_fragment(model_name or "unknown")
-        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-        import uuid
-        short_id = uuid.uuid4().hex[:4]
-        filename = f"{timestamp}-{short_id}_{safe_model}.log"
-        self.log_path = REQUEST_LOG_DIR / filename
-        self.parsed_log_path = self.log_path.with_name(
-            f"{self.log_path.stem}.parsed.log"
+        self._request_id = uuid4()
+        self._started_dt = datetime.now(timezone.utc)
+        self._started = self._started_dt.isoformat()
+        self._full_request_store = get_full_request_store()
+        payload_path = self._full_request_store.build_payload_path(
+            self._request_id,
+            self._started_dt,
         )
+        self._payload_path = payload_path
+        self.log_path = payload_path.with_suffix(".log")
+        self.parsed_log_path = payload_path.with_suffix(".parsed.log")
         self.model_name = model_name or "unknown"
         self.is_stream = is_stream
         self.request_path = path
@@ -374,9 +382,16 @@ class RequestLogRecorder:
         self._started = datetime.utcnow().isoformat() + "Z"
         self._current_backend: Optional[str] = None
         self._last_http_status: Optional[int] = None
+        self._route: list[str] | None = None
+        self._backend_attempts: list[dict[str, Any]] = []
+        self._current_backend_attempt: Optional[dict[str, Any]] = None
+        self._stream_chunk_payloads: list[Any] = []
+        self._errors: list[dict[str, Any]] = []
         self._error_logged = False
         self._request_json: Optional[dict[str, Any]] = None
         self._usage_stats: Optional[dict[str, Any]] = None
+        self._full_request_path: Optional[str] = None
+        self._full_request_expires_at: Optional[datetime] = None
 
         # Enhanced logging fields for stop_reason and agentic workflows
         self._stop_reason: Optional[str] = None
@@ -485,12 +500,20 @@ class RequestLogRecorder:
     def record_route(self, route: list[str]) -> None:
         if self._finalized:
             return
+        self._route = list(route)
         self._append_text(f"route={route}\n")
 
     def record_backend_attempt(self, backend_name: str, attempt: int, url: str) -> None:
         if self._finalized:
             return
         self._current_backend = backend_name
+        attempt_record = {
+            "attempt": attempt,
+            "backend": backend_name,
+            "url": url,
+        }
+        self._backend_attempts.append(attempt_record)
+        self._current_backend_attempt = attempt_record
         self._append_text(
             f"=== BACKEND ATTEMPT {attempt} ===\nbackend={backend_name}\nurl={url}\n"
         )
@@ -501,6 +524,8 @@ class RequestLogRecorder:
         if self._finalized:
             return
         self._last_http_status = status
+        if self._current_backend_attempt is not None:
+            self._current_backend_attempt["status"] = status
         header_dump = self._safe_json_dict(headers)
         self._append_text(f"status={status}\nresponse_headers={header_dump}\n")
         self._append_text(f"body_len={len(body)}\n-- RESPONSE BODY START --\n")
@@ -527,6 +552,8 @@ class RequestLogRecorder:
         if self._finalized:
             return
         self._last_http_status = status
+        if self._current_backend_attempt is not None:
+            self._current_backend_attempt["status"] = status
         header_dump = self._safe_json_dict(headers)
         self._append_text(
             f"=== STREAM RESPONSE ===\nstatus={status}\nresponse_headers={header_dump}\n"
@@ -547,6 +574,7 @@ class RequestLogRecorder:
         if self._finalized:
             return
         self._stream_chunks += 1
+        self._stream_chunk_payloads.append(self._decode_payload(chunk))
         self._append_text(
             f"-- STREAM CHUNK {self._stream_chunks} len={len(chunk)} --\n"
         )
@@ -568,31 +596,40 @@ class RequestLogRecorder:
         if self._finalized:
             return
         self._append_text(f"ERROR: {message}\n")
+        inferred_type = error_type
+        if inferred_type is None:
+            if "SSE" in message or "stream error" in message.lower():
+                inferred_type = "sse_stream_error"
+            elif "status" in message.lower():
+                inferred_type = "http_error"
+            elif "timeout" in message.lower():
+                inferred_type = "timeout"
+            elif "cancelled" in message.lower() or "disconnect" in message.lower():
+                inferred_type = "client_disconnect"
+            else:
+                inferred_type = "unknown"
+        self._errors.append(
+            {
+                "type": inferred_type,
+                "message": message,
+                "backend_name": self._current_backend,
+                "http_status": self._last_http_status,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        )
         
         # Also log to the errors directory (only once per request)
         if not self._error_logged:
             self._error_logged = True
-            # Infer error type if not provided
-            if error_type is None:
-                if "SSE" in message or "stream error" in message.lower():
-                    error_type = "sse_stream_error"
-                elif "status" in message.lower():
-                    error_type = "http_error"
-                elif "timeout" in message.lower():
-                    error_type = "timeout"
-                elif "cancelled" in message.lower() or "disconnect" in message.lower():
-                    error_type = "client_disconnect"
-                else:
-                    error_type = "unknown"
-            
             log_error_event(
                 model_name=self.model_name,
-                error_type=error_type,
+                error_type=inferred_type,
                 error_message=message,
                 backend_name=self._current_backend,
                 http_status=self._last_http_status,
                 request_path=self.request_path,
                 request_log_path=self.log_path,
+                request_log_id=str(self._request_id),
                 db_log_target=self._db_log_target,
             )
 
@@ -879,18 +916,53 @@ class RequestLogRecorder:
 
         return full_response
 
+    def _build_canonical_payload(
+        self,
+        *,
+        outcome: str,
+        duration_ms: int | None,
+        full_response: str | None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "id": str(self._request_id),
+            "request_time": self._started,
+            "created_at": self._started,
+            "model_name": self.model_name,
+            "is_stream": self.is_stream,
+            "path": self.request_path,
+            "method": self._request_json.get("method") if self._request_json else None,
+            "query": self._request_json.get("query") if self._request_json else None,
+            "request_path": self.request_path,
+            "headers": self._request_json.get("headers") if self._request_json else None,
+            "body": self._request_json.get("body") if self._request_json else None,
+            "route": self._route,
+            "backend_attempts": self._backend_attempts or None,
+            "stream_chunks": self._stream_chunk_payloads or None,
+            "errors": self._errors or None,
+            "usage_stats": self._usage_stats,
+            "outcome": outcome,
+            "duration_ms": duration_ms,
+            "stop_reason": self._stop_reason,
+            "full_response": full_response,
+            "is_tool_call": self._is_tool_call,
+            "tool_calls": self._accumulated_tool_calls or None,
+            "conversation_turn": self._conversation_turn,
+            "modules_log": self._modules_log,
+            "app_key_id": self._app_key_id,
+        }
+        return payload
+
     def finalize(self, outcome: str) -> None:
         if self._finalized:
             return
         self._finalized = True
-        finished = datetime.utcnow().isoformat() + "Z"
+        finished_dt = datetime.now(timezone.utc)
+        finished = finished_dt.isoformat()
         self._append_text(f"=== FINAL STATUS: {outcome} at {finished} ===\n")
 
         # Calculate duration
         try:
-            started_dt = datetime.fromisoformat(self._started.replace("Z", "+00:00"))
-            finished_dt = datetime.fromisoformat(finished.replace("Z", "+00:00"))
-            duration_ms = int((finished_dt - started_dt).total_seconds() * 1000)
+            duration_ms = int((finished_dt - self._started_dt).total_seconds() * 1000)
         except Exception:
             duration_ms = None
 
@@ -907,19 +979,22 @@ class RequestLogRecorder:
 
         # Build the full concatenated response
         full_response = self._build_full_response()
+        payload = self._build_canonical_payload(
+            outcome=outcome,
+            duration_ms=duration_ms,
+            full_response=full_response,
+        )
+        payload_path, expires_at = self._full_request_store.write_payload(
+            self._request_id,
+            self._started_dt,
+            payload,
+        )
+        self._full_request_path = str(payload_path) if payload_path else None
+        self._full_request_expires_at = expires_at
 
         # Save to database (if available)
         if self._db_logger is not None:
             try:
-                # Build backend attempts data from route
-                backend_attempts = None
-                if self._current_backend:
-                    backend_attempts = [{
-                        "backend": self._current_backend,
-                        "status": self._last_http_status,
-                    }]
-
-                # Log to database
                 self._db_log_id = self._db_logger.log_request(
                     model_name=self.model_name,
                     is_stream=self.is_stream,
@@ -928,20 +1003,23 @@ class RequestLogRecorder:
                     query=self._request_json.get("query") if self._request_json else None,
                     headers=self._request_json.get("headers") if self._request_json else None,
                     body=self._request_json.get("body") if self._request_json else None,
-                    backend_attempts=backend_attempts,
+                    backend_attempts=self._backend_attempts or None,
                     usage_stats=self._usage_stats,
                     outcome=outcome,
                     duration_ms=duration_ms,
-                    request_time=datetime.fromisoformat(self._started.replace("Z", "+00:00")),
-                    # Enhanced logging fields
+                    request_time=self._started_dt,
                     stop_reason=self._stop_reason,
                     full_response=full_response,
                     is_tool_call=self._is_tool_call,
                     tool_calls=self._accumulated_tool_calls if self._accumulated_tool_calls else None,
                     conversation_turn=self._conversation_turn,
                     modules_log=self._modules_log,
-                    # App key tracking
                     app_key_id=self._app_key_id,
+                    request_id=str(self._request_id),
+                    backend_name=self._current_backend,
+                    backend_status=self._last_http_status,
+                    full_request_path=self._full_request_path,
+                    full_request_expires_at=self._full_request_expires_at,
                 )
             except Exception as e:
                 logger.debug(f"Failed to save request to database: {e}")
@@ -965,6 +1043,7 @@ class RequestLogRecorder:
             if not self._log_to_disk:
                 return
             tmp_path = self.log_path.with_suffix(self.log_path.suffix + ".tmp")
+            tmp_path.parent.mkdir(parents=True, exist_ok=True)
             with tmp_path.open("wb") as fh:
                 fh.write(data)
             os.replace(tmp_path, self.log_path)
@@ -977,6 +1056,7 @@ class RequestLogRecorder:
         if not self._log_to_disk:
             return
         tmp_path = self.log_path.with_suffix(self.log_path.suffix + ".tmp")
+        tmp_path.parent.mkdir(parents=True, exist_ok=True)
         with tmp_path.open("wb") as fh:
             fh.write(self._buffer)
         os.replace(tmp_path, self.log_path)
@@ -987,21 +1067,24 @@ class RequestLogRecorder:
         if not self._parsed_buffer:
             return
         tmp_path = self.parsed_log_path.with_suffix(self.parsed_log_path.suffix + ".tmp")
+        tmp_path.parent.mkdir(parents=True, exist_ok=True)
         with tmp_path.open("wb") as fh:
             fh.write(self._parsed_buffer)
         os.replace(tmp_path, self.parsed_log_path)
 
     def _write_request_json(self) -> None:
-        if not self._request_json:
-            return
-        json_path = self.log_path.with_suffix(".json")
-        tmp_path = json_path.with_suffix(json_path.suffix + ".tmp")
-        output_data = dict(self._request_json)
-        if self._usage_stats:
-            output_data["usage"] = self._usage_stats
-        content = json.dumps(output_data, ensure_ascii=True, indent=2)
-        tmp_path.write_text(content + "\n", encoding="utf-8")
-        os.replace(tmp_path, json_path)
+        return
+
+    @staticmethod
+    def _decode_payload(data: bytes) -> Any:
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            return base64.b64encode(data).decode("ascii")
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            return text
 
     @staticmethod
     def _safe_json_dict(data: Mapping[str, str]) -> str:

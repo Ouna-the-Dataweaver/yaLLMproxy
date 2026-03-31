@@ -75,6 +75,8 @@ class DatabaseBase(ABC):
         # Create session factory
         self._session_factory = sessionmaker(bind=self._engine)
 
+        self.configure_engine(self._engine)
+
         # Create tables if they don't exist
         Base.metadata.create_all(self._engine)
 
@@ -92,6 +94,10 @@ class DatabaseBase(ABC):
         if self._session_factory is None:
             raise RuntimeError("Database not initialized. Call initialize() first.")
         return self._session_factory()
+
+    def configure_engine(self, engine: Engine) -> None:
+        """Apply backend-specific engine configuration hooks."""
+        return
 
     @contextmanager
     def session(self) -> Generator[Session, None, None]:
