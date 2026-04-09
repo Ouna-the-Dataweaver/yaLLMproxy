@@ -71,6 +71,32 @@ def _payload_has_api_key(payload: dict[str, Any]) -> bool:
     return False
 
 
+def _extract_parameter_configs(payload: dict[str, Any]) -> dict[str, ParameterConfig]:
+    """Extract parameter override config from runtime registration payload.
+
+    The admin UI stores overrides under ``model_params.parameters`` while
+    programmatic callers may send top-level ``parameters``. Support both so
+    runtime backend state matches the saved config without requiring a reload.
+    """
+    raw_params = payload.get("parameters")
+    if not isinstance(raw_params, dict):
+        params = payload.get("model_params")
+        raw_params = params.get("parameters") if isinstance(params, dict) else None
+    if not isinstance(raw_params, dict):
+        return {}
+
+    param_configs: dict[str, ParameterConfig] = {}
+    for param_name, param_config in raw_params.items():
+        if isinstance(param_config, dict):
+            default = param_config.get("default")
+            allow_override = _parse_bool(param_config.get("allow_override", True))
+            param_configs[param_name] = ParameterConfig(
+                default=default,
+                allow_override=allow_override,
+            )
+    return param_configs
+
+
 def _backend_from_runtime_payload(
     payload: dict[str, Any]
 ) -> tuple[Backend, Optional[list[str]], dict[str, Any]]:
@@ -116,18 +142,7 @@ def _backend_from_runtime_payload(
         anthropic_version = str(anthropic_version).strip() or None
     fallbacks = _normalize_fallbacks(payload.get("fallbacks"))
 
-    # Parse parameter overrides
-    param_configs: dict[str, ParameterConfig] = {}
-    raw_params = payload.get("parameters")
-    if isinstance(raw_params, dict):
-        for param_name, param_config in raw_params.items():
-            if isinstance(param_config, dict):
-                default = param_config.get("default")
-                allow_override = _parse_bool(param_config.get("allow_override", True))
-                param_configs[param_name] = ParameterConfig(
-                    default=default,
-                    allow_override=allow_override,
-                )
+    param_configs = _extract_parameter_configs(payload)
 
     backend = Backend(
         name=model_name,

@@ -10,6 +10,7 @@ are working correctly:
 import asyncio
 import copy
 import importlib.util
+import json
 import os
 import sys
 import uuid
@@ -254,6 +255,91 @@ class TestPostAdminModels:
                 "Backend created via POST /admin/models should have parameters"
             assert backend.parameters["tool_choice"].default == "none"
             assert backend.parameters["tool_choice"].allow_override is False
+
+    def test_register_model_with_nested_model_params_parameters_preserves_them(
+        self, proxy_module_with_parameters
+    ):
+        """Admin UI payloads store parameter overrides under model_params.parameters."""
+        router = proxy_module_with_parameters.router
+
+        with TestClient(proxy_module_with_parameters.app) as client:
+            payload = {
+                "model_name": "new-model-with-nested-params",
+                "model_params": {
+                    "api_base": "http://new-model.local/v1",
+                    "model": "openai/gpt-4o",
+                    "api_key": "new-key",
+                    "request_timeout": 45,
+                    "parameters": {
+                        "tool_choice": {
+                            "default": "none",
+                            "allow_override": False,
+                        },
+                    },
+                },
+            }
+
+            response = client.post("/admin/models", json=payload)
+            assert response.status_code == 200
+            assert response.json()["status"] == "ok"
+
+            backend = router.backends.get("new-model-with-nested-params")
+            assert backend is not None
+            assert "tool_choice" in backend.parameters
+            assert backend.parameters["tool_choice"].default == "none"
+            assert backend.parameters["tool_choice"].allow_override is False
+
+    def test_updating_timeout_via_admin_models_keeps_nested_parameter_overrides_live(
+        self, proxy_module_with_parameters
+    ):
+        """Changing unrelated fields via admin UI must not drop live parameters."""
+        from src.core.backend import build_backend_body
+
+        router = proxy_module_with_parameters.router
+
+        with TestClient(proxy_module_with_parameters.app) as client:
+            payload = {
+                "model_name": "test-model-with-params",
+                "model_params": {
+                    "api_base": "http://updated-model.local/v1",
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "test-key",
+                    "request_timeout": 91,
+                    "parameters": {
+                        "tool_choice": {
+                            "default": "none",
+                            "allow_override": False,
+                        },
+                        "temperature": {
+                            "default": 0.7,
+                            "allow_override": True,
+                        },
+                    },
+                },
+            }
+
+            response = client.post("/admin/models", json=payload)
+            assert response.status_code == 200
+            assert response.json()["replaced"] is True
+
+            backend = router.backends.get("test-model-with-params")
+            assert backend is not None
+            assert backend.timeout == 91.0
+            assert backend.parameters["tool_choice"].default == "none"
+            assert backend.parameters["tool_choice"].allow_override is False
+
+            body = build_backend_body(
+                {
+                    "model": "test-model-with-params",
+                    "messages": [{"role": "user", "content": "test"}],
+                    "tool_choice": "auto",
+                },
+                backend,
+                b"{}",
+                is_stream=False,
+            )
+            result = json.loads(body)
+            assert result["tool_choice"] == "none"
 
     def test_update_existing_model_preserves_new_parameters(self, proxy_module_with_parameters):
         """Test that updating a model via POST /admin/models handles parameters correctly."""
