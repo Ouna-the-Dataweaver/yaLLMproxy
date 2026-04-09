@@ -331,6 +331,70 @@ def test_parse_template_qwen_legacy_function_equals_non_stream() -> None:
     assert updated["choices"][0]["finish_reason"] == "tool_calls"
 
 
+def test_parse_template_qwen_parameter_tags_non_stream() -> None:
+    parser = TemplateParseParser(
+        {
+            "template_path": str(QWEN_TEMPLATE),
+            "parse_thinking": True,
+            "parse_tool_calls": True,
+        }
+    )
+    payload = _build_payload(
+        "<think>Need template fields.</think>\n\n"
+        "<tool_call>\n"
+        "<function=get_template_keys>\n"
+        "<parameter=template_name>\n"
+        "Рапорт об обнаружении признаков преступления.docx\n"
+        "</parameter>\n"
+        "</function>\n"
+        "</tool_call>"
+    )
+    updated = parser.apply_response(
+        payload,
+        ModuleContext(
+            path="/chat/completions",
+            model="test-model",
+            backend="test-backend",
+            is_stream=False,
+        ),
+    )
+
+    message = updated["choices"][0]["message"]
+    assert message["reasoning_content"] == "Need template fields."
+    assert message["content"] is None
+    assert message["tool_calls"][0]["function"]["name"] == "get_template_keys"
+    assert (
+        message["tool_calls"][0]["function"]["arguments"]
+        == '{"template_name": "Рапорт об обнаружении признаков преступления.docx"}'
+    )
+    assert updated["choices"][0]["finish_reason"] == "tool_calls"
+
+
+def test_parse_template_qwen_non_stream_preserves_plain_json_without_closing_think() -> None:
+    parser = TemplateParseParser(
+        {
+            "template_path": str(QWEN_TEMPLATE),
+            "parse_thinking": True,
+            "parse_tool_calls": True,
+            "start_in_think": True,
+        }
+    )
+    payload = _build_payload('{"entities": [], "relationships": []}')
+    updated = parser.apply_response(
+        payload,
+        ModuleContext(
+            path="/chat/completions",
+            model="test-model",
+            backend="test-backend",
+            is_stream=False,
+        ),
+    )
+
+    message = updated["choices"][0]["message"]
+    assert message["content"] == '{"entities": [], "relationships": []}'
+    assert "reasoning_content" not in message
+
+
 def test_parse_template_qwen_legacy_function_equals_stream() -> None:
     parser = TemplateParseParser(
         {
@@ -392,6 +456,89 @@ def test_parse_template_qwen_legacy_function_equals_stream() -> None:
     assert "tool_calls" in finish_reasons
 
 
+def test_parse_template_qwen_parameter_tags_stream() -> None:
+    parser = TemplateParseParser(
+        {
+            "template_path": str(QWEN_TEMPLATE),
+            "parse_thinking": True,
+            "parse_tool_calls": True,
+            "start_in_think": True,
+        }
+    )
+    state = parser.create_stream_state()
+    ctx = ModuleContext(
+        path="/chat/completions",
+        model="test-model",
+        backend="test-backend",
+        is_stream=True,
+    )
+
+    events = [
+        {"choices": [{"index": 0, "delta": {"content": "Need template fields."}}]},
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "content": "</think>\n\n<tool_call>\n<function=get_template_keys>\n"
+                    },
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "content": "<parameter=template_name>\nРапорт об обнаружении признаков "
+                    },
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"content": "преступления.docx\n</parameter>\n</function>\n</tool_call>"},
+                }
+            ]
+        },
+    ]
+
+    parsed_events: list[dict] = []
+    for event in events:
+        updated = parser.apply_stream_event(event, state, ctx)
+        parsed_events.extend(updated if isinstance(updated, list) else [updated])
+    parsed_events.extend(parser.finalize_stream(state, ctx))
+
+    reasoning_parts: list[str] = []
+    content_parts: list[str] = []
+    tool_calls: list[dict] = []
+    finish_reasons: list[str | None] = []
+    for event in parsed_events:
+        choice = event["choices"][0]
+        finish_reasons.append(choice.get("finish_reason"))
+        delta = choice.get("delta", {})
+        reasoning = delta.get("reasoning_content")
+        if isinstance(reasoning, str):
+            reasoning_parts.append(reasoning)
+        content = delta.get("content")
+        if isinstance(content, str):
+            content_parts.append(content)
+        delta_tool_calls = delta.get("tool_calls")
+        if isinstance(delta_tool_calls, list):
+            tool_calls.extend(delta_tool_calls)
+
+    assert "".join(reasoning_parts) == "Need template fields."
+    assert "".join(content_parts).strip() == ""
+    assert tool_calls[0]["function"]["name"] == "get_template_keys"
+    assert (
+        tool_calls[0]["function"]["arguments"]
+        == '{"template_name": "Рапорт об обнаружении признаков преступления.docx"}'
+    )
+    assert "tool_calls" in finish_reasons
+
+
 def test_qwen_template_renders_repo_xml_tool_calls() -> None:
     rendered = _render_chat_template(
         QWEN_TEMPLATE,
@@ -412,8 +559,7 @@ def test_qwen_template_renders_repo_xml_tool_calls() -> None:
         ],
     )
 
-    assert "<function=" not in rendered
-    assert "<parameter=" not in rendered
-    assert "<tool_call>\nshow_files" in rendered
-    assert "<arg_key>path</arg_key>" in rendered
-    assert "<arg_value>/tmp</arg_value>" in rendered
+    assert "<tool_call>\n<function=show_files>\n" in rendered
+    assert "<parameter=path>\n/tmp\n</parameter>" in rendered
+    assert "<arg_key>" not in rendered
+    assert "<arg_value>" not in rendered

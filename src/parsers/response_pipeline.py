@@ -219,6 +219,10 @@ ARG_PAIR_RE = re.compile(
     r"<arg_key>(?P<key>.*?)</arg_key>\s*<arg_value>(?P<value>.*?)</arg_value>",
     re.DOTALL,
 )
+PARAMETER_RE = re.compile(
+    r"<parameter\s*=\s*(?P<key>[^>\s]+)\s*>(?P<value>.*?)</parameter>",
+    re.DOTALL,
+)
 LEGACY_FUNCTION_EQUALS_RE = re.compile(
     r"^<function\s*=\s*(?P<name>[A-Za-z_][\w.-]*)\s*>(?P<body>.*?)</function>$",
     re.DOTALL,
@@ -247,6 +251,24 @@ def _parse_xml_arg_pairs(args_text: str) -> Optional[dict[str, Any]]:
     return args
 
 
+def _parse_xml_parameter_pairs(args_text: str) -> Optional[dict[str, Any]]:
+    args: dict[str, Any] = {}
+    last_end = 0
+    for match in PARAMETER_RE.finditer(args_text):
+        gap = args_text[last_end:match.start()]
+        if gap.strip():
+            return None
+        key = match.group("key").strip()
+        value_text = match.group("value").strip()
+        if not key:
+            continue
+        args[key] = _maybe_json(value_text)
+        last_end = match.end()
+    if args_text[last_end:].strip():
+        return None
+    return args
+
+
 def _parse_legacy_function_tool_call(stripped: str) -> Optional[dict[str, Any]]:
     for pattern in (LEGACY_FUNCTION_EQUALS_RE, LEGACY_FUNCTION_TAG_RE):
         match = pattern.match(stripped)
@@ -259,6 +281,8 @@ def _parse_legacy_function_tool_call(stripped: str) -> Optional[dict[str, Any]]:
         if not body:
             return {"name": name, "arguments": {}}
         args = _parse_xml_arg_pairs(body)
+        if args is None:
+            args = _parse_xml_parameter_pairs(body)
         if args is None:
             return None
         return {"name": name, "arguments": args}
@@ -928,6 +952,7 @@ class ParseTagsParser(ResponseParser):
             content = message.get("content")
             if not isinstance(content, str) or not content:
                 continue
+            original_content = content
 
             parse_thinking = self.parse_thinking and not message.get("reasoning_content")
             parse_tool_calls = self.parse_tool_calls and not message.get("tool_calls")
@@ -937,6 +962,7 @@ class ParseTagsParser(ResponseParser):
                 parse_tool_calls=parse_tool_calls,
             )
             scanned = scanner.feed(content)
+            ended_inside_think = scanner.mode == "think"
             flushed = scanner.flush()
             parsed = TagScanResult(
                 content=scanned.content + flushed.content,
@@ -961,6 +987,25 @@ class ParseTagsParser(ResponseParser):
                 finish_reason = choice.get("finish_reason")
                 if finish_reason in {None, "stop"}:
                     choice["finish_reason"] = "tool_calls"
+
+            ambiguous_start_in_think = (
+                self.start_in_think
+                and parse_thinking
+                and ended_inside_think
+                and not tool_calls
+                and bool(parsed.reasoning)
+                and not (parsed.content or "").strip()
+            )
+            if ambiguous_start_in_think:
+                logger.debug(
+                    "parse_tags preserving original content for backend=%s model=%s because "
+                    "start_in_think stayed open without parsed content",
+                    ctx.backend,
+                    ctx.model,
+                )
+                message["content"] = original_content
+                message.pop("reasoning_content", None)
+                continue
 
             if isinstance(parsed.content, str):
                 if parsed.content.strip():
