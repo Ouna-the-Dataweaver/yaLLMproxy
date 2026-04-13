@@ -1,4 +1,4 @@
-"""Concurrency manager for per-key request limiting with priority queue."""
+"""Concurrency manager for request limiting with priority queue."""
 
 from __future__ import annotations
 
@@ -33,16 +33,16 @@ class QueuedRequest:
     request_id: str = field(compare=True)
 
     # Non-comparison fields
-    key_identifier: str = field(compare=False)
+    scope_identifier: str = field(compare=False)
     ready_event: asyncio.Event = field(compare=False, default_factory=asyncio.Event)
     cancelled: bool = field(compare=False, default=False)
 
 
 @dataclass
 class KeyConcurrencyState:
-    """Tracks concurrency state for a single key or the unauthenticated pool."""
+    """Tracks concurrency state for a single queue scope."""
 
-    key_identifier: str
+    scope_identifier: str
     concurrency_limit: int
     priority: int
 
@@ -70,7 +70,7 @@ class ConcurrencyMetrics:
 
 
 class ConcurrencyManager:
-    """Manages per-key concurrency limits with priority-based queuing.
+    """Manages concurrency limits with priority-based queuing.
 
     Thread Safety:
     - All state mutations happen within asyncio.Lock
@@ -78,14 +78,30 @@ class ConcurrencyManager:
     - Safe for concurrent access from multiple async tasks
 
     Design Principles:
-    - Each key has its own concurrency limit
+    - Each queue scope has its own concurrency limit
     - When at limit, new requests queue
     - Queue is globally ordered by (priority, timestamp)
-    - Released slots wake the highest-priority waiting request for that key
+    - Released slots wake the highest-priority waiting request for that scope
     """
 
     # Sentinel for unauthenticated requests
     UNAUTHENTICATED_KEY = "__unauthenticated__"
+
+    @classmethod
+    def build_scope_identifier(
+        cls,
+        key_identifier: str | None,
+        model_name: str | None = None,
+    ) -> str:
+        """Build a queue scope identifier.
+
+        Requests are isolated per `(app key, model)` pair so a busy model does
+        not block other models for the same key.
+        """
+        effective_key = key_identifier or cls.UNAUTHENTICATED_KEY
+        if model_name:
+            return f"{effective_key}::{model_name}"
+        return effective_key
 
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
@@ -102,7 +118,7 @@ class ConcurrencyManager:
 
     def _get_or_create_key_state(
         self,
-        key_identifier: str,
+        scope_identifier: str,
         concurrency_limit: int,
         priority: int,
     ) -> KeyConcurrencyState:
@@ -110,18 +126,18 @@ class ConcurrencyManager:
 
         Must be called while holding self._lock.
         """
-        if key_identifier not in self._key_states:
-            self._key_states[key_identifier] = KeyConcurrencyState(
-                key_identifier=key_identifier,
+        if scope_identifier not in self._key_states:
+            self._key_states[scope_identifier] = KeyConcurrencyState(
+                scope_identifier=scope_identifier,
                 concurrency_limit=concurrency_limit,
                 priority=priority,
             )
         else:
             # Update limits if config changed (hot reload support)
-            state = self._key_states[key_identifier]
+            state = self._key_states[scope_identifier]
             state.concurrency_limit = concurrency_limit
             state.priority = priority
-        return self._key_states[key_identifier]
+        return self._key_states[scope_identifier]
 
     def _has_available_slot(self, state: KeyConcurrencyState) -> bool:
         """Check if key has available concurrency slot.
@@ -139,6 +155,7 @@ class ConcurrencyManager:
         key_identifier: str | None,
         concurrency_limit: int,
         priority: int,
+        model_name: str | None = None,
         timeout: float | None = None,
         disconnect_checker: Union[Callable[[], bool], Callable[[], Awaitable[bool]]] | None = None,
     ) -> ConcurrencySlot:
@@ -148,6 +165,7 @@ class ConcurrencyManager:
             key_identifier: The app key ID, or None for unauthenticated
             concurrency_limit: Max concurrent requests for this key
             priority: Queue priority (lower = higher priority)
+            model_name: Optional request model name to partition queues per model
             timeout: Max seconds to wait in queue (None = wait forever)
             disconnect_checker: Optional callable returning True if client disconnected
 
@@ -158,13 +176,13 @@ class ConcurrencyManager:
             ConcurrencyQueueTimeout: If timeout exceeded
             ConcurrencyClientDisconnected: If client disconnected while waiting
         """
-        effective_key = key_identifier or self.UNAUTHENTICATED_KEY
+        scope_identifier = self.build_scope_identifier(key_identifier, model_name)
         request_id = uuid.uuid4().hex
         enqueue_time = time.monotonic()
 
         async with self._lock:
             state = self._get_or_create_key_state(
-                effective_key, concurrency_limit, priority
+                scope_identifier, concurrency_limit, priority
             )
             state.total_requests += 1
 
@@ -175,13 +193,13 @@ class ConcurrencyManager:
                 if logger.isEnabledFor(logging.DEBUG):
                     logger.debug(
                         "Concurrency slot acquired immediately: key=%s, active=%d/%d",
-                        effective_key,
+                        scope_identifier,
                         state.active_count,
                         state.concurrency_limit,
                     )
                 return ConcurrencySlot(
                     manager=self,
-                    key_identifier=effective_key,
+                    key_identifier=scope_identifier,
                     request_id=request_id,
                     wait_time_ms=0.0,
                 )
@@ -191,7 +209,7 @@ class ConcurrencyManager:
                 priority=priority,
                 timestamp=enqueue_time,
                 request_id=request_id,
-                key_identifier=effective_key,
+                scope_identifier=scope_identifier,
             )
             heapq.heappush(self._wait_queue, queued)
             self._pending_requests[request_id] = queued
@@ -200,13 +218,13 @@ class ConcurrencyManager:
             current_queue_depth = sum(
                 1
                 for q in self._wait_queue
-                if q.key_identifier == effective_key and not q.cancelled
+                if q.scope_identifier == scope_identifier and not q.cancelled
             )
             state.max_queue_depth = max(state.max_queue_depth, current_queue_depth)
 
             logger.info(
                 "Request queued: key=%s, priority=%d, queue_depth=%d, limit=%d",
-                effective_key,
+                scope_identifier,
                 priority,
                 current_queue_depth,
                 state.concurrency_limit,
@@ -218,20 +236,20 @@ class ConcurrencyManager:
             wait_time_ms = (time.monotonic() - enqueue_time) * 1000
 
             async with self._lock:
-                state = self._key_states.get(effective_key)
+                state = self._key_states.get(scope_identifier)
                 if state:
                     state.total_wait_time_ms += wait_time_ms
 
             logger.info(
                 "Request dequeued after %.1fms wait: key=%s, priority=%d",
                 wait_time_ms,
-                effective_key,
+                scope_identifier,
                 priority,
             )
 
             return ConcurrencySlot(
                 manager=self,
-                key_identifier=effective_key,
+                key_identifier=scope_identifier,
                 request_id=request_id,
                 wait_time_ms=wait_time_ms,
             )
@@ -265,7 +283,7 @@ class ConcurrencyManager:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise ConcurrencyQueueTimeout(
-                        f"Timeout waiting for concurrency slot: key={queued.key_identifier}"
+                        f"Timeout waiting for concurrency slot: key={queued.scope_identifier}"
                     )
                 wait_timeout = min(remaining, 0.5)  # Check disconnect every 500ms
             else:
@@ -281,7 +299,7 @@ class ConcurrencyManager:
                     is_disconnected = result
                 if is_disconnected:
                     raise ConcurrencyClientDisconnected(
-                        f"Client disconnected while waiting: key={queued.key_identifier}"
+                        f"Client disconnected while waiting: key={queued.scope_identifier}"
                     )
 
             # Wait for ready signal
@@ -299,7 +317,7 @@ class ConcurrencyManager:
         """Release a concurrency slot and wake next queued request.
 
         Args:
-            key_identifier: The key that held the slot
+            key_identifier: The queue scope that held the slot
             request_id: The request ID releasing the slot
         """
         async with self._lock:
@@ -337,7 +355,7 @@ class ConcurrencyManager:
         key_identifier: str,
         state: KeyConcurrencyState,
     ) -> None:
-        """Find and signal the next queued request for a key.
+        """Find and signal the next queued request for a scope.
 
         Must be called while holding self._lock.
         Uses heap property to find highest priority waiting request.
@@ -345,13 +363,13 @@ class ConcurrencyManager:
         if not self._has_available_slot(state):
             return
 
-        # Scan heap for first non-cancelled request matching this key
+        # Scan heap for first non-cancelled request matching this scope
         # Note: We don't remove from heap here to maintain heap invariant
         # Cancelled requests are cleaned up lazily
         for queued in self._wait_queue:
             if queued.cancelled:
                 continue
-            if queued.key_identifier != key_identifier:
+            if queued.scope_identifier != key_identifier:
                 continue
             if queued.ready_event.is_set():
                 continue
@@ -410,7 +428,7 @@ class ConcurrencyManager:
                 queued_by_key[key] = sum(
                     1
                     for q in self._wait_queue
-                    if q.key_identifier == key and not q.cancelled
+                    if q.scope_identifier == key and not q.cancelled
                 )
                 if state.total_queued > 0:
                     avg_wait_by_key[key] = state.total_wait_time_ms / state.total_queued

@@ -148,6 +148,7 @@ async def embeddings(request: Request) -> Response:
             key_identifier=app_key_ctx.key_id,
             concurrency_limit=concurrency_config.concurrency_limit,
             priority=concurrency_config.priority,
+            model_name=model_name,
             timeout=concurrency_config.queue_timeout,
             disconnect_checker=request.is_disconnected,
         )

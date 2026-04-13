@@ -193,6 +193,31 @@ class TestConcurrencyManager:
         await key2_slot.release()
 
     @pytest.mark.asyncio
+    async def test_same_key_different_models_have_separate_limits(self, manager):
+        """Requests for different models should not share the same queue scope."""
+        slot = await manager.acquire(
+            key_identifier="shared-key",
+            concurrency_limit=1,
+            priority=100,
+            model_name="model-a",
+        )
+
+        other_model_slot = await asyncio.wait_for(
+            manager.acquire(
+                key_identifier="shared-key",
+                concurrency_limit=1,
+                priority=100,
+                model_name="model-b",
+            ),
+            timeout=0.1,
+        )
+
+        assert other_model_slot.wait_time_ms == 0.0
+
+        await slot.release()
+        await other_model_slot.release()
+
+    @pytest.mark.asyncio
     async def test_metrics(self, manager):
         """Test that metrics are reported correctly."""
         slot = await manager.acquire("test-key", 5, 100)

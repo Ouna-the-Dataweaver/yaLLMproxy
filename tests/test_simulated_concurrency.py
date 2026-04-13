@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from conftest import build_messages_config, register_fake_upstream
 from src.concurrency import (
+    KeyConcurrencyConfig,
     get_concurrency_manager,
     reset_concurrency_manager,
 )
@@ -30,6 +32,18 @@ from src.testing import (
     assert_no_slot_leak,
     build_anthropic_request,
 )
+
+
+@dataclass
+class _FakeAppKeyContext:
+    key_id: str | None
+    key_name: str | None = "test-key"
+    authenticated: bool = True
+
+
+class _FakeAppKeyValidator:
+    def validate_request(self, request, model_name: str) -> _FakeAppKeyContext:
+        return _FakeAppKeyContext(key_id="shared-key")
 
 
 @pytest.fixture(autouse=True)
@@ -228,6 +242,83 @@ async def test_concurrent_mixed_stream_nonstream() -> None:
     success_count = sum(1 for r in results if r is True)
     assert success_count >= num_requests * 0.8, f"Too many failures: {success_count}/{num_requests}"
 
+    await assert_no_slot_leak(harness, timeout=5.0)
+
+
+@pytest.mark.asyncio
+async def test_same_key_different_models_do_not_block_each_other(monkeypatch) -> None:
+    """Requests for different models on the same key should run concurrently."""
+    import src.api.routes.messages as messages_route
+
+    upstream = FakeUpstream()
+    for _ in range(2):
+        upstream.enqueue_openai_chat_response("Response", chunk_delay_s=0.15)
+
+    base_url = "http://upstream.local/v1"
+    register_fake_upstream("upstream.local", upstream)
+
+    config = {
+        "model_list": [
+            {
+                "model_name": "model-a",
+                "model_params": {
+                    "model": "openai/fake",
+                    "api_base": base_url,
+                    "api_key": "test-key",
+                },
+            },
+            {
+                "model_name": "model-b",
+                "model_params": {
+                    "model": "openai/fake",
+                    "api_base": base_url,
+                    "api_key": "test-key",
+                },
+            },
+        ],
+    }
+
+    monkeypatch.setattr(messages_route, "get_app_key_validator", lambda: _FakeAppKeyValidator())
+    monkeypatch.setattr(
+        messages_route,
+        "get_key_concurrency_config",
+        lambda key_id: KeyConcurrencyConfig(
+            concurrency_limit=1,
+            priority=100,
+            queue_timeout=2.0,
+        ),
+    )
+
+    with ProxyHarness(
+        config,
+        enable_messages_endpoint=True,
+        enable_concurrency=True,
+        reset_concurrency=False,
+    ) as harness:
+        async with harness.make_async_client() as client:
+            start = time.monotonic()
+            responses = await asyncio.gather(
+                client.post(
+                    "/v1/messages",
+                    json=build_anthropic_request(
+                        messages=[{"role": "user", "content": "A"}],
+                        model="model-a",
+                        max_tokens=10,
+                    ),
+                ),
+                client.post(
+                    "/v1/messages",
+                    json=build_anthropic_request(
+                        messages=[{"role": "user", "content": "B"}],
+                        model="model-b",
+                        max_tokens=10,
+                    ),
+                ),
+            )
+            elapsed = time.monotonic() - start
+
+    assert all(response.status_code == 200 for response in responses)
+    assert elapsed < 0.28, f"Requests serialized across models; elapsed={elapsed:.3f}s"
     await assert_no_slot_leak(harness, timeout=5.0)
 
 
