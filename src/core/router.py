@@ -158,8 +158,11 @@ class ProxyRouter:
     async def register_backend(self, backend: Backend, fallbacks: Optional[List[str]]) -> bool:
         """Register or replace a backend at runtime. Returns True if replaced."""
         async with self._lock:
-            replaced = backend.name in self.backends
-            self.backends[backend.name] = backend
+            target = self.passthrough_backends if backend.passthrough else self.backends
+            other = self.backends if backend.passthrough else self.passthrough_backends
+            replaced = backend.name in target or backend.name in other
+            other.pop(backend.name, None)
+            target[backend.name] = backend
             if fallbacks is not None:
                 self.fallbacks[backend.name] = fallbacks
             return replaced
@@ -167,11 +170,15 @@ class ProxyRouter:
     async def unregister_backend(self, backend_name: str) -> bool:
         """Unregister a backend at runtime. Returns True if backend existed and was removed."""
         async with self._lock:
+            found = False
             if backend_name in self.backends:
                 del self.backends[backend_name]
-                self.fallbacks.pop(backend_name, None)
-                return True
-            return False
+                found = True
+            if backend_name in self.passthrough_backends:
+                del self.passthrough_backends[backend_name]
+                found = True
+            self.fallbacks.pop(backend_name, None)
+            return found
 
     async def reload_config(self, new_config: dict) -> None:
         """Reload router with new configuration atomically.
