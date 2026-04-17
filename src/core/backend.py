@@ -28,6 +28,7 @@ class ParameterConfig:
             falling back to default. If False, the proxy always uses default,
             ignoring the request value.
     """
+
     default: Any
     allow_override: bool = True
 
@@ -47,6 +48,7 @@ class Backend:
     supports_responses_api: bool = False  # Backend natively supports /v1/responses
     http2: bool = False
     editable: bool = False
+    passthrough: bool = False  # True if this is a passthrough backend (api_type: passthrough)
     parameters: dict[str, ParameterConfig] = field(default_factory=dict)
 
     def build_url(self, path: str, query: str) -> str:
@@ -57,7 +59,7 @@ class Backend:
             normalized_path = f"/{normalized_path}"
 
         if normalized_path.startswith("/v1"):
-            normalized_path = normalized_path[len("/v1"):]
+            normalized_path = normalized_path[len("/v1") :]
             if not normalized_path:
                 normalized_path = "/"
         url = f"{base}{normalized_path}"
@@ -104,7 +106,7 @@ def _safe_headers_for_log(headers: Mapping[str, str]) -> dict[str, str]:
 def format_httpx_error(exc: Any, backend: Backend, url: Optional[str] = None) -> str:
     """Produce a detailed, user-facing description of an httpx error."""
     import httpx
-    
+
     parts = [exc.__class__.__name__]
     message = str(exc).strip()
     if message:
@@ -134,19 +136,15 @@ def build_outbound_headers(
     headers: dict[str, str] = {}
     normalized_keys: set[str] = set()
     normalized_api_type = (api_type or "openai").strip().lower()
-    
+
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug("Incoming headers: %s", _safe_headers_for_log(incoming))
-    
+
     for key, value in incoming.items():
         key_lower = key.lower()
         # Strip hop-by-hop headers and sensitive headers
         # Note: We preserve accept-encoding to allow compression negotiation
-        if key_lower in HOP_BY_HOP_HEADERS or key_lower in {
-            "authorization",
-            "host",
-            "content-length"
-        }:
+        if key_lower in HOP_BY_HOP_HEADERS or key_lower in {"authorization", "host", "content-length"}:
             logger.debug(f"Stripping header: {key}")
             continue
         if normalized_api_type == "anthropic" and key_lower == "x-api-key":
@@ -184,7 +182,7 @@ def build_outbound_headers(
         if "anthropic-version" not in normalized_keys and anthropic_version:
             headers["anthropic-version"] = anthropic_version
             normalized_keys.add("anthropic-version")
-    
+
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug("Built outbound headers: %s", _safe_headers_for_log(headers))
         logger.debug("Outbound header count: %s", len(headers))
@@ -203,7 +201,7 @@ def build_backend_body(
     target_model = backend.target_model
     needs_thinking = False
     thinking_type_to_set = None
-    
+
     if backend.supports_reasoning:
         thinking = payload.get("thinking")
         if isinstance(thinking, Mapping):
@@ -236,9 +234,7 @@ def build_backend_body(
             updated_payload["stream"] = True
         if target_model:
             updated_payload["model"] = target_model
-            logger.debug(
-                "Rewrote model for backend %s to %s", backend.name, target_model
-            )
+            logger.debug("Rewrote model for backend %s to %s", backend.name, target_model)
         if needs_thinking and thinking_type_to_set:
             updated_payload["thinking"] = {"type": thinking_type_to_set}
             logger.debug("Set thinking type to '%s' for backend %s", thinking_type_to_set, backend.name)
@@ -249,24 +245,16 @@ def build_backend_body(
                 # Use request value if present, else default
                 if param_name not in updated_payload:
                     updated_payload[param_name] = config.default
-                    logger.debug(
-                        "Applied default %s=%s for backend %s (request missing)",
-                        param_name, config.default, backend.name
-                    )
+                    logger.debug("Applied default %s=%s for backend %s (request missing)", param_name, config.default, backend.name)
             else:
                 # Always use configured value, ignoring request
                 updated_payload[param_name] = config.default
-                logger.debug(
-                    "Forced %s=%s for backend %s (override disabled)",
-                    param_name, config.default, backend.name
-                )
+                logger.debug("Forced %s=%s for backend %s (override disabled)", param_name, config.default, backend.name)
 
         rewritten = json.dumps(updated_payload).encode("utf-8")
         return rewritten
     except (TypeError, ValueError) as exc:
-        logger.warning(
-            "Failed to rewrite payload for backend %s: %s", backend.name, exc
-        )
+        logger.warning("Failed to rewrite payload for backend %s: %s", backend.name, exc)
         return original_body
 
 
@@ -276,11 +264,7 @@ def filter_response_headers(headers: Mapping[str, str]) -> dict[str, str]:
     for key, value in headers.items():
         key_lower = key.lower()
         # Drop headers FastAPI will recompute or that no longer match the payload
-        if key_lower in HOP_BY_HOP_HEADERS or key_lower in {
-            "content-length", 
-            "transfer-encoding", 
-            "content-encoding"
-        }:
+        if key_lower in HOP_BY_HOP_HEADERS or key_lower in {"content-length", "transfer-encoding", "content-encoding"}:
             continue
         filtered[key] = value
     return filtered
@@ -302,9 +286,7 @@ def normalize_request_model(model_name: str) -> str:
     return stripped
 
 
-def extract_target_model(
-    params: Mapping[str, Any], api_type: Optional[str] = None
-) -> Optional[str]:
+def extract_target_model(params: Mapping[str, Any], api_type: Optional[str] = None) -> Optional[str]:
     """Extract the target model name from parameters."""
     override = params.get("target_model") or params.get("forward_model")
     if override:
@@ -316,14 +298,12 @@ def extract_target_model(
     if not raw_model:
         return None
 
-    normalized_api_type = str(
-        api_type or params.get("api_type") or "openai"
-    ).strip().lower() or "openai"
+    normalized_api_type = str(api_type or params.get("api_type") or "openai").strip().lower() or "openai"
     expected_prefix = f"{normalized_api_type}/"
     lower_model = raw_model.lower()
 
     if lower_model.startswith(expected_prefix):
-        remainder = raw_model[len(expected_prefix):]
+        remainder = raw_model[len(expected_prefix) :]
         if remainder:
             return remainder
 

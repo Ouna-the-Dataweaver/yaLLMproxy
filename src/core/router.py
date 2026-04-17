@@ -36,10 +36,10 @@ DEFAULT_TIMEOUT = 30
 
 class ProxyRouter:
     """Routes requests to backends with fallback support."""
-    
+
     def __init__(self, config: Dict) -> None:
-        self.backends = self._parse_backends(config.get("model_list", []))
-        if not self.backends:
+        self.backends, self.passthrough_backends = self._parse_backends(config.get("model_list", []))
+        if not self.backends and not self.passthrough_backends:
             raise RuntimeError("No backends found in config")
         self._lock = asyncio.Lock()
         self.response_modules = build_response_module_pipeline(config)
@@ -80,16 +80,12 @@ class ProxyRouter:
         request_log: Optional[Any] = None,
         disconnect_checker: Optional[Callable[[], Awaitable[bool]]] = None,
     ) -> Response:
-        logger.info(
-            f"Received request for model: {model_name}, path: {path}, stream: {is_stream}"
-        )
+        logger.info(f"Received request for model: {model_name}, path: {path}, stream: {is_stream}")
 
         if request_log:
-            request_log.configure_parsed_logging(
-                self.log_parsed_response, self.log_parsed_stream
-            )
+            request_log.configure_parsed_logging(self.log_parsed_response, self.log_parsed_stream)
             request_log.configure_disk_logging(self.log_to_disk)
-        
+
         try:
             route = await self._build_route(model_name)
             if request_log:
@@ -103,7 +99,7 @@ class ProxyRouter:
         last_error_message: Optional[str] = None
 
         for i, backend in enumerate(route):
-            logger.info(f"Attempting backend {i+1}/{len(route)}: {backend.name}")
+            logger.info(f"Attempting backend {i + 1}/{len(route)}: {backend.name}")
             try:
                 response = await self._call_backend_with_retries(
                     backend,
@@ -159,9 +155,7 @@ class ProxyRouter:
                 raise KeyError(f"Model '{model_name}' is not defined in config")
             return order
 
-    async def register_backend(
-        self, backend: Backend, fallbacks: Optional[List[str]]
-    ) -> bool:
+    async def register_backend(self, backend: Backend, fallbacks: Optional[List[str]]) -> bool:
         """Register or replace a backend at runtime. Returns True if replaced."""
         async with self._lock:
             replaced = backend.name in self.backends
@@ -189,7 +183,7 @@ class ProxyRouter:
             new_config: The new configuration dictionary.
         """
         async with self._lock:
-            self.backends = self._parse_backends(new_config.get("model_list", []))
+            self.backends, self.passthrough_backends = self._parse_backends(new_config.get("model_list", []))
             self.response_modules = build_response_module_pipeline(new_config)
             self.response_module_overrides = build_response_module_overrides(new_config)
             # Backwards-compatible aliases (parsers -> modules)
@@ -234,6 +228,14 @@ class ProxyRouter:
         async with self._lock:
             return list(self.backends.keys())
 
+    async def list_passthrough_model_names(self) -> List[str]:
+        async with self._lock:
+            return list(self.passthrough_backends.keys())
+
+    def get_passthrough_backend(self, model_name: str) -> Optional[Backend]:
+        """Get a passthrough backend by name (no lock needed for read-only access)."""
+        return self.passthrough_backends.get(model_name)
+
     async def _call_backend_with_retries(
         self,
         backend: Backend,
@@ -248,11 +250,11 @@ class ProxyRouter:
         disconnect_checker: Optional[Callable[[], Awaitable[bool]]] = None,
     ) -> Response:
         from .backend import DEFAULT_RETRY_DELAY, MAX_RETRY_DELAY
-        
+
         attempts = max(1, self.num_retries)
         delay = DEFAULT_RETRY_DELAY
         last_error: Optional[BackendRetryableError] = None
-        
+
         logger.info(f"Calling backend {backend.name} with {attempts} max attempts")
 
         for attempt in range(attempts):
@@ -277,12 +279,8 @@ class ProxyRouter:
                 last_error = exc
                 logger.warning(f"Backend {backend.name} attempt {attempt + 1} failed: {exc}")
             except httpx.HTTPError as exc:
-                error_detail = format_httpx_error(
-                    exc, backend, url=backend.build_url(path, query)
-                )
-                last_error = BackendRetryableError(
-                    f"{backend.name} request error: {error_detail}"
-                )
+                error_detail = format_httpx_error(exc, backend, url=backend.build_url(path, query))
+                last_error = BackendRetryableError(f"{backend.name} request error: {error_detail}")
                 logger.exception(
                     "Backend %s HTTP error on attempt %d/%d: %s",
                     backend.name,
@@ -322,7 +320,7 @@ class ProxyRouter:
         disconnect_checker: Optional[Callable[[], Awaitable[bool]]] = None,
     ) -> Response:
         from .backend import DEFAULT_TIMEOUT
-        
+
         url = backend.build_url(path, query)
         outbound_headers = build_outbound_headers(
             headers,
@@ -339,43 +337,28 @@ class ProxyRouter:
                 backend=backend.name,
                 is_stream=is_stream,
             )
-            content_type = (
-                headers.get("content-type")
-                or headers.get("Content-Type")
-                or ""
-            )
+            content_type = headers.get("content-type") or headers.get("Content-Type") or ""
             if not content_type or "application/json" in content_type.lower():
-                updated_payload = request_pipeline.transform_request_payload(
-                    payload, request_context
-                )
+                updated_payload = request_pipeline.transform_request_payload(payload, request_context)
                 if updated_payload is not None:
                     payload = updated_payload
                     try:
                         body = json.dumps(updated_payload, ensure_ascii=False).encode("utf-8")
                     except (TypeError, ValueError):
-                        logger.warning(
-                            "Failed to encode updated request payload from modules; "
-                            "falling back to original body."
-                        )
-        outbound_body = build_backend_body(
-            payload, backend, body, is_stream=is_stream
-        )
+                        logger.warning("Failed to encode updated request payload from modules; falling back to original body.")
+        outbound_body = build_backend_body(payload, backend, body, is_stream=is_stream)
         timeout = backend.timeout or DEFAULT_TIMEOUT
         if request_log:
             request_log.record_backend_attempt(backend.name, attempt_number, url)
 
-        logger.debug(
-            f"Executing request to {url} with timeout {timeout}s, stream: {is_stream}"
-        )
+        logger.debug(f"Executing request to {url} with timeout {timeout}s, stream: {is_stream}")
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
                 "Outbound headers for %s: %s",
                 backend.name,
                 _safe_headers_for_log(outbound_headers),
             )
-        logger.debug(
-            f"HTTP/2 enabled for {backend.name}: {backend.http2}"
-        )
+        logger.debug(f"HTTP/2 enabled for {backend.name}: {backend.http2}")
 
         if is_stream:
             logger.debug(f"Initiating streaming request to {url}")
@@ -429,12 +412,8 @@ class ProxyRouter:
         transport = get_upstream_transport(url)
 
         async def _post(http2_enabled: bool) -> httpx.Response:
-            async with httpx.AsyncClient(
-                timeout=timeout, http2=http2_enabled, transport=transport, follow_redirects=True
-            ) as client:
-                return await client.post(
-                    url, headers=outbound_headers, content=outbound_body
-                )
+            async with httpx.AsyncClient(timeout=timeout, http2=http2_enabled, transport=transport, follow_redirects=True) as client:
+                return await client.post(url, headers=outbound_headers, content=outbound_body)
 
         try:
             resp = await _post(backend.http2)
@@ -456,14 +435,9 @@ class ProxyRouter:
 
         if resp.status_code in {408, 409, 429, 500, 502, 503, 504}:
             if request_log:
-                request_log.record_error(
-                    f"{backend.name} returned retryable status {resp.status_code}",
-                    error_type="http_retryable"
-                )
+                request_log.record_error(f"{backend.name} returned retryable status {resp.status_code}", error_type="http_retryable")
             response = _build_response_from_httpx(resp)
-            raise BackendRetryableError(
-                f"{backend.name} returned status {resp.status_code}", response=response
-            )
+            raise BackendRetryableError(f"{backend.name} returned status {resp.status_code}", response=response)
 
         pipeline = self._select_response_parsers(backend.name)
         parser_context = ModuleContext(
@@ -472,21 +446,18 @@ class ProxyRouter:
             backend=backend.name,
             is_stream=is_stream,
         )
-        parsed_body = pipeline.transform_response_body(
-            resp.content, resp.headers.get("content-type"), parser_context
-        )
+        parsed_body = pipeline.transform_response_body(resp.content, resp.headers.get("content-type"), parser_context)
 
         # Extract logging data from response (works with or without parsed_body)
         if request_log:
             # Use parsed_body if available, otherwise fall back to raw content
             body_to_log = parsed_body if parsed_body is not None else resp.content
             if parsed_body is not None:
-                request_log.record_parsed_response(
-                    resp.status_code, resp.headers, parsed_body
-                )
+                request_log.record_parsed_response(resp.status_code, resp.headers, parsed_body)
             # Extract usage stats and response content for logging
             try:
                 import json as json_module
+
                 payload = json_module.loads(body_to_log)
                 if isinstance(payload, dict):
                     if "usage" in payload:
@@ -494,14 +465,7 @@ class ProxyRouter:
 
                     # Detect anthropic format: has "type": "message" or
                     # has "content" + "stop_reason" at top level without "choices"
-                    is_anthropic = (
-                        payload.get("type") == "message"
-                        or (
-                            "content" in payload
-                            and "stop_reason" in payload
-                            and "choices" not in payload
-                        )
-                    )
+                    is_anthropic = payload.get("type") == "message" or ("content" in payload and "stop_reason" in payload and "choices" not in payload)
 
                     if is_anthropic:
                         # Anthropic format: extract stop_reason directly
@@ -522,11 +486,7 @@ class ProxyRouter:
                         if isinstance(choices, list) and choices:
                             choice = choices[0]
                             if isinstance(choice, dict):
-                                finish_reason = (
-                                    choice.get("finish_reason")
-                                    or choice.get("stop_reason")
-                                    or choice.get("reason")
-                                )
+                                finish_reason = choice.get("finish_reason") or choice.get("stop_reason") or choice.get("reason")
                                 if isinstance(finish_reason, str) and finish_reason:
                                     request_log.record_stop_reason(finish_reason)
                                 # Extract message content for full_response accumulation
@@ -543,8 +503,9 @@ class ProxyRouter:
         return _build_response_from_httpx(resp)
 
     @staticmethod
-    def _parse_backends(entries: List[Dict]) -> Dict[str, Backend]:
+    def _parse_backends(entries: List[Dict]) -> tuple[Dict[str, Backend], Dict[str, Backend]]:
         backends: Dict[str, Backend] = {}
+        passthrough_backends: Dict[str, Backend] = {}
         for entry in entries:
             name = entry.get("model_name")
             params = entry.get("model_params") or {}
@@ -577,6 +538,8 @@ class ProxyRouter:
             supports_responses_api = _parse_bool(params.get("supports_responses_api"))
             http2 = _parse_bool(params.get("http2"))
             editable = _parse_bool(entry.get("editable"))
+            # Check if this is a passthrough backend
+            is_passthrough = api_type == "passthrough"
 
             # Parse parameter overrides (support top-level or model_params.parameters)
             param_configs: Dict[str, ParameterConfig] = {}
@@ -595,7 +558,7 @@ class ProxyRouter:
                         allow_override=allow_override,
                     )
 
-            backends[name] = Backend(
+            backend = Backend(
                 name=name,
                 base_url=base,
                 api_key=api_key,
@@ -607,9 +570,15 @@ class ProxyRouter:
                 supports_responses_api=supports_responses_api,
                 http2=http2,
                 editable=editable,
+                passthrough=is_passthrough,
                 parameters=param_configs,
             )
-        return backends
+
+            if is_passthrough:
+                passthrough_backends[name] = backend
+            else:
+                backends[name] = backend
+        return backends, passthrough_backends
 
     @staticmethod
     def _parse_fallbacks(entries: List[Dict]) -> Dict[str, List[str]]:
@@ -630,7 +599,7 @@ class ProxyRouter:
 
 def _build_response_from_httpx(resp: httpx.Response, content: Optional[bytes] = None) -> Response:
     from .backend import filter_response_headers
-    
+
     body = content if content is not None else resp.content
     headers = filter_response_headers(resp.headers)
     media_type = headers.get("content-type")
@@ -654,16 +623,14 @@ async def _streaming_request(
         RETRYABLE_STATUSES,
         filter_response_headers,
     )
-    
+
     from fastapi.responses import StreamingResponse
-    
+
     logger.debug(f"Setting up streaming client for {url}")
     logger.debug(f"Stream timeout config - connect={timeout}s, read=None, write={timeout}s, pool={timeout}s")
     logger.debug(f"HTTP/2 client: {http2}")
     logger.debug(f"Request body size: {len(body)} bytes")
-    stream_timeout = httpx.Timeout(
-        connect=timeout, read=None, write=timeout, pool=timeout
-    )
+    stream_timeout = httpx.Timeout(connect=timeout, read=None, write=timeout, pool=timeout)
     transport = get_upstream_transport(url)
     client = httpx.AsyncClient(timeout=stream_timeout, http2=http2, transport=transport, follow_redirects=True)
     try:  # TODO: use context manager 'with httpx.AsyncClient'
@@ -703,26 +670,17 @@ async def _streaming_request(
         await client.aclose()
 
     if resp.status_code in RETRYABLE_STATUSES:
-        logger.warning(
-            f"Streaming request to {url} returned retryable status {resp.status_code}"
-        )
+        logger.warning(f"Streaming request to {url} returned retryable status {resp.status_code}")
         data = await resp.aread()
         await close_stream()
         if request_log:
             request_log.record_backend_response(resp.status_code, resp.headers, data)
-            request_log.record_error(
-                f"stream request returned retryable status {resp.status_code}",
-                error_type="http_retryable"
-            )
+            request_log.record_error(f"stream request returned retryable status {resp.status_code}", error_type="http_retryable")
         response = _build_response_from_httpx(resp, data)
-        raise BackendRetryableError(
-            f"stream request returned status {resp.status_code}", response=response
-        )
+        raise BackendRetryableError(f"stream request returned status {resp.status_code}", response=response)
 
     if resp.status_code >= 400:
-        logger.warning(
-            f"Streaming request to {url} returned error status {resp.status_code}"
-        )
+        logger.warning(f"Streaming request to {url} returned error status {resp.status_code}")
         data = await resp.aread()
         await close_stream()
         if request_log:
@@ -734,13 +692,13 @@ async def _streaming_request(
 
     # Buffer initial chunks to detect SSE errors before committing to stream
     from .sse import STREAM_ERROR_CHECK_BUFFER_SIZE
-    
+
     initial_buffer = bytearray()
     buffered_chunks: List[bytes] = []
     # Use decoded bytes so content-encoding doesn't leak compressed data to clients.
     stream = resp.aiter_bytes()
     stream_exhausted = False
-    
+
     while len(initial_buffer) < STREAM_ERROR_CHECK_BUFFER_SIZE:
         try:
             chunk = await stream.__anext__()
@@ -757,11 +715,11 @@ async def _streaming_request(
     sse_error = detect_sse_stream_error(bytes(initial_buffer))
     if sse_error:
         logger.warning(f"Detected SSE error in stream from {url}: {sse_error}")
-        
+
         # Log the SSE error event
         if request_log:
             request_log.record_error(sse_error, error_type="sse_stream_error")
-        
+
         # Read the rest of the stream for logging purposes
         remaining_data = bytearray(initial_buffer)
         if not stream_exhausted:
@@ -774,7 +732,7 @@ async def _streaming_request(
             except Exception:
                 pass  # Best effort to capture remaining data
         await close_stream()
-        
+
         # Build a response to return if all backends fail
         response = Response(
             content=bytes(remaining_data),
@@ -820,11 +778,7 @@ async def _streaming_request(
         first_content_detected = False
 
         def _extract_finish_reason(choice: Mapping[str, Any]) -> Optional[str]:
-            finish_reason = (
-                choice.get("finish_reason")
-                or choice.get("stop_reason")
-                or choice.get("reason")
-            )
+            finish_reason = choice.get("finish_reason") or choice.get("stop_reason") or choice.get("reason")
             if isinstance(finish_reason, str) and finish_reason:
                 return finish_reason
             return None
@@ -1092,11 +1046,7 @@ async def _streaming_request(
                     choice_for_debug: Optional[Mapping[str, Any]] = None
                     if not finish_reason:
                         source_payload = last_choice_data or last_chunk_data
-                        choices = (
-                            source_payload.get("choices")
-                            if isinstance(source_payload, dict)
-                            else None
-                        )
+                        choices = source_payload.get("choices") if isinstance(source_payload, dict) else None
                         if choices and isinstance(choices, list) and len(choices) > 0:
                             choice = choices[0]
                             if isinstance(choice, dict):
