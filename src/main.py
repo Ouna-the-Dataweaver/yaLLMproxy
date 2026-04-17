@@ -24,6 +24,7 @@ logger = setup_logging()
 try:
     from .database.factory import get_database, reset_database_instance
     from .database.logger import _PENDING_DB_TASKS
+
     DATABASE_AVAILABLE = True
 except ImportError:
     DATABASE_AVAILABLE = False
@@ -35,6 +36,7 @@ from .core import ProxyRouter
 from .core.registry import set_router
 from .api.routes import chat_completions, embeddings, list_models, register_model, config as config_routes, usage, logs
 from .api.routes import keys as key_routes
+from .api.routes.passthrough import passthrough_request
 from .api.routes.rerank import rerank
 from .api.routes.responses import responses_endpoint
 from .api.routes.messages import messages_endpoint
@@ -91,9 +93,7 @@ general_settings = config.get("general_settings") or {}
 if "enable_responses_endpoint" in proxy_settings:
     enable_responses_endpoint = bool(proxy_settings.get("enable_responses_endpoint"))
 else:
-    enable_responses_endpoint = bool(
-        general_settings.get("enable_responses_endpoint", False)
-    )
+    enable_responses_endpoint = bool(general_settings.get("enable_responses_endpoint", False))
 
 logger.info(f"Responses endpoint enabled: {enable_responses_endpoint}")
 
@@ -101,9 +101,7 @@ logger.info(f"Responses endpoint enabled: {enable_responses_endpoint}")
 if "enable_messages_endpoint" in proxy_settings:
     enable_messages_endpoint = bool(proxy_settings.get("enable_messages_endpoint"))
 else:
-    enable_messages_endpoint = bool(
-        general_settings.get("enable_messages_endpoint", False)
-    )
+    enable_messages_endpoint = bool(general_settings.get("enable_messages_endpoint", False))
 
 logger.info(f"Messages endpoint enabled: {enable_messages_endpoint}")
 
@@ -128,6 +126,7 @@ _FULL_REQUEST_CLEANUP_STOP: asyncio.Event | None = None
 static_dir = Path(__file__).parent.parent / "static"
 if static_dir.exists():
     from fastapi.staticfiles import StaticFiles
+
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
     logger.info(f"Static files mounted from {static_dir}")
 else:
@@ -137,14 +136,16 @@ else:
 async def startup_event():
     """Handle application startup."""
     import sys
+
     # Set UTF-8 encoding for Windows
     if sys.platform == "win32":
         import codecs
+
         try:
             sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         except Exception:
             pass
-    
+
     # Print awesome ASCII art banner
     print("""
 ╔═════════════════════════════════════════╗
@@ -156,7 +157,7 @@ async def startup_event():
 ║        =(^_^)=                =(^_^)=   ║
 ╚═════════════════════════════════════════╝
     """)
-    
+
     logger.info("yaLLMp Proxy server starting up...")
     logger.info("Configured bind address %s:%s", SERVER_HOST, SERVER_PORT)
     if SERVER_HOST == "0.0.0.0":
@@ -171,6 +172,11 @@ async def startup_event():
     logger.info(f"Available backends: {list(router.backends.keys())}")
     for name, backend in router.backends.items():
         logger.info(f"  - {name}: {backend.base_url}")
+
+    if router.passthrough_backends:
+        logger.info(f"Passthrough backends: {list(router.passthrough_backends.keys())}")
+        for name, backend in router.passthrough_backends.items():
+            logger.info(f"  - {name}: {backend.base_url}")
 
     # Initialize database if available
     if DATABASE_AVAILABLE:
@@ -218,6 +224,7 @@ async def shutdown_event():
     if DATABASE_AVAILABLE:
         try:
             from .database.factory import reset_database_instance
+
             reset_database_instance()
             logger.info("Database connections closed")
         except Exception as e:
@@ -316,10 +323,16 @@ if enable_messages_endpoint:
 else:
     logger.info("Messages endpoint is disabled in configuration")
 
+# Register passthrough endpoints (p1 = passthrough 1)
+# These provide direct proxying for non-OpenAI compatible upstreams
+# Path format: /p1/{model_name}/{endpoint_path}
+app.api_route("/p1/{model_name}/{endpoint_path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])(passthrough_request)
+logger.info("Passthrough endpoints registered at /p1/{model_name}/*")
+
 
 def create_app() -> FastAPI:
     """Factory function to create the FastAPI application.
-    
+
     Returns:
         The configured FastAPI application instance.
     """

@@ -284,6 +284,11 @@
   color: #8a6b22;
 }
 
+.badge-passthrough {
+  background: rgba(139, 92, 246, 0.18);
+  color: #7c3aed;
+}
+
 .badge-reasoning {
   background: rgba(59, 130, 246, 0.18);
   color: #1d4ed8;
