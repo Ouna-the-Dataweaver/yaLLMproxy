@@ -731,6 +731,22 @@ class RequestLogRecorder:
                 self._is_tool_call = True
             self._append_text(f"stop_reason={reason}\n")
 
+    def record_response_content(self, content: Any) -> None:
+        """Accumulate visible assistant response content."""
+        if self._finalized:
+            return
+        if isinstance(content, str) and content:
+            self._accumulated_response_parts.append(content)
+
+    def record_reasoning_content(self, reasoning: Any) -> None:
+        """Accumulate assistant reasoning content."""
+        if self._finalized:
+            return
+        if isinstance(reasoning, str) and reasoning:
+            if self._accumulated_reasoning_content is None:
+                self._accumulated_reasoning_content = ""
+            self._accumulated_reasoning_content += reasoning
+
     def record_stream_delta(
         self,
         delta: dict[str, Any],
@@ -749,9 +765,7 @@ class RequestLogRecorder:
             return
 
         # Accumulate content
-        content = delta.get("content")
-        if isinstance(content, str) and content:
-            self._accumulated_response_parts.append(content)
+        self.record_response_content(delta.get("content"))
 
         # Accumulate tool calls - merge by index to avoid duplicates from streaming
         tool_calls = delta.get("tool_calls")
@@ -787,12 +801,12 @@ class RequestLogRecorder:
                         # Add as new tool call
                         self._accumulated_tool_calls.append(tc.copy())
 
-        # Accumulate reasoning content
+        # Accumulate reasoning content. Non-streaming provider responses often
+        # use the same assistant message shape but may call this field "reasoning".
         reasoning = delta.get("reasoning_content")
-        if isinstance(reasoning, str) and reasoning:
-            if self._accumulated_reasoning_content is None:
-                self._accumulated_reasoning_content = ""
-            self._accumulated_reasoning_content += reasoning
+        if not isinstance(reasoning, str):
+            reasoning = delta.get("reasoning")
+        self.record_reasoning_content(reasoning)
 
     def record_conversation_turn(self, turn: int) -> None:
         """Record the conversation turn number for agentic workflows.

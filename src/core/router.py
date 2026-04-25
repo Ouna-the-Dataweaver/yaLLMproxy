@@ -499,9 +499,11 @@ class ProxyRouter:
                                 # Extract message content for full_response accumulation
                                 message = choice.get("message")
                                 if isinstance(message, dict):
-                                    content = message.get("content")
-                                    if isinstance(content, str) and content:
-                                        request_log._accumulated_response_parts.append(content)
+                                    request_log.record_response_content(message.get("content"))
+                                    reasoning = message.get("reasoning_content")
+                                    if not isinstance(reasoning, str):
+                                        reasoning = message.get("reasoning")
+                                    request_log.record_reasoning_content(reasoning)
             except (json_module.JSONDecodeError, TypeError):
                 pass
 
