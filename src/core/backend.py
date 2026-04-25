@@ -75,6 +75,15 @@ def _parse_bool(value: Any) -> bool:
     return bool(value)
 
 
+def _has_structured_output_response_format(payload: Mapping[str, Any]) -> bool:
+    response_format = payload.get("response_format")
+    if not isinstance(response_format, Mapping):
+        return False
+
+    response_format_type = str(response_format.get("type") or "").strip().lower()
+    return response_format_type in {"json_object", "json_schema"}
+
+
 HOP_BY_HOP_HEADERS = {
     "connection",
     "keep-alive",
@@ -201,6 +210,7 @@ def build_backend_body(
     target_model = backend.target_model
     needs_thinking = False
     thinking_type_to_set = None
+    has_structured_output = _has_structured_output_response_format(payload)
 
     if backend.supports_reasoning:
         thinking = payload.get("thinking")
@@ -217,6 +227,10 @@ def build_backend_body(
                 # Unknown type, enable thinking as default for reasoning-enabled backends
                 needs_thinking = True
                 thinking_type_to_set = "enabled"
+        elif has_structured_output:
+            # Implicit thinking can break upstream structured output constraints. If
+            # callers want both, they must request thinking explicitly.
+            needs_thinking = False
         else:
             # No thinking parameter specified, enable thinking by default for this backend
             needs_thinking = True

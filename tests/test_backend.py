@@ -264,6 +264,36 @@ class TestBuildBackendBody:
         parsed = json.loads(result)
         assert parsed.get("thinking") == {"type": "enabled"}
 
+    def test_does_not_add_thinking_for_structured_output(self):
+        """Structured output requests should be forwarded without implicit reasoning controls."""
+        payload = {
+            "model": "test",
+            "messages": [{"role": "user", "content": "Give me a JSON object"}],
+            "response_format": {
+                "type": "json_object",
+                "schema": {
+                    "name": {"type": "string"},
+                    "age": {"type": "integer"},
+                },
+            },
+        }
+        backend = Backend(
+            name="test",
+            base_url="https://api.example.com",
+            api_key="key",
+            timeout=None,
+            target_model=None,
+            supports_reasoning=True,
+        )
+        import json
+
+        original_body = json.dumps(payload).encode("utf-8")
+        result = build_backend_body(payload, backend, original_body)
+        parsed = json.loads(result)
+
+        assert "thinking" not in parsed
+        assert parsed["response_format"] == payload["response_format"]
+
     def test_does_not_add_thinking_when_disabled(self):
         """Test that thinking is not added when explicitly disabled."""
         payload = {"model": "test", "messages": [], "thinking": {"type": "disabled"}}
