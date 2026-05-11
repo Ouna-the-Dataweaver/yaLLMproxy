@@ -16,6 +16,19 @@ from src.logging.recorder import RequestLogRecorder
 from src.testing import FakeUpstream, ProxyHarness, UpstreamResponse
 
 
+class _FakeAppKeyValidator:
+    def validate_request(self, request, model_name: str):
+        return type(
+            "AppKeyContext",
+            (),
+            {
+                "key_id": "test-key",
+                "key_name": "test-key",
+                "authenticated": True,
+            },
+        )()
+
+
 def _build_reasoning_config(base_url: str) -> dict:
     return {
         "model_list": [
@@ -42,7 +55,10 @@ def _build_reasoning_config(base_url: str) -> dict:
 
 
 @pytest.fixture(autouse=True)
-def _clear_transport_registry() -> None:
+def _clear_transport_registry(monkeypatch: pytest.MonkeyPatch) -> None:
+    import src.api.routes.chat as chat_route
+
+    monkeypatch.setattr(chat_route, "get_app_key_validator", lambda: _FakeAppKeyValidator())
     yield
     clear_upstream_transports()
 
