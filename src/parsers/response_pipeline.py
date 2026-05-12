@@ -424,6 +424,7 @@ class XmlToolCallStreamState:
     first_parameter: bool = True
     param_tail: str = ""
     param_value_started: bool = False
+    param_value_mode: Optional[str] = None
     disabled: bool = False
     emitted: bool = False
 
@@ -500,6 +501,7 @@ class XmlToolCallStreamer:
                 self.state.buffer = self.state.buffer[match.end():]
                 self.state.param_tail = ""
                 self.state.param_value_started = False
+                self.state.param_value_mode = None
                 self.state.phase = "parameter_value"
                 continue
 
@@ -513,9 +515,17 @@ class XmlToolCallStreamer:
                     break
                 self._append_parameter_text(self.state.buffer[:close_idx], chunks)
                 final_value = self.state.param_tail.rstrip()
-                if not self.state.param_value_started:
+                if self.state.param_value_mode == "json":
+                    value_text = final_value.strip()
+                    try:
+                        chunks.append({"arguments": json.dumps(json.loads(value_text), ensure_ascii=False)})
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        chunks.append({"arguments": '"' + _json_string_fragment(value_text) + '"'})
+                elif not self.state.param_value_started:
                     chunks.append({"arguments": '"'})
-                chunks.append({"arguments": _json_string_fragment(final_value) + '"'})
+                    chunks.append({"arguments": _json_string_fragment(final_value) + '"'})
+                else:
+                    chunks.append({"arguments": _json_string_fragment(final_value) + '"'})
                 self.state.param_tail = ""
                 self.state.buffer = self.state.buffer[close_idx + len(close):]
                 self.state.phase = "between_parameters"
@@ -530,8 +540,22 @@ class XmlToolCallStreamer:
     def _append_parameter_text(self, text: str, chunks: list[dict[str, Any]]) -> None:
         if not text:
             return
+        if self.state.param_value_mode == "json":
+            self.state.param_tail += text
+            return
         if not self.state.param_value_started:
-            text = text.lstrip()
+            text = self.state.param_tail + text
+            self.state.param_tail = ""
+            stripped = text.lstrip()
+            if not stripped:
+                self.state.param_tail = text
+                return
+            if stripped[0] in "{[":
+                self.state.param_value_mode = "json"
+                self.state.param_value_started = True
+                self.state.param_tail = text
+                return
+            text = stripped
             chunks.append({"arguments": '"'})
             self.state.param_value_started = True
         combined = self.state.param_tail + text

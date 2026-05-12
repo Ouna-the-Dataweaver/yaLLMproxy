@@ -390,6 +390,56 @@ def test_parse_template_qwen_streams_legacy_function_arguments() -> None:
     assert "tool_calls" in finish_reasons
 
 
+def test_parse_template_qwen_streams_json_parameter_as_object() -> None:
+    parser = TemplateParseParser(
+        {
+            "template_path": str(QWEN_TEMPLATE),
+            "parse_thinking": True,
+            "parse_tool_calls": True,
+            "stream_tool_calls": True,
+        }
+    )
+    state = parser.create_stream_state()
+    ctx = ModuleContext(
+        path="/chat/completions",
+        model="test-model",
+        backend="test-backend",
+        is_stream=True,
+    )
+
+    chunks = [
+        "<tool_call>\n<function=fill_form>\n<parameter=document_name>\n",
+        "Тестовый_рапорт.docx\n</parameter>\n<parameter=form_data>\n",
+        '{"место_составления": "г. Москва", "дата_год": "2026"}',
+        "\n</parameter>\n</function>\n</tool_call>",
+    ]
+
+    parsed_events: list[dict] = []
+    for chunk in chunks:
+        event = {"choices": [{"index": 0, "delta": {"content": chunk}}]}
+        updated = parser.apply_stream_event(event, state, ctx)
+        parsed_events.extend(updated if isinstance(updated, list) else [updated])
+    parsed_events.extend(parser.finalize_stream(state, ctx))
+
+    argument_fragments: list[str] = []
+    for event in parsed_events:
+        choice = event["choices"][0]
+        for tool_call in choice.get("delta", {}).get("tool_calls", []):
+            function = tool_call.get("function", {})
+            if "arguments" in function:
+                argument_fragments.append(function["arguments"])
+
+    arguments = "".join(argument_fragments)
+    try:
+        parsed = json.loads(arguments)
+    except json.JSONDecodeError as exc:
+        pytest.fail(f"streamed arguments are not valid JSON: {arguments!r}: {exc}")
+    assert parsed == {
+        "document_name": "Тестовый_рапорт.docx",
+        "form_data": {"место_составления": "г. Москва", "дата_год": "2026"},
+    }
+
+
 def test_parse_template_qwen_parameter_tags_non_stream() -> None:
     parser = TemplateParseParser(
         {
