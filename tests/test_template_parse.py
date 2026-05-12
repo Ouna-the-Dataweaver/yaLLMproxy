@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -329,6 +330,64 @@ def test_parse_template_qwen_legacy_function_equals_non_stream() -> None:
     assert message["tool_calls"][0]["function"]["name"] == "show_files"
     assert message["tool_calls"][0]["function"]["arguments"] == "{}"
     assert updated["choices"][0]["finish_reason"] == "tool_calls"
+
+
+def test_parse_template_qwen_streams_legacy_function_arguments() -> None:
+    parser = TemplateParseParser(
+        {
+            "template_path": str(QWEN_TEMPLATE),
+            "parse_thinking": True,
+            "parse_tool_calls": True,
+            "stream_tool_calls": True,
+        }
+    )
+    state = parser.create_stream_state()
+    ctx = ModuleContext(
+        path="/chat/completions",
+        model="test-model",
+        backend="test-backend",
+        is_stream=True,
+    )
+
+    chunks = [
+        "<tool_call>\n<function=write_report>\n<parameter=text>\n",
+        "Прокси должен отдавать длинные аргументы инструмента небольшими ",
+        "фрагментами, чтобы клиент видел function.arguments во время генерации, ",
+        "а не только после закрывающего XML-тега.\n</parameter>\n",
+        "</function>\n</tool_call>",
+    ]
+
+    parsed_events: list[dict] = []
+    for chunk in chunks:
+        event = {"choices": [{"index": 0, "delta": {"content": chunk}}]}
+        updated = parser.apply_stream_event(event, state, ctx)
+        parsed_events.extend(updated if isinstance(updated, list) else [updated])
+    parsed_events.extend(parser.finalize_stream(state, ctx))
+
+    argument_fragments: list[str] = []
+    tool_chunk_events = 0
+    function_name = ""
+    finish_reasons: list[str | None] = []
+    for event in parsed_events:
+        choice = event["choices"][0]
+        finish_reasons.append(choice.get("finish_reason"))
+        for tool_call in choice.get("delta", {}).get("tool_calls", []):
+            tool_chunk_events += 1
+            function = tool_call.get("function", {})
+            function_name = function.get("name") or function_name
+            if "arguments" in function:
+                argument_fragments.append(function["arguments"])
+
+    assert tool_chunk_events > 1
+    assert function_name == "write_report"
+    arguments = "".join(argument_fragments)
+    try:
+        parsed = json.loads(arguments)
+    except json.JSONDecodeError as exc:
+        pytest.fail(f"streamed arguments are not valid JSON: {arguments!r}: {exc}")
+    assert parsed["text"].startswith("Прокси должен отдавать")
+    assert parsed["text"].endswith("закрывающего XML-тега.")
+    assert "tool_calls" in finish_reasons
 
 
 def test_parse_template_qwen_parameter_tags_non_stream() -> None:

@@ -413,6 +413,140 @@ class TagScanResult:
     content: str = ""
     reasoning: str = ""
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    tool_call_chunks: list[dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass
+class XmlToolCallStreamState:
+    phase: str = "await_function"
+    buffer: str = ""
+    name: Optional[str] = None
+    first_parameter: bool = True
+    param_tail: str = ""
+    param_value_started: bool = False
+    disabled: bool = False
+    emitted: bool = False
+
+
+FUNCTION_OPEN_RE = re.compile(
+    r"^\s*<function\s*=\s*(?P<name>[A-Za-z_][\w.-]*)\s*>",
+    re.DOTALL,
+)
+PARAMETER_OPEN_RE = re.compile(
+    r"^\s*<parameter\s*=\s*(?P<key>[^>\s]+)\s*>",
+    re.DOTALL,
+)
+
+
+def _json_string_fragment(value: str) -> str:
+    encoded = json.dumps(value, ensure_ascii=False)
+    return encoded[1:-1]
+
+
+class XmlToolCallStreamer:
+    """Incrementally converts Qwen XML tool calls to OpenAI argument deltas."""
+
+    def __init__(self) -> None:
+        self.state = XmlToolCallStreamState()
+
+    def feed(self, text: str) -> list[dict[str, Any]]:
+        if not text or self.state.disabled:
+            return []
+        self.state.buffer += text
+        chunks: list[dict[str, Any]] = []
+
+        while self.state.buffer and not self.state.disabled:
+            if self.state.phase == "await_function":
+                match = FUNCTION_OPEN_RE.match(self.state.buffer)
+                if match is None:
+                    if "<function" in self.state.buffer and ">" not in self.state.buffer:
+                        break
+                    if self.state.buffer.strip() and not "<function".startswith(self.state.buffer.strip()):
+                        self.state.disabled = True
+                    break
+                self.state.name = match.group("name")
+                chunks.append({"name": self.state.name, "arguments": "{"})
+                self.state.emitted = True
+                self.state.buffer = self.state.buffer[match.end():]
+                self.state.phase = "between_parameters"
+                continue
+
+            if self.state.phase == "between_parameters":
+                stripped = self.state.buffer.lstrip()
+                if not stripped:
+                    self.state.buffer = ""
+                    break
+                if stripped.startswith("</function>"):
+                    self.state.buffer = stripped[len("</function>"):]
+                    chunks.append({"arguments": "}", "finished": True})
+                    self.state.phase = "done"
+                    continue
+                if not stripped.startswith("<parameter"):
+                    if "<parameter".startswith(stripped) or "</function>".startswith(stripped):
+                        self.state.buffer = stripped
+                        break
+                    self.state.disabled = True
+                    break
+                match = PARAMETER_OPEN_RE.match(self.state.buffer)
+                if match is None:
+                    if ">" not in self.state.buffer:
+                        break
+                    self.state.disabled = True
+                    break
+                key = match.group("key").strip()
+                prefix = "" if self.state.first_parameter else ","
+                chunks.append({"arguments": f"{prefix}{json.dumps(key, ensure_ascii=False)}:"})
+                self.state.first_parameter = False
+                self.state.buffer = self.state.buffer[match.end():]
+                self.state.param_tail = ""
+                self.state.param_value_started = False
+                self.state.phase = "parameter_value"
+                continue
+
+            if self.state.phase == "parameter_value":
+                close = "</parameter>"
+                close_idx = self.state.buffer.find(close)
+                if close_idx == -1:
+                    head, tail = _split_tail_for_prefix(self.state.buffer, close)
+                    self._append_parameter_text(head, chunks)
+                    self.state.buffer = tail
+                    break
+                self._append_parameter_text(self.state.buffer[:close_idx], chunks)
+                final_value = self.state.param_tail.rstrip()
+                if not self.state.param_value_started:
+                    chunks.append({"arguments": '"'})
+                chunks.append({"arguments": _json_string_fragment(final_value) + '"'})
+                self.state.param_tail = ""
+                self.state.buffer = self.state.buffer[close_idx + len(close):]
+                self.state.phase = "between_parameters"
+                continue
+
+            if self.state.phase == "done":
+                self.state.buffer = ""
+                break
+
+        return chunks
+
+    def _append_parameter_text(self, text: str, chunks: list[dict[str, Any]]) -> None:
+        if not text:
+            return
+        if not self.state.param_value_started:
+            text = text.lstrip()
+            chunks.append({"arguments": '"'})
+            self.state.param_value_started = True
+        combined = self.state.param_tail + text
+        if len(combined) <= 32:
+            self.state.param_tail = combined
+            return
+        emit_text = combined[:-32]
+        self.state.param_tail = combined[-32:]
+        chunks.append({"arguments": _json_string_fragment(emit_text)})
+
+    def emitted(self) -> bool:
+        return self.state.emitted
+
+    def disabled(self) -> bool:
+        return self.state.disabled
 
 
 class TagScanner:
@@ -431,6 +565,7 @@ class TagScanner:
         drop_tags: Optional[Iterable[str]] = None,
         tool_buffer_limit: Optional[int] = None,
         drop_after_tool_call: bool = False,
+        stream_tool_calls: bool = False,
         start_mode: str = "text",
     ) -> None:
         self.parse_thinking = parse_thinking
@@ -461,6 +596,8 @@ class TagScanner:
         self.drop_after_tool_call = drop_after_tool_call
         self._tool_calls_started = False
         self.dropped_content: str = ""  # Track content dropped after tool calls
+        self.stream_tool_calls = stream_tool_calls
+        self.tool_streamer: Optional[XmlToolCallStreamer] = None
 
     def feed(self, text: str) -> TagScanResult:
         if not text:
@@ -469,6 +606,7 @@ class TagScanner:
         out_content: list[str] = []
         out_reasoning: list[str] = []
         out_tool_calls: list[dict[str, Any]] = []
+        out_tool_call_chunks: list[dict[str, Any]] = []
 
         def _emit_literal(value: str, mode: str) -> None:
             if not value:
@@ -485,6 +623,7 @@ class TagScanner:
             self.buffer = self.buffer[len(self.tool_open):]
             self.tool_buffer = ""
             self.tool_parent_mode = parent_mode
+            self.tool_streamer = XmlToolCallStreamer() if self.stream_tool_calls else None
             self.mode = "tool"
 
         while self.buffer:
@@ -586,21 +725,30 @@ class TagScanner:
                     head, tail = _split_tail_for_prefix(self.buffer, self.tool_close)
                     if head:
                         self.tool_buffer += head
+                        if self.tool_streamer is not None:
+                            out_tool_call_chunks.extend(self.tool_streamer.feed(head))
                         if (
                             self.tool_buffer_limit is not None
                             and len(self.tool_buffer) > self.tool_buffer_limit
                         ):
                             _emit_literal(self.tool_open + self.tool_buffer, self.tool_parent_mode)
                             self.tool_buffer = ""
+                            self.tool_streamer = None
                             self.mode = self.tool_parent_mode
                             self.buffer = tail
                             continue
                     self.buffer = tail
                     break
                 self.tool_buffer += self.buffer[:idx]
+                if self.tool_streamer is not None:
+                    out_tool_call_chunks.extend(self.tool_streamer.feed(self.buffer[:idx]))
                 self.buffer = self.buffer[idx + len(self.tool_close):]
                 parsed = self.tool_parser(self.tool_buffer)
-                if parsed:
+                streamed = self.tool_streamer is not None and self.tool_streamer.emitted()
+                if streamed:
+                    if self.drop_after_tool_call:
+                        self._tool_calls_started = True
+                elif parsed:
                     out_tool_calls.append(parsed)
                     if self.drop_after_tool_call:
                         self._tool_calls_started = True
@@ -609,6 +757,7 @@ class TagScanner:
                         self.tool_open + self.tool_buffer + self.tool_close, self.tool_parent_mode
                     )
                 self.tool_buffer = ""
+                self.tool_streamer = None
                 self.mode = self.tool_parent_mode
                 continue
 
@@ -616,6 +765,7 @@ class TagScanner:
             content="".join(out_content),
             reasoning="".join(out_reasoning),
             tool_calls=out_tool_calls,
+            tool_call_chunks=out_tool_call_chunks,
         )
 
     def flush(self) -> TagScanResult:
@@ -623,6 +773,7 @@ class TagScanner:
         if self.drop_after_tool_call and self._tool_calls_started:
             self.buffer = ""
             self.tool_buffer = ""
+            self.tool_streamer = None
             self.mode = "text"
             return out
         if self.mode == "text":
@@ -637,6 +788,7 @@ class TagScanner:
                 out.content = literal
         self.buffer = ""
         self.tool_buffer = ""
+        self.tool_streamer = None
         self.mode = "text"
         return out
 
@@ -703,6 +855,29 @@ def _build_tool_call(
     }
 
 
+def _build_tool_call_delta(
+    chunk: Mapping[str, Any],
+    *,
+    index: int,
+    id_prefix: str,
+) -> dict[str, Any]:
+    function: dict[str, Any] = {}
+    name = chunk.get("name")
+    if name:
+        function["name"] = name
+    if "arguments" in chunk:
+        function["arguments"] = str(chunk.get("arguments") or "")
+
+    payload: dict[str, Any] = {
+        "index": index,
+        "function": function,
+    }
+    if name:
+        payload["id"] = f"{id_prefix}{index}"
+        payload["type"] = "function"
+    return payload
+
+
 class ResponseParser:
     name = "base"
 
@@ -735,6 +910,7 @@ ResponseModule = ResponseParser
 class ChoiceTagState:
     scanner: TagScanner
     next_tool_index: int = 0
+    active_stream_tool_index: Optional[int] = None
     saw_tool_calls: bool = False
     reasoning_chunks: int = 0  # Count of chunks with reasoning content
     tool_calls_count: int = 0  # Total tool calls detected
@@ -801,6 +977,7 @@ class ParseTagsParser(ResponseParser):
 
         self.parse_thinking = _parse_bool(config.get("parse_thinking", True))
         self.parse_tool_calls = _parse_bool(config.get("parse_tool_calls", True))
+        self.stream_tool_calls = _parse_bool(config.get("stream_tool_calls", False))
         self.start_in_think = _parse_bool(config.get("start_in_think", False))
         self.think_tag = str(_get("think_tag", "think"))
         self.tool_tag = str(_get("tool_tag", "tool_call"))
@@ -889,6 +1066,7 @@ class ParseTagsParser(ResponseParser):
             "effective": {
                 "parse_thinking": self.parse_thinking,
                 "parse_tool_calls": self.parse_tool_calls,
+                "stream_tool_calls": self.stream_tool_calls,
                 "think_tag": self.think_tag,
                 "tool_tag": self.tool_tag,
                 "tool_arg_format": self.tool_arg_format,
@@ -936,6 +1114,11 @@ class ParseTagsParser(ResponseParser):
             drop_tags=self.drop_tags if self.drop_tags else None,
             tool_buffer_limit=self.tool_buffer_limit,
             drop_after_tool_call=effective_parse_tool_calls,
+            stream_tool_calls=(
+                self.stream_tool_calls
+                and effective_parse_tool_calls
+                and self.tool_arg_format == "xml"
+            ),
             start_mode=start_mode,
         )
 
@@ -1070,6 +1253,33 @@ class ParseTagsParser(ResponseParser):
                             "initial_length": len(result.reasoning),
                         },
                     )
+
+            if result.tool_call_chunks:
+                id_prefix = f"call_{choice_index}_"
+                tool_payload = []
+                for chunk in result.tool_call_chunks:
+                    if chunk.get("name") or choice_state.active_stream_tool_index is None:
+                        tool_index = choice_state.next_tool_index
+                        choice_state.active_stream_tool_index = tool_index
+                    else:
+                        tool_index = choice_state.active_stream_tool_index
+                    tool_payload.append(
+                        _build_tool_call_delta(
+                            chunk,
+                            index=tool_index,
+                            id_prefix=id_prefix,
+                        )
+                    )
+                    if chunk.get("finished"):
+                        choice_state.next_tool_index = max(
+                            choice_state.next_tool_index,
+                            tool_index + 1,
+                        )
+                        choice_state.active_stream_tool_index = None
+                        choice_state.tool_calls_count += 1
+                if tool_payload:
+                    delta["tool_calls"] = tool_payload
+                    choice_state.saw_tool_calls = True
 
             if result.tool_calls:
                 id_prefix = f"call_{choice_index}_"
