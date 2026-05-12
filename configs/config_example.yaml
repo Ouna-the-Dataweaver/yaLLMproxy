@@ -179,6 +179,30 @@ model_list:
         start_in_think: true
         template_path: configs/jinja_templates/qwen.jinja
   protected: false
+- model_name: Qwen3.5-122b
+  model_params:
+    api_base: http://nid-sc-35:8128/v1
+    model: Qwen3.5-122B-A10B-FP8
+    request_timeout: 1200
+    api_type: openai
+    supports_reasoning: true
+    parameters:
+      tool_choice:
+        default: none
+        allow_override: false
+  modules:
+    upstream:
+      enabled: true
+      response:
+      - parse_tags
+      paths:
+      - /chat/completions
+      parse_tags:
+        template_path: configs/jinja_templates/qwen35.jinja
+        parse_thinking: true
+        parse_tool_calls: true
+        stream_tool_calls: true
+  protected: false
 router_settings:
   num_retries: 1
 proxy_settings:
