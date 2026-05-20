@@ -10,6 +10,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Optional
 
+from .tool_call_parsers import (
+    XmlToolCallStreamer,
+    get_tool_call_parser,
+    get_tool_call_streamer,
+    k2_tool_call_parser_factory,
+    parse_xmlish_tool_call_block,
+)
 
 logger = logging.getLogger("yallmp-proxy")
 
@@ -208,114 +215,6 @@ def _split_tail_for_prefixes(text: str, tags: Iterable[str]) -> tuple[str, str]:
     return text, ""
 
 
-def _maybe_json(value: str) -> Any:
-    try:
-        return json.loads(value)
-    except Exception:
-        return value
-
-
-ARG_PAIR_RE = re.compile(
-    r"<arg_key>(?P<key>.*?)</arg_key>\s*<arg_value>(?P<value>.*?)</arg_value>",
-    re.DOTALL,
-)
-PARAMETER_RE = re.compile(
-    r"<parameter\s*=\s*(?P<key>[^>\s]+)\s*>(?P<value>.*?)</parameter>",
-    re.DOTALL,
-)
-LEGACY_FUNCTION_EQUALS_RE = re.compile(
-    r"^<function\s*=\s*(?P<name>[A-Za-z_][\w.-]*)\s*>(?P<body>.*?)</function>$",
-    re.DOTALL,
-)
-LEGACY_FUNCTION_TAG_RE = re.compile(
-    r"^<function>(?P<name>.*?)</function>(?P<body>.*)$",
-    re.DOTALL,
-)
-
-
-def _parse_xml_arg_pairs(args_text: str) -> Optional[dict[str, Any]]:
-    args: dict[str, Any] = {}
-    last_end = 0
-    for match in ARG_PAIR_RE.finditer(args_text):
-        gap = args_text[last_end:match.start()]
-        if gap.strip():
-            return None
-        key = match.group("key").strip()
-        value_text = match.group("value").strip()
-        if not key:
-            continue
-        args[key] = _maybe_json(value_text)
-        last_end = match.end()
-    if args_text[last_end:].strip():
-        return None
-    return args
-
-
-def _parse_xml_parameter_pairs(args_text: str) -> Optional[dict[str, Any]]:
-    args: dict[str, Any] = {}
-    last_end = 0
-    for match in PARAMETER_RE.finditer(args_text):
-        gap = args_text[last_end:match.start()]
-        if gap.strip():
-            return None
-        key = match.group("key").strip()
-        value_text = match.group("value").strip()
-        if not key:
-            continue
-        args[key] = _maybe_json(value_text)
-        last_end = match.end()
-    if args_text[last_end:].strip():
-        return None
-    return args
-
-
-def _parse_legacy_function_tool_call(stripped: str) -> Optional[dict[str, Any]]:
-    for pattern in (LEGACY_FUNCTION_EQUALS_RE, LEGACY_FUNCTION_TAG_RE):
-        match = pattern.match(stripped)
-        if match is None:
-            continue
-        name = match.group("name").strip()
-        if not name or any(ch.isspace() for ch in name):
-            return None
-        body = match.group("body").strip()
-        if not body:
-            return {"name": name, "arguments": {}}
-        args = _parse_xml_arg_pairs(body)
-        if args is None:
-            args = _parse_xml_parameter_pairs(body)
-        if args is None:
-            return None
-        return {"name": name, "arguments": args}
-    return None
-
-
-def _parse_tool_call_block(text: str) -> Optional[dict[str, Any]]:
-    stripped = text.strip()
-    if not stripped:
-        return None
-    legacy_function_call = _parse_legacy_function_tool_call(stripped)
-    if legacy_function_call is not None:
-        return legacy_function_call
-    arg_start = stripped.find("<arg_key>")
-    if arg_start == -1:
-        name = stripped
-        if not name or any(ch.isspace() for ch in name):
-            return None
-        args: dict[str, Any] = {}
-    else:
-        name = stripped[:arg_start].strip()
-        if not name or any(ch.isspace() for ch in name):
-            return None
-        args_text = stripped[arg_start:]
-        parsed_args = _parse_xml_arg_pairs(args_text)
-        if parsed_args is None:
-            return None
-        args = parsed_args
-    if not name:
-        return None
-    return {"name": name, "arguments": args}
-
-
 K2_TOOL_MARKERS = {
     "call_open": "<|tool_call_begin|>",
     "arg_open": "<|tool_call_argument_begin|>",
@@ -385,192 +284,12 @@ def _detect_think_tag(template_text: str) -> Optional[str]:
     return _pick_tag_from_text(template_text, ignore=ignore)
 
 
-def _k2_tool_call_parser_factory(
-    arg_open: str,
-) -> Callable[[str], Optional[dict[str, Any]]]:
-    def _parse(text: str) -> Optional[dict[str, Any]]:
-        stripped = text.strip()
-        if not stripped:
-            return None
-        if arg_open in stripped:
-            name_part, args_part = stripped.split(arg_open, 1)
-        else:
-            name_part, args_part = stripped, ""
-        name = name_part.strip()
-        if not name or any(ch.isspace() for ch in name):
-            return None
-        args_text = args_part.strip()
-        arguments: Any = {}
-        if args_text:
-            arguments = _maybe_json(args_text)
-        return {"name": name, "arguments": arguments}
-
-    return _parse
-
-
 @dataclass
 class TagScanResult:
     content: str = ""
     reasoning: str = ""
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     tool_call_chunks: list[dict[str, Any]] = field(default_factory=list)
-
-
-@dataclass
-class XmlToolCallStreamState:
-    phase: str = "await_function"
-    buffer: str = ""
-    name: Optional[str] = None
-    first_parameter: bool = True
-    param_tail: str = ""
-    param_value_started: bool = False
-    param_value_mode: Optional[str] = None
-    disabled: bool = False
-    emitted: bool = False
-
-
-FUNCTION_OPEN_RE = re.compile(
-    r"^\s*<function\s*=\s*(?P<name>[A-Za-z_][\w.-]*)\s*>",
-    re.DOTALL,
-)
-PARAMETER_OPEN_RE = re.compile(
-    r"^\s*<parameter\s*=\s*(?P<key>[^>\s]+)\s*>",
-    re.DOTALL,
-)
-
-
-def _json_string_fragment(value: str) -> str:
-    encoded = json.dumps(value, ensure_ascii=False)
-    return encoded[1:-1]
-
-
-class XmlToolCallStreamer:
-    """Incrementally converts Qwen XML tool calls to OpenAI argument deltas."""
-
-    def __init__(self) -> None:
-        self.state = XmlToolCallStreamState()
-
-    def feed(self, text: str) -> list[dict[str, Any]]:
-        if not text or self.state.disabled:
-            return []
-        self.state.buffer += text
-        chunks: list[dict[str, Any]] = []
-
-        while self.state.buffer and not self.state.disabled:
-            if self.state.phase == "await_function":
-                match = FUNCTION_OPEN_RE.match(self.state.buffer)
-                if match is None:
-                    if "<function" in self.state.buffer and ">" not in self.state.buffer:
-                        break
-                    if self.state.buffer.strip() and not "<function".startswith(self.state.buffer.strip()):
-                        self.state.disabled = True
-                    break
-                self.state.name = match.group("name")
-                chunks.append({"name": self.state.name, "arguments": "{"})
-                self.state.emitted = True
-                self.state.buffer = self.state.buffer[match.end():]
-                self.state.phase = "between_parameters"
-                continue
-
-            if self.state.phase == "between_parameters":
-                stripped = self.state.buffer.lstrip()
-                if not stripped:
-                    self.state.buffer = ""
-                    break
-                if stripped.startswith("</function>"):
-                    self.state.buffer = stripped[len("</function>"):]
-                    chunks.append({"arguments": "}", "finished": True})
-                    self.state.phase = "done"
-                    continue
-                if not stripped.startswith("<parameter"):
-                    if "<parameter".startswith(stripped) or "</function>".startswith(stripped):
-                        self.state.buffer = stripped
-                        break
-                    self.state.disabled = True
-                    break
-                match = PARAMETER_OPEN_RE.match(self.state.buffer)
-                if match is None:
-                    if ">" not in self.state.buffer:
-                        break
-                    self.state.disabled = True
-                    break
-                key = match.group("key").strip()
-                prefix = "" if self.state.first_parameter else ","
-                chunks.append({"arguments": f"{prefix}{json.dumps(key, ensure_ascii=False)}:"})
-                self.state.first_parameter = False
-                self.state.buffer = self.state.buffer[match.end():]
-                self.state.param_tail = ""
-                self.state.param_value_started = False
-                self.state.param_value_mode = None
-                self.state.phase = "parameter_value"
-                continue
-
-            if self.state.phase == "parameter_value":
-                close = "</parameter>"
-                close_idx = self.state.buffer.find(close)
-                if close_idx == -1:
-                    head, tail = _split_tail_for_prefix(self.state.buffer, close)
-                    self._append_parameter_text(head, chunks)
-                    self.state.buffer = tail
-                    break
-                self._append_parameter_text(self.state.buffer[:close_idx], chunks)
-                final_value = self.state.param_tail.rstrip()
-                if self.state.param_value_mode == "json":
-                    value_text = final_value.strip()
-                    try:
-                        chunks.append({"arguments": json.dumps(json.loads(value_text), ensure_ascii=False)})
-                    except (TypeError, ValueError, json.JSONDecodeError):
-                        chunks.append({"arguments": '"' + _json_string_fragment(value_text) + '"'})
-                elif not self.state.param_value_started:
-                    chunks.append({"arguments": '"'})
-                    chunks.append({"arguments": _json_string_fragment(final_value) + '"'})
-                else:
-                    chunks.append({"arguments": _json_string_fragment(final_value) + '"'})
-                self.state.param_tail = ""
-                self.state.buffer = self.state.buffer[close_idx + len(close):]
-                self.state.phase = "between_parameters"
-                continue
-
-            if self.state.phase == "done":
-                self.state.buffer = ""
-                break
-
-        return chunks
-
-    def _append_parameter_text(self, text: str, chunks: list[dict[str, Any]]) -> None:
-        if not text:
-            return
-        if self.state.param_value_mode == "json":
-            self.state.param_tail += text
-            return
-        if not self.state.param_value_started:
-            text = self.state.param_tail + text
-            self.state.param_tail = ""
-            stripped = text.lstrip()
-            if not stripped:
-                self.state.param_tail = text
-                return
-            if stripped[0] in "{[":
-                self.state.param_value_mode = "json"
-                self.state.param_value_started = True
-                self.state.param_tail = text
-                return
-            text = stripped
-            chunks.append({"arguments": '"'})
-            self.state.param_value_started = True
-        combined = self.state.param_tail + text
-        if len(combined) <= 32:
-            self.state.param_tail = combined
-            return
-        emit_text = combined[:-32]
-        self.state.param_tail = combined[-32:]
-        chunks.append({"arguments": _json_string_fragment(emit_text)})
-
-    def emitted(self) -> bool:
-        return self.state.emitted
-
-    def disabled(self) -> bool:
-        return self.state.disabled
 
 
 class TagScanner:
@@ -586,6 +305,7 @@ class TagScanner:
         tool_open: Optional[str] = None,
         tool_close: Optional[str] = None,
         tool_parser: Optional[Callable[[str], Optional[dict[str, Any]]]] = None,
+        tool_streamer_cls: Optional[type[XmlToolCallStreamer]] = None,
         drop_tags: Optional[Iterable[str]] = None,
         tool_buffer_limit: Optional[int] = None,
         drop_after_tool_call: bool = False,
@@ -598,7 +318,8 @@ class TagScanner:
         self.think_close = f"</{think_tag}>"
         self.tool_open = tool_open or f"<{tool_tag}>"
         self.tool_close = tool_close or f"</{tool_tag}>"
-        self.tool_parser = tool_parser or _parse_tool_call_block
+        self.tool_parser = tool_parser or parse_xmlish_tool_call_block
+        self.tool_streamer_cls = tool_streamer_cls
         self.drop_tags = [tag for tag in (drop_tags or []) if tag]
         self._open_tags = [
             tag
@@ -647,7 +368,11 @@ class TagScanner:
             self.buffer = self.buffer[len(self.tool_open):]
             self.tool_buffer = ""
             self.tool_parent_mode = parent_mode
-            self.tool_streamer = XmlToolCallStreamer() if self.stream_tool_calls else None
+            self.tool_streamer = (
+                self.tool_streamer_cls()
+                if self.stream_tool_calls and self.tool_streamer_cls is not None
+                else None
+            )
             self.mode = "tool"
 
         while self.buffer:
@@ -848,7 +573,7 @@ def _extract_tool_calls(text: str, tool_tag: str) -> tuple[list[dict[str, Any]],
     tool_calls: list[dict[str, Any]] = []
 
     def _replace(match: re.Match[str]) -> str:
-        parsed = _parse_tool_call_block(match.group(1))
+        parsed = parse_xmlish_tool_call_block(match.group(1))
         if parsed:
             tool_calls.append(parsed)
         return ""
@@ -1014,6 +739,9 @@ class ParseTagsParser(ResponseParser):
                 "Unknown tool_arg_format '%s'; defaulting to xml", self.tool_arg_format
             )
             self.tool_arg_format = "xml"
+        self.tool_parser_name = str(
+            config.get("tool_parser") or self.tool_arg_format
+        ).strip().lower()
 
         # Custom delimiters (default to XML-style based on tool_tag)
         default_tool_open = f"<{self.tool_tag}>"
@@ -1094,6 +822,7 @@ class ParseTagsParser(ResponseParser):
                 "think_tag": self.think_tag,
                 "tool_tag": self.tool_tag,
                 "tool_arg_format": self.tool_arg_format,
+                "tool_parser": self.tool_parser_name,
                 "start_in_think": self.start_in_think,
                 "tool_open": self.tool_open,
                 "tool_close": self.tool_close,
@@ -1119,13 +848,17 @@ class ParseTagsParser(ResponseParser):
         start_mode = "think" if self.start_in_think and effective_parse_thinking else "text"
 
         tool_parser: Optional[Callable[[str], Optional[dict[str, Any]]]] = None
+        tool_streamer_cls: Optional[type[XmlToolCallStreamer]] = None
         tool_open: Optional[str] = None
         tool_close: Optional[str] = None
 
         if self.tool_arg_format == "json":
-            tool_parser = _k2_tool_call_parser_factory(self.tool_arg_separator)
+            tool_parser = k2_tool_call_parser_factory(self.tool_arg_separator)
             tool_open = self.tool_open
             tool_close = self.tool_close
+        else:
+            tool_parser = get_tool_call_parser(self.tool_parser_name)
+            tool_streamer_cls = get_tool_call_streamer(self.tool_parser_name)
 
         return TagScanner(
             think_tag=self.think_tag,
@@ -1135,6 +868,7 @@ class ParseTagsParser(ResponseParser):
             tool_open=tool_open,
             tool_close=tool_close,
             tool_parser=tool_parser,
+            tool_streamer_cls=tool_streamer_cls,
             drop_tags=self.drop_tags if self.drop_tags else None,
             tool_buffer_limit=self.tool_buffer_limit,
             drop_after_tool_call=effective_parse_tool_calls,

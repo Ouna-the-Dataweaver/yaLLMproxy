@@ -332,6 +332,244 @@ def test_parse_template_qwen_legacy_function_equals_non_stream() -> None:
     assert updated["choices"][0]["finish_reason"] == "tool_calls"
 
 
+def test_parse_template_qwen_explicit_tool_parser_non_stream() -> None:
+    parser = TemplateParseParser(
+        {
+            "template_path": str(QWEN_TEMPLATE),
+            "parse_thinking": True,
+            "parse_tool_calls": True,
+            "tool_parser": "xmlish",
+        }
+    )
+    payload = _build_payload(
+        "<tool_call>\n"
+        "<function=get_template_keys>\n"
+        "<parameter=template_name>\n"
+        "Рапорт.docx\n"
+        "</parameter>\n"
+        "</function>\n"
+        "</tool_call>"
+    )
+    updated = parser.apply_response(
+        payload,
+        ModuleContext(
+            path="/chat/completions",
+            model="test-model",
+            backend="test-backend",
+            is_stream=False,
+        ),
+    )
+
+    message = updated["choices"][0]["message"]
+    assert parser.get_effective_config()["effective"]["tool_parser"] == "xmlish"
+    assert message["tool_calls"][0]["function"]["name"] == "get_template_keys"
+    assert (
+        message["tool_calls"][0]["function"]["arguments"]
+        == '{"template_name": "Рапорт.docx"}'
+    )
+
+
+def test_parse_template_qwen_xml_repairs_duplicate_function_non_stream() -> None:
+    parser = TemplateParseParser(
+        {
+            "template_path": str(QWEN_TEMPLATE),
+            "parse_thinking": True,
+            "parse_tool_calls": True,
+            "tool_parser": "qwen_xml",
+        }
+    )
+    payload = _build_payload(
+        "<tool_call>\n"
+        "<function=law_searcher>\n"
+        "<function=law_searcher>\n"
+        "<parameter=description>\n"
+        "платье\n"
+        "</parameter>\n"
+        "</function>\n"
+        "</tool_call>"
+    )
+    updated = parser.apply_response(
+        payload,
+        ModuleContext(
+            path="/chat/completions",
+            model="test-model",
+            backend="test-backend",
+            is_stream=False,
+        ),
+    )
+
+    message = updated["choices"][0]["message"]
+    assert message["content"] is None
+    assert message["tool_calls"][0]["function"]["name"] == "law_searcher"
+    assert message["tool_calls"][0]["function"]["arguments"] == '{"description": "платье"}'
+
+
+def test_parse_template_qwen_xml_stream_repairs_duplicate_function() -> None:
+    parser = TemplateParseParser(
+        {
+            "template_path": str(QWEN_TEMPLATE),
+            "parse_thinking": True,
+            "parse_tool_calls": True,
+            "stream_tool_calls": True,
+            "tool_parser": "qwen_xml",
+        }
+    )
+    state = parser.create_stream_state()
+    ctx = ModuleContext(
+        path="/chat/completions",
+        model="test-model",
+        backend="test-backend",
+        is_stream=True,
+    )
+
+    chunks = [
+        "<tool_call>\n<function=law_searcher>\n",
+        "<function=law_searcher>\n<parameter=description>\n",
+        "платье\n</parameter>\n</function>\n</tool_call>",
+        "\n\n<tool_call>\n<function=law_searcher>\n",
+        "<parameter=description>\nплатье\n</parameter>\n</function>\n</tool_call>",
+    ]
+
+    parsed_events: list[dict] = []
+    for chunk in chunks:
+        event = {"choices": [{"index": 0, "delta": {"content": chunk}}]}
+        updated = parser.apply_stream_event(event, state, ctx)
+        parsed_events.extend(updated if isinstance(updated, list) else [updated])
+    parsed_events.extend(parser.finalize_stream(state, ctx))
+
+    tool_calls: dict[int, dict[str, str]] = {}
+    for event in parsed_events:
+        for tool_call in event["choices"][0].get("delta", {}).get("tool_calls", []):
+            index = tool_call["index"]
+            current = tool_calls.setdefault(index, {"name": "", "arguments": ""})
+            function = tool_call.get("function", {})
+            current["name"] = function.get("name") or current["name"]
+            current["arguments"] += function.get("arguments", "")
+
+    assert list(tool_calls) == [0, 1]
+    assert tool_calls[0] == {
+        "name": "law_searcher",
+        "arguments": '{"description":"платье"}',
+    }
+    assert tool_calls[1] == {
+        "name": "law_searcher",
+        "arguments": '{"description":"платье"}',
+    }
+
+
+def test_parse_template_qwen_xml_stream_no_arg_call_is_complete_json() -> None:
+    parser = TemplateParseParser(
+        {
+            "template_path": str(QWEN_TEMPLATE),
+            "parse_thinking": True,
+            "parse_tool_calls": True,
+            "stream_tool_calls": True,
+            "tool_parser": "qwen_xml",
+        }
+    )
+    state = parser.create_stream_state()
+    ctx = ModuleContext(
+        path="/chat/completions",
+        model="test-model",
+        backend="test-backend",
+        is_stream=True,
+    )
+
+    chunks = [
+        "<tool_call>\n<function=show_files>\n",
+        "</function>\n</tool_call>",
+    ]
+
+    argument_fragments: list[str] = []
+    function_name = ""
+    for chunk in chunks:
+        event = {"choices": [{"index": 0, "delta": {"content": chunk}}]}
+        updated = parser.apply_stream_event(event, state, ctx)
+        events = updated if isinstance(updated, list) else [updated]
+        for parsed_event in events:
+            for tool_call in parsed_event["choices"][0].get("delta", {}).get(
+                "tool_calls", []
+            ):
+                function = tool_call.get("function", {})
+                function_name = function.get("name") or function_name
+                if "arguments" in function:
+                    argument_fragments.append(function["arguments"])
+
+    assert function_name == "show_files"
+    assert "".join(argument_fragments) == "{}"
+
+
+def test_parse_template_qwen_xml_json_single_tool_call_non_stream() -> None:
+    parser = TemplateParseParser(
+        {
+            "template_path": str(QWEN_TEMPLATE),
+            "parse_thinking": True,
+            "parse_tool_calls": True,
+            "tool_parser": "qwen_xml",
+        }
+    )
+    payload = _build_payload(
+        '<tool_call>{"name":"show_files","parameters":{}}</tool_call>'
+    )
+    updated = parser.apply_response(
+        payload,
+        ModuleContext(
+            path="/chat/completions",
+            model="test-model",
+            backend="test-backend",
+            is_stream=False,
+        ),
+    )
+
+    message = updated["choices"][0]["message"]
+    assert message["content"] is None
+    assert message["tool_calls"][0]["function"]["name"] == "show_files"
+    assert message["tool_calls"][0]["function"]["arguments"] == "{}"
+
+
+def test_parse_template_qwen_xml_json_single_tool_call_stream() -> None:
+    parser = TemplateParseParser(
+        {
+            "template_path": str(QWEN_TEMPLATE),
+            "parse_thinking": True,
+            "parse_tool_calls": True,
+            "stream_tool_calls": True,
+            "tool_parser": "qwen_xml",
+        }
+    )
+    state = parser.create_stream_state()
+    ctx = ModuleContext(
+        path="/chat/completions",
+        model="test-model",
+        backend="test-backend",
+        is_stream=True,
+    )
+
+    chunks = [
+        '<tool_call>{"name":"show_files",',
+        '"parameters":{}}</tool_call>"\nextra text after tool call',
+    ]
+    parsed_events: list[dict] = []
+    for chunk in chunks:
+        event = {"choices": [{"index": 0, "delta": {"content": chunk}}]}
+        updated = parser.apply_stream_event(event, state, ctx)
+        parsed_events.extend(updated if isinstance(updated, list) else [updated])
+    parsed_events.extend(parser.finalize_stream(state, ctx))
+
+    tool_calls: list[dict] = []
+    content_parts: list[str] = []
+    for event in parsed_events:
+        delta = event["choices"][0].get("delta", {})
+        content = delta.get("content")
+        if isinstance(content, str):
+            content_parts.append(content)
+        tool_calls.extend(delta.get("tool_calls", []))
+
+    assert "".join(content_parts) == ""
+    assert tool_calls[0]["function"]["name"] == "show_files"
+    assert tool_calls[0]["function"]["arguments"] == "{}"
+
+
 def test_parse_template_qwen_streams_legacy_function_arguments() -> None:
     parser = TemplateParseParser(
         {
