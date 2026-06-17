@@ -1148,6 +1148,14 @@ async function loadModels() {
     }
 }
 
+function updateGigachatFieldsVisibility() {
+    const apiType = document.getElementById('api_type').value;
+    const settings = document.getElementById('gigachatSettings');
+    if (settings) {
+        settings.style.display = apiType === 'gigachat' ? 'block' : 'none';
+    }
+}
+
 async function saveModel(event) {
     event.preventDefault();
 
@@ -1163,6 +1171,24 @@ async function saveModel(event) {
             supports_reasoning: document.getElementById('supports_reasoning').checked
         }
     };
+
+    if (modelData.model_params.api_type === 'gigachat') {
+        const clientId = document.getElementById('gigachat_client_id').value.trim() || undefined;
+        const clientSecret = document.getElementById('gigachat_client_secret').value.trim() || undefined;
+        if (clientId) {
+            modelData.model_params.client_id = clientId;
+        }
+        if (clientSecret) {
+            modelData.model_params.client_secret = clientSecret;
+        }
+        modelData.model_params.mode = document.getElementById('gigachat_mode').value || undefined;
+        modelData.model_params.scope = document.getElementById('gigachat_scope').value.trim() || undefined;
+        modelData.model_params.auth_url = document.getElementById('gigachat_auth_url').value.trim() || undefined;
+        modelData.model_params.client_cert = document.getElementById('gigachat_client_cert').value.trim() || undefined;
+        modelData.model_params.client_key = document.getElementById('gigachat_client_key').value.trim() || undefined;
+        modelData.model_params.verify_ssl = document.getElementById('gigachat_verify_ssl').checked;
+        modelData.model_params.emulate_tool_calls = document.getElementById('gigachat_emulate_tool_calls').checked;
+    }
 
     const parameterOverrides = buildParameterOverrides();
     if (parameterOverrides) {
@@ -1447,6 +1473,16 @@ function openAddModal() {
     document.getElementById('request_timeout').value = 30;
     document.getElementById('api_type').value = 'openai';
     document.getElementById('supports_reasoning').checked = false;
+    document.getElementById('gigachat_client_id').value = '';
+    document.getElementById('gigachat_client_secret').value = '';
+    document.getElementById('gigachat_mode').value = '';
+    document.getElementById('gigachat_scope').value = '';
+    document.getElementById('gigachat_auth_url').value = '';
+    document.getElementById('gigachat_client_cert').value = '';
+    document.getElementById('gigachat_client_key').value = '';
+    document.getElementById('gigachat_verify_ssl').checked = true;
+    document.getElementById('gigachat_emulate_tool_calls').checked = false;
+    updateGigachatFieldsVisibility();
     currentParametersConfig = {};
     currentParametersSource = 'model_params';
     currentModulesConfig = null;
@@ -1483,6 +1519,17 @@ function editModel(modelName) {
         document.getElementById('request_timeout').value = params.request_timeout || 30;
         document.getElementById('api_type').value = params.api_type || 'openai';
         document.getElementById('supports_reasoning').checked = params.supports_reasoning || false;
+
+        document.getElementById('gigachat_client_id').value = params.client_id || '';
+        document.getElementById('gigachat_client_secret').value = params.client_secret || '';
+        document.getElementById('gigachat_mode').value = params.mode || '';
+        document.getElementById('gigachat_scope').value = params.scope || '';
+        document.getElementById('gigachat_auth_url').value = params.auth_url || '';
+        document.getElementById('gigachat_client_cert').value = params.client_cert || '';
+        document.getElementById('gigachat_client_key').value = params.client_key || '';
+        document.getElementById('gigachat_verify_ssl').checked = params.verify_ssl !== false;
+        document.getElementById('gigachat_emulate_tool_calls').checked = params.emulate_tool_calls === true;
+        updateGigachatFieldsVisibility();
 
         const paramInfo = getParameterOverridesInfo(model);
         currentParametersSource = paramInfo.source;
@@ -1957,6 +2004,12 @@ function initAdminUi() {
     const swapTemplateSelect = document.getElementById('swap_reasoning_template_path');
     if (swapTemplateSelect) {
         swapTemplateSelect.addEventListener('change', updateSwapReasoningTemplateDerived);
+    }
+
+    // GigaChat settings visibility
+    const apiTypeSelect = document.getElementById('api_type');
+    if (apiTypeSelect) {
+        apiTypeSelect.addEventListener('change', updateGigachatFieldsVisibility);
     }
 
     // Custom parameters event listeners

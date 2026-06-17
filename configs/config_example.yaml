@@ -203,6 +203,25 @@ model_list:
         parse_tool_calls: true
         stream_tool_calls: true
   protected: false
+- model_name: GigaChat-Max
+  protected: true
+  model_params:
+    api_type: gigachat
+    api_base: https://gigachat.devices.sberbank.ru/api/v1
+    api_key: ${GIGACHAT_API_KEY}
+    scope: ${GIGACHAT_SCOPE}
+    auth_url: https://ngw.devices.sberbank.ru:9443/api/v2/oauth
+    request_timeout: 120
+    emulate_tool_calls: false
+- model_name: GigaChat-Local
+  protected: true
+  model_params:
+    api_type: gigachat
+    api_base: http://localhost:8000/v1
+    client_cert: ${GIGACHAT_CLIENT_CERT}
+    client_key: ${GIGACHAT_CLIENT_KEY}
+    verify_ssl: true
+    request_timeout: 120
 router_settings:
   num_retries: 1
 proxy_settings:

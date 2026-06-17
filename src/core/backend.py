@@ -8,6 +8,7 @@ from typing import Any, Mapping, Optional
 from fastapi import HTTPException
 
 from .exceptions import BackendRetryableError
+from .gigachat.config import GigaChatBackendConfig
 
 logger = logging.getLogger("yallmp-proxy")
 
@@ -50,6 +51,7 @@ class Backend:
     editable: bool = False
     passthrough: bool = False  # True if this is a passthrough backend (api_type: passthrough)
     parameters: dict[str, ParameterConfig] = field(default_factory=dict)
+    gigachat_config: GigaChatBackendConfig | None = None
 
     def build_url(self, path: str, query: str) -> str:
         """Build the full URL for a backend request."""

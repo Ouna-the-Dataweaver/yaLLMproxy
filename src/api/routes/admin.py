@@ -1,5 +1,6 @@
 """Admin endpoints for runtime model registration."""
 
+import base64
 import hmac
 import json
 import logging
@@ -10,6 +11,7 @@ from fastapi import HTTPException, Request
 from ...config_store import CONFIG_STORE, _normalize_protected
 from ...core import Backend, extract_api_type, extract_target_model
 from ...core.backend import ParameterConfig, _parse_bool
+from ...core.gigachat import build_gigachat_config
 from ...core.registry import get_router
 
 logger = logging.getLogger("yallmp-proxy")
@@ -35,6 +37,12 @@ def _normalize_fallbacks(value: Any) -> Optional[list[str]]:
     if isinstance(value, str):
         return [value]
     raise ValueError("fallbacks must be a string or list of strings")
+
+
+def _generate_gigachat_api_key(client_id: str, client_secret: str) -> str:
+    """Generate GigaChat Authorization key from Client ID and Client Secret."""
+    credentials = f"{client_id}:{client_secret}"
+    return base64.b64encode(credentials.encode("utf-8")).decode("ascii")
 
 
 def _extract_admin_password(request: Request, payload: dict[str, Any]) -> str | None:
@@ -124,6 +132,9 @@ def _backend_from_runtime_payload(
         raise ValueError("api_base is required")
 
     api_key = str(params.get("api_key") or payload.get("api_key") or "")
+    client_id = str(params.get("client_id") or payload.get("client_id") or "").strip()
+    client_secret = str(params.get("client_secret") or payload.get("client_secret") or "").strip()
+
     timeout_raw = (
         params.get("request_timeout")
         if "request_timeout" in params
@@ -135,6 +146,15 @@ def _backend_from_runtime_payload(
     api_type = extract_api_type(params)
     target_model = extract_target_model(params, api_type)
     supports_reasoning = bool(params.get("supports_reasoning") or payload.get("supports_reasoning"))
+
+    gigachat_config = None
+    if api_type == "gigachat":
+        if not api_key and client_id and client_secret:
+            api_key = _generate_gigachat_api_key(client_id, client_secret)
+        try:
+            gigachat_config = build_gigachat_config({**params, "api_key": api_key})
+        except ValueError as exc:
+            raise ValueError(f"Invalid GigaChat configuration: {exc}") from exc
     anthropic_version = params.get("anthropic_version")
     if isinstance(anthropic_version, str):
         anthropic_version = anthropic_version.strip() or None
@@ -155,6 +175,7 @@ def _backend_from_runtime_payload(
         supports_reasoning=supports_reasoning,
         editable=True,
         parameters=param_configs,
+        gigachat_config=gigachat_config,
     )
     model_entry = _build_model_entry(
         payload,
@@ -189,7 +210,7 @@ def _build_model_entry(
         params["api_base"] = params.pop("base_url")
     if "api_base" not in params:
         params["api_base"] = api_base
-    if api_key and "api_key" not in params:
+    if api_key and not params.get("api_key"):
         params["api_key"] = api_key
     if "request_timeout" not in params and "timeout" in params:
         params["request_timeout"] = params.pop("timeout")
@@ -259,6 +280,13 @@ async def register_model(request: Request) -> dict:
         logger.error("Failed to register model: %s", exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    params = payload.get("model_params") or payload
+    client_id = (params.get("client_id") or "").strip()
+    client_secret = (params.get("client_secret") or "").strip()
+    has_new_gigachat_credentials = (
+        backend.api_type == "gigachat" and bool(client_id) and bool(client_secret)
+    )
+
     existing_model = CONFIG_STORE.find_model(backend.name)
     existing_protected = False
     if existing_model:
@@ -286,12 +314,12 @@ async def register_model(request: Request) -> dict:
     backend.editable = not effective_protected
 
     payload_has_key = _payload_has_api_key(payload)
-    if not payload_has_key and existing_model:
+    if not payload_has_key and existing_model and not has_new_gigachat_credentials:
         existing_params = existing_model.get("model_params") or {}
         if "api_key" in existing_params:
             model_entry.setdefault("model_params", {})["api_key"] = existing_params["api_key"]
 
-    if not payload_has_key:
+    if not payload_has_key and not has_new_gigachat_credentials:
         existing_backend = router.backends.get(backend.name)
         if existing_backend and existing_backend.api_key:
             backend.api_key = existing_backend.api_key

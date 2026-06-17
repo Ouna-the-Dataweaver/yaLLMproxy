@@ -185,6 +185,7 @@
                         <select id="api_type" class="form-select">
                             <option value="openai">OpenAI</option>
                             <option value="anthropic">Anthropic</option>
+                            <option value="gigachat">GigaChat</option>
                             <option value="passthrough">Passthrough</option>
                         </select>
                     </div>
@@ -196,6 +197,77 @@
                                 <span>Enable for models with thinking/reasoning blocks</span>
                             </span>
                         </label>
+                    </div>
+
+                    <div id="gigachatSettings" class="form-section" style="display: none;">
+                        <div class="form-section-header">
+                            <h3 class="form-section-title">GigaChat Settings</h3>
+                            <p class="form-section-subtitle">How to add a GigaChat model:</p>
+                            <ol class="form-section-subtitle" style="margin-left: 1.25rem; line-height: 1.6;">
+                                <li><strong>Model Name</strong> — name shown in the proxy, e.g. <code>GigaChat-2-Max</code>.</li>
+                                <li><strong>API Base URL</strong> — <code>https://gigachat.devices.sberbank.ru/api/v1</code>.</li>
+                                <li><strong>Upstream Model Name</strong> — real GigaChat model name, e.g. <code>GigaChat-2-Max</code>.</li>
+                                <li><strong>Timeout</strong> — e.g. <code>120</code>.</li>
+                                <li><strong>API Type</strong> — select <code>GigaChat</code>.</li>
+                                <li>Enter <strong>Client ID</strong> and <strong>Client Secret</strong> from Sber Studio below.</li>
+                                <li><strong>Mode</strong> — <code>Cloud (OAuth)</code>.</li>
+                                <li><strong>Scope</strong> — <code>GIGACHAT_API_CORP</code> (pay-as-you-go) or <code>GIGACHAT_API_B2B</code> (prepaid/corporate).</li>
+                                <li><strong>Auth URL</strong> — leave empty.</li>
+                                <li><strong>Verify SSL</strong> — turn <strong>off</strong> for GigaChat cloud.</li>
+                                <li><strong>Emulate tool calls</strong> — turn <strong>off</strong> to use native function calls; enable only if native calls fail.</li>
+                                <li>Leave <strong>API Key</strong> empty — it is generated automatically from Client ID + Client Secret.</li>
+                            </ol>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="gigachat_client_id">Client ID</label>
+                            <input type="text" id="gigachat_client_id" class="form-input" placeholder="00000000-0000-0000-0000-000000000000">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="gigachat_client_secret">Client Secret</label>
+                            <input type="password" id="gigachat_client_secret" class="form-input" placeholder="00000000-0000-0000-0000-000000000000" autocomplete="current-password">
+                            <p class="form-hint">If Client ID and Secret are provided, API Key is generated automatically.</p>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="gigachat_mode">Mode</label>
+                            <select id="gigachat_mode" class="form-select">
+                                <option value="">Auto-detect</option>
+                                <option value="cloud">Cloud (OAuth)</option>
+                                <option value="local">Local (mTLS)</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="gigachat_scope">Scope</label>
+                            <input type="text" id="gigachat_scope" class="form-input" placeholder="GIGACHAT_API_CORP">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="gigachat_auth_url">Auth URL</label>
+                            <input type="text" id="gigachat_auth_url" class="form-input" placeholder="https://ngw.devices.sberbank.ru:9443/api/v2/oauth">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="gigachat_client_cert">Client Cert</label>
+                            <input type="text" id="gigachat_client_cert" class="form-input" placeholder="/path/to/client.crt">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="gigachat_client_key">Client Key</label>
+                            <input type="text" id="gigachat_client_key" class="form-input" placeholder="/path/to/client.key">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-checkbox-group">
+                                <input type="checkbox" id="gigachat_verify_ssl" class="form-checkbox" checked>
+                                <span class="form-checkbox-label">
+                                    <span>Verify SSL</span>
+                                </span>
+                            </label>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-checkbox-group">
+                                <input type="checkbox" id="gigachat_emulate_tool_calls" class="form-checkbox">
+                                <span class="form-checkbox-label">
+                                    <span>Emulate tool calls</span>
+                                    <span>Use prompt-based tool emulation instead of native functions</span>
+                                </span>
+                            </label>
+                        </div>
                     </div>
 
                     <div class="form-section">
