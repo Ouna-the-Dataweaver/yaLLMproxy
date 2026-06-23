@@ -16,8 +16,10 @@ from .backend import (
     format_httpx_error,
     _safe_headers_for_log,
     _parse_bool,
+    RETRYABLE_STATUSES,
 )
 from .exceptions import BackendRetryableError
+from .gigachat import GigaChatBackendAdapter, build_gigachat_config
 
 logger = logging.getLogger("yallmp-proxy")
 
@@ -312,6 +314,45 @@ class ProxyRouter:
 
         raise BackendRetryableError(f"{backend.name} exhausted without success")
 
+    async def _execute_gigachat_request(
+        self,
+        backend: Backend,
+        *,
+        payload: Mapping[str, Any],
+        path: str,
+        query: str,
+        is_stream: bool,
+        attempt_number: int,
+        request_log: Optional[Any] = None,
+    ) -> Response:
+        """Handle a request for a native GigaChat backend."""
+        url = backend.build_url(path, query)
+        if request_log:
+            request_log.record_backend_attempt(backend.name, attempt_number, url)
+
+        logger.info("Calling GigaChat backend '%s' at %s (stream=%s)", backend.name, url, is_stream)
+        adapter = GigaChatBackendAdapter(backend.gigachat_config)
+        try:
+            response = await adapter.request(payload=payload, is_stream=is_stream)
+        finally:
+            if not is_stream:
+                await adapter.aclose()
+
+        # For non-streaming responses, map retryable upstream HTTP errors to retries.
+        if not is_stream and isinstance(response, Response):
+            if response.status_code in RETRYABLE_STATUSES:
+                if request_log:
+                    request_log.record_error(
+                        f"{backend.name} returned retryable status {response.status_code}",
+                        error_type="http_retryable",
+                    )
+                raise BackendRetryableError(
+                    f"{backend.name} returned status {response.status_code}",
+                    response=response,
+                )
+
+        return response
+
     async def _execute_backend_request(
         self,
         backend: Backend,
@@ -329,6 +370,25 @@ class ProxyRouter:
         from .backend import DEFAULT_TIMEOUT
 
         url = backend.build_url(path, query)
+
+        if backend.gigachat_config is not None:
+            # Apply yaLLMproxy parameter overrides / target_model rewrites first,
+            # then let the GigaChat adapter translate the OpenAI payload.
+            outbound_body = build_backend_body(payload, backend, body, is_stream=is_stream)
+            try:
+                gigachat_payload = json.loads(outbound_body)
+            except json.JSONDecodeError:
+                gigachat_payload = dict(payload)
+            return await self._execute_gigachat_request(
+                backend,
+                payload=gigachat_payload,
+                path=path,
+                query=query,
+                is_stream=is_stream,
+                attempt_number=attempt_number,
+                request_log=request_log,
+            )
+
         outbound_headers = build_outbound_headers(
             headers,
             backend.api_key,
@@ -550,6 +610,16 @@ class ProxyRouter:
             # Check if this is a passthrough backend
             is_passthrough = api_type == "passthrough"
 
+            gigachat_config = None
+            if api_type == "gigachat":
+                try:
+                    gigachat_config = build_gigachat_config(params)
+                except ValueError as exc:
+                    logger.error(
+                        "Failed to parse GigaChat config for model '%s': %s", name, exc
+                    )
+                    continue
+
             # Parse parameter overrides (support top-level or model_params.parameters)
             param_configs: Dict[str, ParameterConfig] = {}
             if "parameters" in entry:
@@ -581,6 +651,7 @@ class ProxyRouter:
                 editable=editable,
                 passthrough=is_passthrough,
                 parameters=param_configs,
+                gigachat_config=gigachat_config,
             )
 
             if is_passthrough:

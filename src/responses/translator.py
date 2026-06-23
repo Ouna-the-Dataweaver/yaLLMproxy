@@ -151,6 +151,11 @@ def _convert_item_to_message(item: dict[str, Any]) -> Optional[dict[str, Any]]:
     """Convert a Responses API item to a Chat Completions message."""
     item_type = item.get("type")
 
+    # opencode sends input items without an explicit "type" field.
+    # Treat any item with a "role" as a message.
+    if item_type is None and "role" in item:
+        item_type = "message"
+
     if item_type == "message":
         role = item.get("role", "user")
         # Map "developer" role to "system"
@@ -158,6 +163,10 @@ def _convert_item_to_message(item: dict[str, Any]) -> Optional[dict[str, Any]]:
             role = "system"
 
         content = item.get("content", [])
+
+        # Plain string content
+        if isinstance(content, str):
+            return {"role": role, "content": content}
 
         # Handle content array
         if isinstance(content, list):
