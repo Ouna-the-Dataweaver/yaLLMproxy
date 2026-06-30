@@ -174,6 +174,12 @@ const getOutcomeBadge = (outcome) => {
     return `<span class="badge badge-${map[outcome] || "neutral"}">${outcome}</span>`;
 };
 
+const getWarningBadge = (log) => {
+    const count = Number(log.warning_count || (Array.isArray(log.warnings) ? log.warnings.length : 0));
+    if (!count) return "";
+    return ` <span class="badge badge-warning">${count} warning${count === 1 ? "" : "s"}</span>`;
+};
+
 const getStopReasonBadge = (stopReason) => {
     if (!stopReason) return '<span class="badge badge-neutral">--</span>';
     const map = {
@@ -281,8 +287,8 @@ const fetchLogs = async () => {
         }
 
         const data = await response.json();
-        state.logs = data.logs || [];
-        state.total = data.total || 0;
+        state.logs = data.logs || data.data || [];
+        state.total = data.total || state.logs.length;
         renderLogs();
     } catch (error) {
         console.error("Failed to fetch logs:", error);
@@ -387,7 +393,7 @@ const renderLogs = () => {
         <tr>
             <td class="clickable" data-id="${log.id}">${formatDate(log.request_time)}</td>
             <td>${escapeHtml(log.model_name || "Unknown")}</td>
-            <td>${getOutcomeBadge(log.outcome)}</td>
+            <td>${getOutcomeBadge(log.outcome)}${getWarningBadge(log)}</td>
             <td>${getStopReasonBadge(log.stop_reason)}</td>
             <td>${getToolCallIndicator(log.is_tool_call)}</td>
             <td>${getDuration(log.duration_ms)}</td>
@@ -516,18 +522,25 @@ const showLogDetail = async (logId) => {
         }
 
         // 12. Backend Attempts section
-        if (log.backend_attempts && log.backend_attempts.length > 0) {
+        const backendAttempts = log.backend_attempts || log.attempt_trail || log.attempts;
+        if (backendAttempts && backendAttempts.length > 0) {
             const truncatedNotice = log.backend_attempts_truncated
-                ? `<div class="truncated-notice" style="margin-bottom: 8px;">Showing first ${log.backend_attempts.length} attempts</div>`
+                ? `<div class="truncated-notice" style="margin-bottom: 8px;">Showing first ${backendAttempts.length} attempts</div>`
                 : '';
-            const attemptsContent = truncatedNotice + `<div class="json-tree">${renderJsonTree(log.backend_attempts)}</div>`;
-            html += renderCollapsibleSection("Backend Attempts", attemptsContent, `${log.backend_attempts.length} attempts`, true);
+            const attemptsContent = truncatedNotice + `<div class="json-tree">${renderJsonTree(backendAttempts)}</div>`;
+            html += renderCollapsibleSection("Backend Attempts", attemptsContent, `${backendAttempts.length} attempts`, true);
         }
 
         // 13. Errors section (expanded by default if present)
         if (log.errors && log.errors.length > 0) {
             const errorsContent = `<div class="json-tree">${renderJsonTree(log.errors)}</div>`;
             html += renderCollapsibleSection("Errors", errorsContent, `${log.errors.length} errors`, false);
+        }
+
+        // 13. Client/proxy warnings
+        if (log.warnings && log.warnings.length > 0) {
+            const warningsContent = `<div class="json-tree">${renderJsonTree(log.warnings)}</div>`;
+            html += renderCollapsibleSection("Warnings", warningsContent, `${log.warnings.length} warnings`, false);
         }
 
         // 13. Linked Error Logs
