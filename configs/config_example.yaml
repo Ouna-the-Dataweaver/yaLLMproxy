@@ -1,6 +1,13 @@
 model_list:
 - model_name: GLM-5.1-cursor
   protected: true
+  limits:
+    concurrency: 0
+    rps: 0
+    rpm: 0
+    token_quota: 0
+    token_quota_window_seconds: 0
+    token_quota_reset_mode: ""
   model_params:
     api_type: openai
     model: glm-5.1
@@ -203,8 +210,51 @@ model_list:
         parse_tool_calls: true
         stream_tool_calls: true
   protected: false
+- model_name: GigaChat-Max
+  protected: true
+  model_params:
+    api_type: gigachat
+    api_base: https://gigachat.devices.sberbank.ru/api/v1
+    api_key: ${GIGACHAT_API_KEY}
+    scope: ${GIGACHAT_SCOPE}
+    auth_url: https://ngw.devices.sberbank.ru:9443/api/v2/oauth
+    request_timeout: 120
+    emulate_tool_calls: false
+- model_name: GigaChat-Local
+  protected: true
+  model_params:
+    api_type: gigachat
+    api_base: http://localhost:8000/v1
+    client_cert: ${GIGACHAT_CLIENT_CERT}
+    client_key: ${GIGACHAT_CLIENT_KEY}
+    verify_ssl: true
+    request_timeout: 120
 router_settings:
   num_retries: 1
+  # fallbacks:
+  #   - client-model: [node-a, node-b]
+  health_checks:
+    enabled: false
+    path: /models
+    interval_seconds: 15
+    timeout_seconds: 2
+    failure_threshold: 2
+    unhealthy_cooldown_seconds: 30
+    recovery_success_threshold: 0  # 0 disables half-open recovery; >0 requires consecutive successful trials after cooldown
+  health_scoring:
+    enabled: false
+    unhealthy_threshold: 0.3
+    failure_threshold: 2
+    cooldown_seconds: 30
+    recovery_success_threshold: 0
+  quota_aware_selection:
+    enabled: false
+    persist_backend_quota: false  # Requires enabled: true; restores backend::<name> quota state from log DB.
+  prefix_cache_affinity:
+    enabled: false  # Opt-in: prefer nodes that recently served the same shallow message prefix (0, 0-1, 0-2)
+    max_entries: 4096  # Bounded in-memory (node, prefix-hash) binding count
+  concurrency_aware_selection:
+    enabled: false  # Opt-in: for fresh requests, prefer the eligible node with the fewest live upstream attempts
 proxy_settings:
   debug: false
   server:
@@ -212,9 +262,51 @@ proxy_settings:
     port: 7979
   enable_responses_endpoint: false
   enable_messages_endpoint: true
+  inference_cache:
+    mode: off
+    ttl_seconds: 300
+    max_age_seconds: 300
+    max_entries: 1024
+    max_entry_bytes: 1048576
+    semantic:
+      enabled: false
+      embedding_node: ""
+      embedding_model: ""
+      similarity_threshold: 0.95
+      top_k: 5
+      max_entries: 256
+      max_entry_bytes: 1048576
+    persistence:
+      enabled: false
+      path: logs/inference_cache.db
+      flush_mode: writethrough
+  model_catalog:
+    enabled: false
+    probe_interval_seconds: 300
+    probe_timeout_seconds: 5
+    failure_backoff_seconds: 60
+    cache_ttl_seconds: 1800
+    probe_providers: []
+    probe_nodes: []
+  profiling:
+    enabled: false
+  metrics:
+    enabled: false
+    timings:
+      enabled: false
+  otel:
+    enabled: false
+    service_name: yallmp-proxy
+    exporter: otlp_grpc
+    endpoint: "" # e.g. collector.example:4317 or https://collector.example/v1/traces
+    insecure: false
+    headers:
+      x-otlp-token: ${OTEL_TOKEN}
+    logs:
+      enabled: false
   logging:
     log_parsed_response: true
-    log_parsed_stream: true
+    log_parsed_stream: false # Store capped raw/transformed SSE sidecars when stream response modules transform output
     log_to_disk: true
     full_request_storage:
       enabled: true
@@ -228,6 +320,7 @@ proxy_settings:
       response:
       - parse_tags
       - swap_reasoning_content
+      - stream_json_repair
       paths:
       - /chat/completions
       parse_tags:
@@ -246,17 +339,70 @@ proxy_settings:
           prefix: ''
           suffix: ''
         include_newline: true
+      stream_json_repair:
+        enabled: false # Explicit opt-in; only repairs streamed tool/function argument JSON fragments
+        max_stream_buffer_bytes: 1048576
+        on_failure: passthrough # passthrough | empty_object
     downstream:
       enabled: false
       request: []
+app_keys:
+  enabled: false
+  header_name: x-api-key
+  allow_unauthenticated: false
+  required_headers:
+  - name: X-Tenant-ID
+    log_as: tenant
+    models:
+    - GLM-5.1
+  defaults:
+    concurrency_limit: 0
+    priority: 100
+    queue_timeout: 0
+  unauthenticated:
+    concurrency_limit: 5
+    priority: 1000
+    queue_timeout: 30
+  groups:
+  - group_id: 0123456789abcdef0123456789abcdef
+    name: Example team
+    enabled: true
+    models:
+    - GLM-5.1
+    required_headers:
+    - name: X-Team-ID
+      log_as: team
+    limits:
+      rps: 5
+      rpm: 120
+      token_quota: 100000
+      token_quota_window_seconds: 0
+      token_quota_reset_mode: daily
+  keys:
+  - key_id: abcdef0123456789abcdef0123456789
+    group_id: 0123456789abcdef0123456789abcdef
+    secret: ${APP_KEY_EXAMPLE}
+    name: Example app
+    enabled: true
+    models:
+    - GLM-5.1
+    required_headers:
+    - name: X-Workload-ID
+      log_as: workload
+    limits:
+      concurrency: 2
 forwarder_settings:
+  enabled: false
   debug: false
+  bufsize: 65536
   listen:
     host: 0.0.0.0
     port: 6969
   target:
     host: 127.0.0.1
     port: 7979
+  accept_timeout_seconds: 1
+  dial_timeout_seconds: 10
 http_forwarder_settings:
   debug: false
   preserve_host: true
@@ -279,5 +425,16 @@ database:
   connection:
     sqlite:
       path: logs/yaLLM.db
+    # PostgreSQL is also supported. Prefer a DSN supplied through .env:
+    # postgres:
+    #   dsn: ${YALLMP_POSTGRES_DSN}
+    # Or configure individual fields:
+    # postgres:
+    #   host: localhost
+    #   port: 5432
+    #   database: yallmp_logs
+    #   user: yallmp
+    #   password: ${YALLMP_POSTGRES_PASSWORD}
+    #   sslmode: disable
   pool_size: 5
   max_overflow: 10

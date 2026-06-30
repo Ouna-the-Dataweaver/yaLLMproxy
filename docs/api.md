@@ -1,499 +1,306 @@
 # API Reference
 
-Complete documentation for all yaLLMproxy API endpoints.
+This document covers endpoints exposed by the Go server.
 
-## Core Endpoints
-
-### Chat Completions
-
-```http
-POST /v1/chat/completions
-```
-
-OpenAI-compatible chat completions endpoint. Supports both streaming and non-streaming responses.
-
-**Request Body:**
-
-```json
-{
-  "model": "model-name",
-  "messages": [
-    {"role": "system", "content": "You are helpful."},
-    {"role": "user", "content": "Hello, world!"}
-  ],
-  "temperature": 0.7,
-  "max_tokens": 1000,
-  "stream": false
-}
-```
-
-**Response (non-streaming):**
-
-```json
-{
-  "id": "chatcmpl-abc123",
-  "object": "chat.completion",
-  "created": 1677858242,
-  "model": "model-name",
-  "choices": [
-    {
-      "index": 0,
-      "message": {
-        "role": "assistant",
-        "content": "Hello! How can I help you today?"
-      },
-      "finish_reason": "stop"
-    }
-  ],
-  "usage": {
-    "prompt_tokens": 15,
-    "completion_tokens": 12,
-    "total_tokens": 27
-  }
-}
-```
-
-### Embeddings
-
-```http
-POST /v1/embeddings
-```
-
-OpenAI-compatible embeddings endpoint. Generate vector representations of text for use in search, clustering, recommendations, and other ML tasks.
-
-**Request Body:**
-
-```json
-{
-  "model": "text-embedding-model",
-  "input": "Hello, world!",
-  "encoding_format": "float",
-  "dimensions": 1536
-}
-```
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `model` | string | Yes | Model name to use for embeddings |
-| `input` | string or array | Yes | Text to embed (string or array of strings) |
-| `encoding_format` | string | No | Output format: `float` (default) or `base64` |
-| `dimensions` | integer | No | Output dimensions (model-dependent) |
-| `user` | string | No | End-user identifier for tracking |
-
-**Response:**
-
-```json
-{
-  "object": "list",
-  "data": [
-    {
-      "object": "embedding",
-      "index": 0,
-      "embedding": [0.0023064255, -0.009327292, ...]
-    }
-  ],
-  "model": "text-embedding-model",
-  "usage": {
-    "prompt_tokens": 9,
-    "total_tokens": 9
-  }
-}
-```
-
-**Notes:**
-- The same model configuration works for both chat and embeddings - the proxy routes based on the endpoint path
-- Configure embedding models the same way as chat models in `config.yaml`
-- Embeddings requests are never streaming
-
-### Rerank
-
-```http
-POST /v1/rerank
-```
-
-Rerank endpoint for semantic search and document ranking. Given a query and a list of documents, returns the documents ranked by relevance to the query.
-
-**Request Body:**
-
-```json
-{
-  "model": "reranker-model",
-  "query": "What is machine learning?",
-  "documents": [
-    "Machine learning is a subset of artificial intelligence.",
-    "Python is a popular programming language.",
-    "Neural networks can learn complex patterns from data."
-  ],
-  "top_n": 2,
-  "return_documents": true
-}
-```
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `model` | string | Yes | Model name to use for reranking |
-| `query` | string | Yes | The search query to rank documents against |
-| `documents` | array | Yes | Array of document strings to rank |
-| `top_n` | integer | No | Maximum number of results to return (defaults to all) |
-| `return_documents` | boolean | No | Include document text in response (default: true) |
-
-**Response:**
-
-```json
-{
-  "id": "rerank-abc123",
-  "model": "reranker-model",
-  "usage": {
-    "total_tokens": 150
-  },
-  "results": [
-    {
-      "index": 0,
-      "relevance_score": 0.98,
-      "document": {
-        "text": "Machine learning is a subset of artificial intelligence."
-      }
-    },
-    {
-      "index": 2,
-      "relevance_score": 0.75,
-      "document": {
-        "text": "Neural networks can learn complex patterns from data."
-      }
-    }
-  ]
-}
-```
-
-| Response Field | Type | Description |
-|----------------|------|-------------|
-| `id` | string | Unique request identifier |
-| `model` | string | Model used for reranking |
-| `usage.total_tokens` | integer | Total tokens processed |
-| `results` | array | Ranked results sorted by relevance |
-| `results[].index` | integer | Original index of the document in the input array |
-| `results[].relevance_score` | float | Relevance score (0-1, higher is more relevant) |
-| `results[].document` | object | Document content (if `return_documents` is true) |
-
-**Notes:**
-- Results are returned sorted by `relevance_score` in descending order
-- The `index` field indicates the original position in the input `documents` array
-- Configure reranker models the same way as other models in `config.yaml`
-- Rerank requests are never streaming
-
-### Anthropic Messages
-
-```http
-POST /v1/messages
-```
-
-Anthropic Messages API endpoint. Accepts Anthropic-format requests and translates them to OpenAI Chat Completions internally, enabling you to use Anthropic-compatible clients with OpenAI backends.
-
-**Request Body:**
-
-```json
-{
-  "model": "model-name",
-  "max_tokens": 1024,
-  "system": "You are a helpful assistant.",
-  "messages": [
-    {"role": "user", "content": "Hello, world!"}
-  ],
-  "temperature": 0.7,
-  "stream": false
-}
-```
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `model` | string | Yes | Model name to use |
-| `max_tokens` | integer | Yes | Maximum tokens to generate |
-| `messages` | array | Yes | Array of messages (Anthropic format) |
-| `system` | string/array | No | System prompt (string or content blocks) |
-| `temperature` | number | No | Sampling temperature (0-2) |
-| `top_p` | number | No | Nucleus sampling parameter |
-| `stop_sequences` | array | No | Stop sequences (converted to `stop`) |
-| `stream` | boolean | No | Enable streaming responses |
-| `tools` | array | No | Tool definitions (Anthropic format) |
-| `tool_choice` | string/object | No | Tool selection strategy |
-| `metadata` | object | No | Request metadata (user_id mapped to `user`) |
-
-**Message Content Formats:**
-
-Messages can contain string content or content blocks:
-
-```json
-{
-  "role": "user",
-  "content": [
-    {"type": "text", "text": "What's in this image?"},
-    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "..."}}
-  ]
-}
-```
-
-**Supported Content Block Types:**
-- `text` - Text content
-- `image` - Base64 or URL images (converted to OpenAI `image_url`)
-- `tool_use` - Tool/function calls (assistant role)
-- `tool_result` - Tool results (converted to OpenAI `tool` messages)
-
-**Response (non-streaming):**
-
-```json
-{
-  "id": "msg_abc123",
-  "type": "message",
-  "role": "assistant",
-  "content": [
-    {"type": "text", "text": "Hello! How can I help you today?"}
-  ],
-  "model": "model-name",
-  "stop_reason": "end_turn",
-  "stop_sequence": null,
-  "usage": {
-    "input_tokens": 15,
-    "output_tokens": 12
-  }
-}
-```
-
-**Response (streaming):**
-
-Streaming responses use Server-Sent Events (SSE) with Anthropic event types:
-
-```
-event: message_start
-data: {"type":"message_start","message":{...}}
-
-event: content_block_start
-data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
-
-event: content_block_delta
-data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}
-
-event: content_block_stop
-data: {"type":"content_block_stop","index":0}
-
-event: message_delta
-data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":12}}
-
-event: message_stop
-data: {"type":"message_stop"}
-```
-
-**Tool Use Example:**
-
-Request with tools:
-```json
-{
-  "model": "model-name",
-  "max_tokens": 1024,
-  "tools": [
-    {
-      "name": "get_weather",
-      "description": "Get current weather for a location",
-      "input_schema": {
-        "type": "object",
-        "properties": {
-          "location": {"type": "string", "description": "City name"}
-        },
-        "required": ["location"]
-      }
-    }
-  ],
-  "messages": [{"role": "user", "content": "What's the weather in Tokyo?"}]
-}
-```
-
-Response with tool use:
-```json
-{
-  "id": "msg_abc123",
-  "type": "message",
-  "role": "assistant",
-  "content": [
-    {
-      "type": "tool_use",
-      "id": "toolu_abc123",
-      "name": "get_weather",
-      "input": {"location": "Tokyo"}
-    }
-  ],
-  "stop_reason": "tool_use",
-  "usage": {"input_tokens": 50, "output_tokens": 30}
-}
-```
-
-**Translation Notes:**
-- `stop_sequences` → OpenAI `stop`
-- `tool_choice: "any"` → OpenAI `"required"`
-- `tool_choice: {"type": "tool", "name": "..."}` → OpenAI function selection
-- `top_k` is logged but ignored (OpenAI doesn't support it)
-- Stop reason mapping: `stop`→`end_turn`, `length`→`max_tokens`, `tool_calls`→`tool_use`
-
-### Models List
+## Model List
 
 ```http
 GET /v1/models
 ```
 
-Lists all currently registered models in OpenAI format.
+Returns configured client-facing models. Model entries include display metadata such as
+`supports_reasoning`, `capabilities.reasoning`, and a `reasoning` tag when the
+configured backend is marked reasoning-capable. These fields are informational;
+they do not cause the proxy to add reasoning or thinking parameters to requests.
 
-**Response:**
+## Chat Completions
+
+```http
+POST /v1/chat/completions
+POST /chat/completions
+```
+
+OpenAI-compatible chat completions. Supports streaming and non-streaming responses.
+
+Required request fields:
+
+- `model`
+- `messages`
+
+The proxy preserves unknown request fields unless model parameter defaults intentionally override them.
+
+## Embeddings
+
+```http
+POST /v1/embeddings
+POST /embeddings
+```
+
+OpenAI-compatible embeddings.
+
+Required request fields:
+
+- `model`
+- `input`
+
+`input` may be a string or an array of strings/token arrays.
+
+## Rerank
+
+```http
+POST /v1/rerank
+POST /rerank
+```
+
+Rerank-compatible request forwarding.
+
+Required request fields:
+
+- `model`
+- `query`
+- `documents`
+
+`documents` must be a non-empty array of strings. `top_n`, when present, must be positive.
+
+## Anthropic Messages
+
+```http
+POST /v1/messages
+POST /messages
+```
+
+Enabled by `proxy_settings.enable_messages_endpoint`.
+
+For OpenAI-compatible backends, the proxy translates Anthropic Messages requests to Chat Completions and translates responses back. For `api_type: anthropic` backends, requests pass through to `/v1/messages`.
+
+When exact inference caching is enabled, identical non-stream translated Messages requests can read/write the router-owned cache. Streaming requests and native Anthropic pass-through responses are not cached.
+
+Required request fields:
+
+- `model`
+- `messages`
+
+The translator supports common text, image, tool use/result, thinking/redacted-thinking blocks, reasoning signatures, tool choice, metadata `user_id`, streaming, and usage mapping.
+
+## Responses API
+
+```http
+POST /v1/responses
+POST /responses
+```
+
+Enabled by `proxy_settings.enable_responses_endpoint`.
+
+For OpenAI-compatible backends, the proxy translates Responses API requests to Chat Completions. For backends with `supports_responses_api: true`, requests pass through to `/v1/responses`.
+
+When exact inference caching is enabled, identical non-stream translated Responses requests can read/write the router-owned cache. Streaming requests and native Responses provider responses are not cached.
+
+Required request fields:
+
+- `model`
+- `input`
+
+Supported features include text/tool output translation, reasoning output items and reasoning-summary stream events, streaming events, `store`, `previous_response_id`, SQLite-backed response state, and sticky follow-up routing.
+
+## Passthrough
+
+```http
+ANY /p1/{model_name}/{path...}
+```
+
+Routes to models configured with `api_type: passthrough`. The proxy performs minimal HTTP proxying and upstream auth header injection.
+
+## Health
+
+```http
+GET /v1/health
+```
+
+Returns backend health snapshots. When half-open recovery is configured, backend entries may include bounded recovery fields: `state` (`healthy`, `half_open`, or `unhealthy`), `recovery_successes`, and `recovery_success_threshold`. The endpoint does not expose tenant data, raw upstream errors, or raw upstream response bodies.
+
+## Admin Config
+
+```http
+GET /admin/config
+PUT /admin/config
+POST /admin/config/validate
+POST /admin/config/reload
+```
+
+- `GET /admin/config` returns masked config.
+- `PUT /admin/config` validates, preserves missing sensitive fields, persists YAML when a config path is known, and rebuilds runtime router state.
+- `POST /admin/config/validate` returns structured validation issues.
+- `POST /admin/config/reload` reloads config from disk.
+
+## Admin Cache Stats
+
+```http
+GET /admin/cache
+```
+
+Returns a read-only exact inference cache snapshot. The request requires `x-admin-password` or `admin_password` matching `YALLMP_ADMIN_PASSWORD`.
+
+Example response:
 
 ```json
 {
-  "object": "list",
-  "data": [
-    {
-      "id": "gpt-4",
-      "object": "model",
-      "created": 1677858242,
-      "owned_by": "yallmp-proxy"
-    }
+  "enabled": true,
+  "mode": "read_write",
+  "hits": 12,
+  "misses": 7,
+  "writes": 7,
+  "evictions": 1,
+  "entries": 6,
+  "total_entry_bytes": 42184,
+  "max_entries": 1024,
+  "max_entry_bytes": 1048576,
+  "persistent_enabled": true,
+  "persistent_mode": "read_write",
+  "persisted_loaded": 4
+}
+```
+
+The snapshot contains only counters, configured size bounds, and persistence status/counts. It does not include cache keys, prompts, request bodies, URLs, app-key scopes, headers, or cached response content. Exact-cache persistence is disabled by default; when enabled, it writes cached client-facing response bodies to the configured SQLite path, which operators must protect.
+
+The React admin frontend exposes these counters in the Observability tab alongside backend health and usage summaries.
+
+## Admin Model Catalog
+
+```http
+GET /admin/catalog
+```
+
+Returns the read-only model catalog. The request requires `x-admin-password` or `admin_password` matching `YALLMP_ADMIN_PASSWORD`.
+
+The catalog is informational only. It lists configured model/provider/node availability and, when `proxy_settings.model_catalog.enabled` plus `probe_nodes` or `probe_providers` opt in probes, overlays provider `/v1/models` results. Probe failures are exposed only as bucketed `error_class` values such as `auth`, `rate_limited`, `timeout`, `network`, `status_error`, `invalid_response`, or `unsupported_api_type`.
+
+The JSON response also includes bounded read-only `warnings` derived from the redacted snapshot, such as probe opt-in gaps, stale probe data, auth/rate-limit probe buckets, or models whose catalog nodes are all unavailable. These warnings are advisory and do not mutate config or routing. The React admin Catalog tab renders the same snapshot and warnings.
+
+The response does not include credentials, raw upstream response bodies, raw error strings, prompts, request headers, client app keys, tenant-scoped request data, or routing mutations.
+
+## Admin Routing CRUD
+
+```http
+GET /admin/providers
+POST /admin/providers
+GET /admin/providers/{name}
+PUT /admin/providers/{name}
+DELETE /admin/providers/{name}
+
+GET /admin/nodes
+POST /admin/nodes
+GET /admin/nodes/{name}
+PUT /admin/nodes/{name}
+DELETE /admin/nodes/{name}
+
+GET /admin/client-models
+POST /admin/client-models
+GET /admin/client-models/{name}
+PUT /admin/client-models/{name}
+DELETE /admin/client-models/{name}
+```
+
+These endpoints manage top-level `providers`, `nodes`, and client-facing `models` entries. Client models intentionally use `/admin/client-models` so they do not collide with the legacy `/admin/models` model-inheritance APIs.
+
+Reads return raw-ish config entries with sensitive fields recursively masked. Writes require `x-admin-password` or `admin_password` matching `YALLMP_ADMIN_PASSWORD`.
+
+`POST` creates a new entry. `PUT` updates the entry named in the path; payloads may omit the name, but a supplied `name` or `model_name` must match the path. Rename is rejected. Mutations preserve raw unknown keys, unresolved `${ENV}` placeholders, and existing sensitive values omitted from masked payloads. The server validates the full candidate config and rebuilds runtime routing only after validation and apply succeed.
+
+Deletes are dependency-aware:
+
+- Provider delete returns `409 provider_has_nodes` when nodes reference the provider.
+- Node delete returns `409 node_has_client_models` when client models reference the node.
+- Client-model delete validates the resulting config before applying it and removes deleted client-model names from `router_settings.fallbacks` sources and targets. Legacy `model_list` routes are not touched.
+
+## Admin Router Settings
+
+```http
+GET /admin/router-settings
+PUT /admin/router-settings
+```
+
+`GET /admin/router-settings` returns the current fallback chain payload:
+
+```json
+{
+  "fallbacks": [
+    {"client-model": ["legacy-backup", "node-backup"]}
   ]
 }
 ```
 
-### Responses Endpoint (Optional)
+`PUT /admin/router-settings` replaces `router_settings.fallbacks` with the supplied `fallbacks` array. The request requires `x-admin-password` or `admin_password` matching `YALLMP_ADMIN_PASSWORD`.
+
+The fallback payload is strict: it must be a list of single-key objects, each source must be non-empty, each target list must contain non-empty strings, and source/target names must already exist as a legacy `model_list` model, a client model, or a node. Unknown names and malformed entries return `400` with code `invalid_fallbacks`. The mutation preserves unrelated `router_settings` keys and top-level unknown config keys, validates the full candidate config, and applies runtime routing only after validation succeeds.
+
+## Debug Profiling
 
 ```http
-POST /v1/responses
+GET /debug/pprof/
+GET /debug/pprof/{profile}
+GET /debug/pprof/cmdline
+GET /debug/pprof/symbol
+GET /debug/pprof/trace
 ```
 
-OpenAI Responses API endpoint. Only available if `enable_responses_endpoint` is set to `true` in `proxy_settings` in the configuration. This endpoint is disabled by default.
+The stdlib Go pprof endpoints are disabled unless `proxy_settings.profiling.enabled` is true. When enabled, every profiling request requires `x-admin-password` or `admin_password` matching `YALLMP_ADMIN_PASSWORD`; missing or invalid admin credentials return `403`.
 
----
+Profiles may expose in-memory runtime data and should only be enabled temporarily on trusted deployments.
 
-## Admin Endpoints
-
-### Register Runtime Model
+## Admin Model Registration
 
 ```http
 POST /admin/models
 ```
 
-Register or replace a backend at runtime without restarting the proxy.
+Registers or replaces a legacy `model_list` model and persists it when the app was loaded from a config file.
 
-**Request Body:**
-
-```json
-{
-  "model_name": "my-model",
-  "api_base": "https://api.example.com/v1",
-  "api_key": "secret-key",
-  "target_model": "gpt-4",
-  "request_timeout": 60,
-  "supports_reasoning": true,
-  "extends": "base-model",
-  "fallbacks": ["backup-model"],
-  "protected": false
-}
-```
-
-**Response:**
+Minimal body:
 
 ```json
 {
-  "status": "ok",
-  "model": "my-model",
-  "replaced": false,
-  "fallbacks": ["backup-model"],
-  "protected": false
+  "model_name": "local",
+  "api_base": "http://localhost:8000/v1",
+  "api_key": "",
+  "model": "upstream-model",
+  "api_type": "openai"
 }
 ```
 
-**Protected models:** If the model is protected (or you are modifying a protected model), include the admin password via `x-admin-password` header or `admin_password` in the request body/query.
+Protected existing models require `x-admin-password` or `admin_password` query parameter matching `YALLMP_ADMIN_PASSWORD`.
 
-### Get Full Configuration
-
-```http
-GET /admin/config
-```
-
-Returns the full runtime configuration (models, settings). API keys are removed from the response.
-
-**Response:**
-
-```json
-{
-  "model_list": [...],
-  "router_settings": {...},
-  "proxy_settings": {...}
-}
-```
-
-### Update Configuration
-
-```http
-PUT /admin/config
-```
-
-Update runtime configuration. Body format same as GET response.
-
-Protected models require the admin password via `x-admin-password` header (or `admin_password` in the request body/query).
-
-### Reload Configuration
-
-```http
-POST /admin/config/reload
-```
-
-Reload configuration from disk without restarting the proxy. This will:
-1. Reload config files from disk
-2. Re-parse all models and backends
-3. Update the router's runtime state
-
-**Response:**
-
-```json
-{
-  "status": "ok",
-  "message": "Configuration reloaded successfully",
-  "models_count": 5
-}
-```
-
-### List Models
+## Admin Model Reads
 
 ```http
 GET /admin/models
+GET /admin/models/tree
+GET /admin/models/{name}/ancestry
+GET /admin/models/{name}/dependents
 ```
 
-List all registered models, grouped by protection status. API keys are removed from the response.
+Read-only model management endpoints do not mutate config files or runtime routing. Responses mask sensitive values recursively.
 
-**Response:**
+`GET /admin/models` returns JSON for API clients:
 
 ```json
 {
-  "protected": [
-    {"model_name": "gpt-4", "protected": true, "editable": false}
-  ],
-  "unprotected": [
-    {"model_name": "gpt-4-mini", "protected": false, "editable": true}
-  ]
+  "protected": [],
+  "unprotected": []
 }
 ```
 
-### Model Tree
+For browser navigations that clearly request HTML, such as `Accept: text/html`, `/admin/models` continues to serve the React admin SPA.
 
-```http
-GET /admin/models/tree
-```
-
-Returns the full inheritance tree (parents/children). API keys are removed from the response.
-
-**Response:**
+`GET /admin/models/tree` returns:
 
 ```json
 {
-  "roots": ["base-model"],
+  "roots": ["base"],
   "nodes": {
-    "base-model": {
-      "config": {"model_name": "base-model", "model_params": {...}},
-      "parent": null,
-      "children": ["derived-model"],
+    "base": {
+      "config": {},
+      "parent": "",
+      "children": ["derived"],
       "protected": true,
       "editable": false
     }
@@ -501,522 +308,242 @@ Returns the full inheritance tree (parents/children). API keys are removed from 
 }
 ```
 
-### Model Ancestry
+Tree relationships come from raw `model_list[].extends`, not from flattened resolved model configs.
+
+`GET /admin/models/{name}/ancestry` returns `model`, `chain` with `[name, parent, ...]`, and `inheritance_depth`. `GET /admin/models/{name}/dependents` returns `model`, `direct_children`, `all_descendants`, and `descendant_count`. Unknown models return `404` with JSON error code `model_not_found`.
+
+Model mutation endpoints:
 
 ```http
-GET /admin/models/{model_name}/ancestry
+POST /admin/models/copy?source={source}&target={target}
+DELETE /admin/models/{name}?cascade=true
 ```
 
-Returns the inheritance chain for a model.
+`POST /admin/models/copy` also accepts a JSON object body with `source` and `target`, but query parameters are supported for legacy admin UI compatibility. The server copies the raw `model_list` entry, preserves `extends`, unknown keys, modules, parameters, limits, and unresolved environment placeholders, strips UI/runtime metadata such as `editable`, `source`, and `_inherited_from`, sets `model_name` to the target, validates the candidate config, and swaps runtime routing only after validation succeeds. Unknown sources return `404` with code `model_not_found`; existing targets return `409` with code `duplicate_model`.
 
-**Response:**
+Protected source models require `x-admin-password` or `admin_password` matching `YALLMP_ADMIN_PASSWORD`. If the admin password is unset, protected copies return `403`.
 
-```json
-{
-  "model": "derived-model",
-  "chain": ["derived-model", "base-model"],
-  "inheritance_depth": 2
-}
-```
-
-### Model Dependents
-
-```http
-GET /admin/models/{model_name}/dependents
-```
-
-Returns direct children and all descendants of a model.
-
-**Response:**
-
-```json
-{
-  "model": "base-model",
-  "direct_children": ["derived-model"],
-  "all_descendants": ["derived-model"],
-  "descendant_count": 1
-}
-```
-
-### Delete Runtime Model
-
-```http
-DELETE /admin/models/{model_name}
-```
-
-Remove a model from config/runtime. Protected models require the admin password.
-
-Use `?cascade=true` to delete dependents.
-
-**Response:**
+Copy response:
 
 ```json
 {
   "status": "ok",
-  "message": "Deleted 2 model(s)",
-  "deleted": ["base-model", "derived-model"]
-}
-```
-
-If dependents exist and `cascade` is not set:
-
-```json
-{
-  "error": "Cannot delete model with existing dependents",
-  "dependents": ["derived-model"],
-  "hint": "Set cascade=true to delete dependents, or update them to use a different parent"
-}
-```
-
-### Copy Model
-
-```http
-POST /admin/models/copy?source={source}&target={target}
-```
-
-Copy an existing model to a new model name. Protected source models require the admin password.
-
----
-
-## Template Management
-
-### List Templates
-
-```http
-GET /admin/templates
-```
-
-List available Jinja templates in `configs/jinja_templates`.
-
-**Response:**
-
-```json
-{
-  "templates": [
-    {"name": "glm_4.5_air.jinja", "path": "configs/jinja_templates/glm_4.5_air.jinja"}
-  ]
-}
-```
-
-### Upload Template
-
-```http
-POST /admin/templates
-```
-
-Upload a new Jinja template file.
-
-**Request Body (multipart/form-data):**
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `file` | file | The template file to upload |
-
-**Response:**
-
-```json
-{
-  "name": "my_template.jinja",
-  "path": "configs/jinja_templates/my_template.jinja"
-}
-```
-
-### Inspect Template
-
-```http
-GET /admin/templates/inspect?template_path={path}&think_tag={tag}
-```
-
-Inspect a template and return derived swap reasoning configuration.
-
-**Query Parameters:**
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `template_path` | string | Path to the template file (relative to repo or in templates directory) |
-| `think_tag` | string | Optional explicit think tag to inspect |
-
-**Response:**
-
-```json
-{
-  "template_path": "configs/jinja_templates/my_template.jinja",
+  "model": "target-model",
   "config": {
-    "enabled": true,
-    "think_tag": "think",
-    "block_params": true,
-    "block_output": false
-  },
-  "detected_think_tag": "think"
+    "model_name": "target-model",
+    "extends": "base-model",
+    "model_params": {"model": "upstream-name"}
+  }
 }
 ```
 
----
+`config` is recursively masked and never returns secrets.
 
-## App Key Management
+`DELETE /admin/models/{name}` supports slash-containing names using the same path parsing rules as the read APIs. Unknown targets return `404` with code `model_not_found`. If the target has dependent models and `cascade=true` is not present, the server returns `409` with code `model_has_dependents`, `direct_children`, `dependents`, and a cascade hint. With `cascade=true`, the target and all descendants are removed from raw `model_list`; `router_settings.fallbacks` entries are cleaned when deleted models appear as sources or fallback targets. The candidate config is validated and applied atomically before runtime state changes.
 
-### List App Keys
+Delete requires the admin password when the target or any deleted descendant is protected.
+
+## Admin App Keys
 
 ```http
 GET /admin/keys
+GET /admin/keys/{key_id}
+POST /admin/keys
+PUT /admin/keys/{key_id}
+DELETE /admin/keys/{key_id}
+POST /admin/keys/{key_id}/regenerate
+POST /admin/keys/config
 ```
 
-List all configured app keys with secrets masked.
+Every `/admin/keys*` request requires `x-admin-password` or `admin_password` matching `YALLMP_ADMIN_PASSWORD`. If the admin password is unset or wrong, the server returns `403` and does not return key metadata.
 
-**Response:**
+Secrets are never returned by list, get, update, or config responses. `POST /admin/keys` and `POST /admin/keys/{key_id}/regenerate` return the new secret exactly once in the top-level `secret` field; store it immediately.
+
+Create body fields:
+
+```json
+{
+  "key_id": "client-a",
+  "secret": "optional-existing-secret",
+  "group_id": "team-a",
+  "name": "Client A",
+  "description": "Production integration",
+  "enabled": true,
+  "models": ["premium-model"],
+  "required_headers": [
+    {"name": "X-Workload-ID", "log_as": "workload", "models": ["premium-model"]}
+  ],
+  "limits": {"rps": 5},
+  "concurrency_limit": 2,
+  "priority": 50,
+  "queue_timeout": 15
+}
+```
+
+`key_id` and `secret` are generated when omitted. Duplicate key IDs are rejected. `PUT /admin/keys/{key_id}` updates metadata and limits while preserving the existing secret. `DELETE` removes the key from persisted config and runtime policy. `regenerate` replaces the secret and invalidates the old one immediately.
+
+`POST /admin/keys/config` updates app-key settings, defaults, unauthenticated limits, and groups:
 
 ```json
 {
   "enabled": true,
   "header_name": "x-api-key",
   "allow_unauthenticated": false,
-  "keys": [
+  "required_headers": [
+    {"name": "X-Tenant-ID", "log_as": "tenant"}
+  ],
+  "defaults": {"rps": 10},
+  "unauthenticated": {"rpm": 30},
+  "groups": [
     {
-      "key_id": "key-abc123",
-      "name": "My App Key",
-      "description": "API key for my application",
-      "enabled": true
+      "group_id": "team-a",
+      "name": "Team A",
+      "enabled": true,
+      "required_headers": [{"name": "X-Team-ID", "log_as": "team"}]
     }
   ]
 }
 ```
 
-### Create App Key
+`required_headers` entries require `name` and may include `log_as` and `models`. Missing headers return `400` with code `missing_required_header` before admission, quota, or upstream routing. `log_as` values are only written to full-request sidecar logs for accepted requests when full-request storage is enabled; Prometheus metrics do not include raw header values.
+
+All mutations run the same config validation and apply path as `/admin/config`; unknown groups, invalid limits, invalid required-header rules, and router build failures return structured validation errors without mutating runtime state.
+
+## Admin Templates
 
 ```http
-POST /admin/keys
+GET /admin/templates
+POST /admin/templates
+GET /admin/templates/inspect?template_path={path}
+GET /admin/templates/inspect?template_path={path}&render_preview=1
 ```
 
-Create a new app key. Requires admin password.
+Templates are constrained to `configs/jinja_templates`.
 
-**Request Body:**
+- `GET /admin/templates` lists `.jinja`, `.j2`, and `.jinja2` files.
+- `POST /admin/templates` accepts multipart `file`, JSON `{ "name": "...", "content": "..." }`, or raw body with a `name` query parameter. Content must be UTF-8. When `YALLMP_ADMIN_PASSWORD` is configured, pass it as `x-admin-password` or `admin_password`.
+- `GET /admin/templates/inspect` reads a template by `template_path`, `path`, or `name` and returns the parse-tags config detected by Go's bounded Jinja inspection analyzer and raw marker detector. It includes evidence, warnings, and analysis metadata. The analyzer is for parser-config inference and is not a full production Jinja renderer.
+- Add `render_preview=1` to include a strictly additive `render_preview` object. The preview uses `engine: bounded_jinja_runtime`, a synthetic sample chat/tool context, and a byte cap; it never renders live request or response bodies. Unknown runtime filters, statements, or functions are reported in the preview `error` field without changing the inspect `analysis.engine`, which remains `bounded_jinja_inspection`.
+
+Example inspect response:
 
 ```json
 {
-  "key_id": "optional-key-id",
-  "secret": "optional-secret",
-  "name": "My App Key",
-  "description": "Description of the key",
-  "enabled": true
-}
-```
-
-**Response:**
-
-```json
-{
-  "status": "ok",
-  "key_id": "key-abc123",
-  "secret": "sk-live-xyz...",
-  "message": "Store this secret securely - it will not be shown again"
-}
-```
-
-### Get App Key
-
-```http
-GET /admin/keys/{key_id}
-```
-
-Get a specific app key by ID.
-
-**Response:**
-
-```json
-{
-  "key_id": "key-abc123",
-  "name": "My App Key",
-  "description": "Description",
-  "enabled": true
-}
-```
-
-### Update App Key
-
-```http
-PUT /admin/keys/{key_id}
-```
-
-Update an app key's metadata (not the secret). Requires admin password.
-
-**Request Body:**
-
-```json
-{
-  "name": "Updated Name",
-  "description": "Updated description",
-  "enabled": false
-}
-```
-
-### Regenerate App Key Secret
-
-```http
-POST /admin/keys/{key_id}/regenerate
-```
-
-Regenerate the secret for an existing app key. Requires admin password.
-
-**Response:**
-
-```json
-{
-  "status": "ok",
-  "key_id": "key-abc123",
-  "secret": "sk-live-new...",
-  "message": "Store this secret securely - it will not be shown again"
-}
-```
-
-### Delete App Key
-
-```http
-DELETE /admin/keys/{key_id}
-```
-
-Delete an app key. Requires admin password.
-
-**Response:**
-
-```json
-{
-  "status": "ok",
-  "key_id": "key-abc123",
-  "message": "App key 'key-abc123' deleted"
-}
-```
-
-### Configure App Key Authentication
-
-```http
-POST /admin/keys/config
-```
-
-Enable or disable app key authentication. Requires admin password.
-
-**Request Body:**
-
-```json
-{
-  "enabled": true,
-  "header_name": "x-api-key",
-  "allow_unauthenticated": false
-}
-```
-
-**Response:**
-
-```json
-{
-  "status": "ok",
-  "enabled": true,
-  "header_name": "x-api-key",
-  "allow_unauthenticated": false
-}
-```
-
----
-
-## Serve Admin UI
-
-```http
-GET /admin/
-```
-
-Serve the admin web UI. `/admin/` serves `admin.html`.
-
----
-
-## Logs Viewer
-
-### Logs Page
-
-```http
-GET /logs
-```
-
-Serve the logs viewer HTML page for browsing and analyzing request logs.
-
-### Get Logs
-
-```http
-GET /api/logs
-```
-
-Get paginated request logs with optional filters.
-
-**Query Parameters:**
-
-| Parameter | Type | Description |
-|-----------|--------|-------------|
-| `model` | string | Filter by model name (partial match) |
-| `outcome` | string | Filter by outcome: success, error, cancelled |
-| `stop_reason` | string | Filter by stop reason: stop, tool_calls, length, content_filter |
-| `is_tool_call` | boolean | Filter by whether tool calls were made |
-| `start_date` | datetime | Start of time range (ISO 8601) |
-| `end_date` | datetime | End of time range (ISO 8601) |
-| `search` | string | Full-text search in request/response body |
-| `limit` | integer | Maximum number of logs to return (1-200, default: 50) |
-| `offset` | integer | Number of logs to skip (default: 0) |
-
-**Response:**
-
-```json
-{
-  "logs": [...],
-  "total": 150,
-  "limit": 50,
-  "offset": 0
-}
-```
-
-### Get Log by ID
-
-```http
-GET /api/logs/{log_id}
-```
-
-Get a single request log by ID with full details.
-
-**Query Parameters:**
-
-| Parameter | Type | Description |
-|-----------|--------|-------------|
-| `body_max_chars` | integer | Maximum size of request body to include (0 disables truncation, default: 10000) |
-
-### Get Stop Reasons Analytics
-
-```http
-GET /api/stop-reasons
-```
-
-Get statistics on stop reasons from logged requests.
-
-**Response:**
-
-```json
-{
-  "stop_reasons": [
-    {"stop_reason": "stop", "count": 100, "percentage": 66.7},
-    {"stop_reason": "tool_calls", "count": 30, "percentage": 20.0},
-    {"stop_reason": "length", "count": 15, "percentage": 10.0},
-    {"stop_reason": "content_filter", "count": 5, "percentage": 3.3}
+  "template_path": "configs/jinja_templates/template_example.jinja",
+  "detected": true,
+  "config": {
+    "think_tag": "think",
+    "tool_tag": "tool_call",
+    "tool_arg_format": "xml"
+  },
+  "evidence": [
+    {
+      "kind": "tool_parser",
+      "value": "qwen_xml",
+      "source": "raw_template"
+    }
   ],
-  "time_range": {
-    "start": "2026-01-11T12:00:00Z",
-    "end": "2026-01-12T12:00:00Z"
+  "warnings": [],
+  "analysis": {
+    "engine": "bounded_jinja_inspection",
+    "full_jinja": false
+  },
+  "render_preview": {
+    "engine": "bounded_jinja_runtime",
+    "full_jinja": false,
+    "truncated": false,
+    "rendered": "<|im_start|>system\n..."
   }
 }
 ```
 
-### Get Tool Call Rate
+## Admin Logs
 
 ```http
-GET /api/tool-call-rate
+GET /admin/logs
+GET /admin/logs/{id}
+GET /admin/logs/stop-reasons
+GET /admin/logs/tool-call-rate
+GET /admin/logs/models
+GET /admin/traces/{trace_id}
 ```
 
-Get percentage of requests that resulted in tool calls.
+`GET /admin/logs` uses persistent request metadata when configured and falls back to in-memory request logs otherwise.
 
-**Response:**
+When OTel tracing is enabled, request log rows may include `trace_id` and `span_id` from the proxy-owned `proxy.request` span. These fields are empty or omitted when OTel is disabled/noop.
 
-```json
-{
-  "total_requests": 150,
-  "tool_call_requests": 30,
-  "tool_call_rate": 20.0
-}
-```
+Supported SQLite query parameters:
 
-### Get Models with Stop Reasons
+- `limit`
+- `offset`
+- `model` or `model_name`
+- `outcome`
+- `stop_reason`
+- `is_tool_call`
+- `start_time` or `start_date`
+- `end_time` or `end_date`
+- `search`
+- `trace_id` exact-match filter; this trace-navigation filter is only honored on `/admin/logs` and requires `x-admin-password` or `admin_password` matching `YALLMP_ADMIN_PASSWORD`
+
+`GET /admin/logs/{id}` returns decoded full request/response sidecar data when available. The metadata portion can include the same optional `trace_id` and `span_id` fields as the list response. Shared proxy routes also include metadata-only upstream attempts as `attempt_trail` and `attempts`; attempt entries include attempt index, backend name, retry index, status, retryable flag, outcome, duration in milliseconds, and sanitized error text when present.
+
+`GET /admin/traces/{trace_id}` requires the admin password and returns metadata-only trace navigation over persisted request logs sharing that proxy-owned trace ID. The response includes paginated request metadata, flattened attempts, linked categorical error metadata, summary models/backends/outcomes, and pagination fields. It does not decode full-request sidecars or return request/response bodies, raw stored error messages, or query strings. Unknown valid trace IDs return `404`.
+
+## Runtime Metrics
 
 ```http
-GET /api/models
+GET /v1/usage
+GET /v1/health
+GET /admin/backend-quotas
+GET /metrics
 ```
 
-Get request counts per model with stop reason breakdown.
+- `/v1/usage` returns admission and token quota metrics. Quota `reset_at_by_scope` values reflect the configured reset policy: rolling windows use the next rolling reset, while calendar modes use the next UTC daily/weekly/monthly/yearly boundary.
+- `/v1/health` returns backend health snapshots, including `inflight_requests`, a read-only count of live upstream attempts for each configured backend.
+- `/admin/backend-quotas` requires the admin password and returns a read-only snapshot of configured backend quota scopes with backend name, used tokens, configured limit, remaining tokens, and reset time. It does not include app-key/group IDs, request payloads, prompts, headers, backend URLs, or secrets.
+- `/metrics` returns a Prometheus text-format snapshot when `proxy_settings.metrics.enabled` is true. It is disabled by default and returns the normal not-found response when disabled. `proxy_settings.metrics.timings.enabled` is a separate disabled-by-default opt-in for request/backend/stream timing histograms on the same enabled endpoint.
 
-**Response:**
+The Prometheus snapshot uses only in-memory admission, quota, backend-health, backend in-flight, and opt-in timing state. It does not read logs, request payloads, prompts, request paths, query strings, secrets, raw app-key IDs, raw group IDs, or backend error strings. Admission and quota metrics are aggregated without scope labels. Backend metrics, including `yallmp_backend_inflight_requests`, use only a bounded `backend` label, and backend quota samples are emitted only for configured backends with positive token quotas. Timing histograms are independent from OTel and include only bounded labels such as endpoint kind, sanitized configured model/backend label, stream flag, outcome, status class, and error bucket.
 
-```json
-{
-  "models": [
-    {
-      "model_name": "gpt-4",
-      "total_requests": 100,
-      "stop_reasons": [
-        {"stop_reason": "stop", "count": 70},
-        {"stop_reason": "tool_calls", "count": 20},
-        {"stop_reason": "length", "count": 10}
-      ]
-    }
-  ]
-}
-```
+OpenTelemetry tracing, metrics, and span-event logs are configured through `proxy_settings.otel` and are disabled by default. When enabled, the generic JSON proxy endpoints (`/v1/chat/completions`, `/v1/embeddings`, and `/v1/rerank`) plus `/v1/messages` and `/v1/responses` emit request, policy, admission, routing, upstream-attempt, response, parser, and logging spans through OTLP gRPC where those phases run. Direct `/p1` passthrough emits request, upstream-attempt, and response spans while preserving its policy/admission-free forwarding path. OTel metrics include `yallmp.proxy.requests`, `yallmp.proxy.request.duration`, `gen_ai.client.token.usage`, `gen_ai.client.operation.time_to_first_token`, and `gen_ai.client.operation.time_per_output_token`; token usage is emitted only after usage reconciliation, TTFT is emitted after the first successful client-visible stream write, and TPOT is emitted once at stream EOF as an aggregate average between streamed chunks. `proxy_settings.otel.logs.enabled` is a second disabled-by-default gate that requires `proxy_settings.otel.enabled: true`; when enabled it emits one sanitized `proxy.log` span event at span end instead of adding a separate OTLP logs exporter. Attributes are intentionally bounded: phase, endpoint kind (`chat`, `embeddings`, `rerank`, `messages`, `responses`, `passthrough`, or `other`), sanitized configured model label, backend name, outcome, attempt/retry indexes, stream flag, HTTP status, error bucket, key-scope bucket, token type/count fields when present, trace/span IDs, and GenAI-style `gen_ai.system`, `gen_ai.operation.name`, and `gen_ai.request.model` attributes. Response-phase spans also set `gen_ai.response.model` when it is the same sanitized configured model label. Telemetry does not include prompts, request/response bodies, raw headers, query strings, bearer tokens, raw app-key IDs, raw group IDs, required-header values, provider API keys, raw backend URLs, or raw error strings.
 
----
+Metric families currently exposed:
 
-## Usage Statistics
+- `yallmp_admission_*` gauges/counters for active requests, global queue depth, total requests, queued totals, rate-limited totals, observed max queue depth, observed concurrency limit, and average queue wait.
+- `yallmp_backend_admission_*` gauges/counters for backend-scoped admission state when backend limits create `backend:<name>` scopes.
+- `yallmp_quota_tokens_used`, `yallmp_quota_scope_count`, and `yallmp_quota_next_reset_timestamp_seconds`.
+- `yallmp_backend_quota_tokens_used`, `yallmp_backend_quota_tokens_limit`, `yallmp_backend_quota_tokens_remaining`, and `yallmp_backend_quota_next_reset_timestamp_seconds` for configured backend quota scopes.
+- `yallmp_backend_healthy`, `yallmp_backend_score`, success/failure counters, consecutive failures, last status, and backend health timestamps.
+- `yallmp_request_duration_seconds`, `yallmp_backend_request_duration_seconds`, `yallmp_stream_ttft_seconds`, and `yallmp_stream_tpot_seconds` histograms when `proxy_settings.metrics.timings.enabled` is true.
 
-### Usage Page
+## Admin Frontend
 
 ```http
-GET /usage
+GET /admin
+GET /admin/
+GET /admin/assets/{asset}
 ```
 
-Return HTML page with usage statistics visualization.
+Serves the built React admin frontend when `web/admin/dist` exists. Build it with:
 
-### Usage API
-
-```http
-GET /api/usage
+```bash
+task frontend:build
 ```
 
-Return usage statistics as JSON.
+The admin frontend includes an Observability tab that summarizes `GET /admin/cache`, `GET /v1/health`, and `GET /v1/usage` without rendering raw request or response payloads. `/admin/cache` uses the existing admin-password request behavior; the health and usage panels consume the public runtime metrics endpoints. The read-only Traces tab consumes admin-password-gated `GET /admin/traces/{trace_id}` responses, deep-links from trace IDs shown in admin logs, and renders only sanitized trace metadata, attempts, linked categorical errors, token counts, outcomes, backend names, endpoint kinds, and timing fields.
 
-**Response:**
+## Error Format
 
-```json
-{
-  "total_requests": 150,
-  "total_tokens": 50000,
-  "by_model": {
-    "gpt-4": {"requests": 100, "tokens": 40000},
-    "claude-3": {"requests": 50, "tokens": 10000}
-  },
-  "errors": 2
-}
-```
-
-### Usage Page Data
-
-```http
-GET /api/usage/page
-```
-
-Return usage data formatted for the usage page UI.
-
----
-
-## Error Responses
-
-All endpoints return consistent error responses:
+OpenAI-compatible endpoints return:
 
 ```json
 {
   "error": {
-    "message": "Error description",
+    "message": "message",
     "type": "invalid_request_error",
-    "code": "error_code"
+    "code": "code"
   }
 }
 ```
 
-### Common Error Codes
-
-| Code | Description |
-|------|-------------|
-| `invalid_json` | Request body is not valid JSON |
-| `invalid_json_shape` | Request body is not an object |
-| `missing_parameter` | Required parameter is missing (model, messages, input, query, documents) |
-| `invalid_parameter` | Parameter has invalid type or value |
-| `model_not_found` | Requested model is not configured |
+Messages and Responses endpoints return their API-specific error shapes where applicable.

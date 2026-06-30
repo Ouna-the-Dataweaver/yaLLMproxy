@@ -1,297 +1,112 @@
 # Testing Guide
 
-This document describes the testing architecture for yaLLMproxy, with emphasis on the real-life simulation tests that validate the proxy against realistic client and upstream scenarios.
+This branch uses Go tests and Go smoke harnesses.
 
-## Test Architecture Overview
+## Unit And Integration Tests
 
-yaLLMproxy employs a layered testing approach that combines traditional unit tests with comprehensive simulation tests. The simulation tests are particularly important because they test the proxy through its actual HTTP interfaces using fake client and upstream implementations, catching integration issues that unit tests might miss.
-
-The testing infrastructure includes:
-
-- **FakeUpstream**: A simulated upstream API server that can enqueue responses, simulate errors, and record received requests
-- **ProxyHarness**: A test harness that starts a complete proxy instance with configurable endpoints and modules
-- **Request builders**: Utilities to construct valid Anthropic-format requests
-- **Assertion helpers**: Validators for response structure and slot management
-
-## Running Tests
-
-Run all tests using the Taskfile command:
+Run the full Go suite:
 
 ```bash
 task test
 ```
 
-Run specific test files:
+This executes:
 
 ```bash
-uv run pytest tests/test_simulated_messages.py -v
-uv run pytest tests/test_simulated_stream_adapter.py -v
-uv run pytest tests/test_simulated_translator.py -v
-uv run pytest tests/test_simulated_concurrency.py -v
+go test ./...
 ```
 
-Run with coverage:
+The Go tests cover:
+
+- Config loading, env substitution, inheritance, validation, masking, app-key config, structured routing admin update preservation, and strict router fallback replacement.
+- Router behavior, fallback, retries, health scoring, opt-in half-open circuit recovery, endpoint selection, node access control, sticky routing, weighted round robin, opt-in prefix-cache affinity, opt-in concurrency-aware least-in-flight selection, combined quota/prefix/sticky/health gate precedence, prefix FIFO/race hardening, retryable 429 health/fallback side effects, and exact-cache read/write/bypass behavior.
+- Backend request body rewriting, upstream headers, target model rewriting, reasoning injection, and stream-only parameter handling.
+- Admission/concurrency, upstream-attempt in-flight counter release paths, priority queues, RPS/RPM limits, token quotas, rolling and UTC calendar-aligned quota resets with fake-clock coverage, and quota restoration from log database rows.
+- Prometheus `/metrics` default-off behavior, backend health/quota/admission/in-flight snapshots, opt-in OTel-independent request/backend/stream timing histograms, low-cardinality sanitized timing labels, OTel coexistence without duplicate OTel records, and stream timing samples only from successful client-visible writes.
+- OpenTelemetry default-off behavior, strict config/runtime validation, in-memory span and metric recording, bounded attribute safety, GenAI-style span and token metrics, stream TTFT/TPOT metrics, generic JSON proxy, Messages, Responses, and passthrough phase spans, parser/logging phase spans, policy/admission rejection span boundaries, configured-model labeling for rejected unknown models, reconciled usage metric emission, no duplicate stream token metric records, byte-preserving stream timing observation, and admin-log trace/span correlation.
+- Chat, embeddings, rerank, Messages, Responses, passthrough, admin config, usage, health, and log APIs, including Responses non-stream terminal finish-reason mapping and reasoning/thinking translation paths.
+- GigaChat cloud/local config, chat/stream response conversion, tool-call emulation, and stream-vs-non-stream upstream error normalization.
+- Responses and Messages translator regression corpus coverage for refusal/annotation content, empty content, incomplete/failed status details, Anthropic content block ordering, stop-reason/usage deltas, text/tool interleaving, and malformed or unknown SSE events.
+- Response parser modules for reasoning/tool-call extraction, Qwen/K2 markers, Qwen XML and bounded Jinja template inspection, malformed literals, fragmented SSE events, arbitrary fragmentation, custom/drop tags, buffer fallback, stream buffer byte/age caps, parser stream reset/close lifecycle hooks, opt-in streamed tool-argument JSON repair, template-derived round trips, and reasoning/content swap.
+- Deterministic fake-local provider conformance for chat, Messages, and Responses pass-through and translated paths, plus endpoint-denied behavior.
+- SQLite and PostgreSQL log database configuration, request metadata, idempotent trace/span column migration, error logs, analytics, full request sidecars, parsed response/stream sidecars, response state storage, and cleanup.
+- HTTP and TCP forwarders.
+
+PostgreSQL live integration is optional and skipped by default. To run it, point `YALLMP_TEST_POSTGRES_DSN` at a disposable PostgreSQL database:
 
 ```bash
-uv run pytest --cov=src --cov-report=html
+YALLMP_TEST_POSTGRES_DSN='postgres://yallmp:REDACTED@localhost:5432/yallmp_logs?sslmode=disable' task test:postgres
 ```
 
-## Simulation Test Suite
+The default `task test` command does not require a live PostgreSQL service.
 
-The simulation tests are located in `tests/test_simulated_*.py` and test the proxy against realistic scenarios that approximate production use cases.
+## Fake Smoke
 
-### test_simulated_messages.py
+Run:
 
-This test module validates the complete `/v1/messages` endpoint flow, from receiving Anthropic-format requests through translation to OpenAI format, forwarding to the upstream, translating responses back, and returning Anthropic-format responses.
-
-**Happy Path Tests**
-
-| Test | Description |
-|------|-------------|
-| `test_messages_to_openai_translation_nonstream` | Verifies complete non-streaming flow with proper request/response translation |
-| `test_messages_to_openai_translation_streaming` | Validates SSE adaptation for streaming responses |
-| `test_messages_tool_use_roundtrip` | Ensures tool_use blocks translate correctly in both directions |
-| `test_messages_tool_result_translation` | Confirms tool_result in requests becomes tool messages for upstream |
-
-**Slot Release Verification Tests**
-
-These tests are critical for concurrency safety. They verify that request slots are properly released when requests complete, error out, or are cancelled.
-
-| Test | Description |
-|------|-------------|
-| `test_messages_backend_error_releases_slot` | Slot released when backend returns 500 error |
-| `test_messages_invalid_model_releases_slot` | Slot released when model not found (400/404) |
-| `test_messages_stream_slot_release_on_completion` | Slot released only after stream fully consumed |
-| `test_messages_slot_release_on_all_error_paths` | Systematic test covering all error paths (invalid JSON, missing fields) |
-
-**System Message Translation Tests**
-
-| Test | Description |
-|------|-------------|
-| `test_messages_system_string_translation` | System prompt as string translates correctly |
-| `test_messages_system_blocks_translation` | System prompt as content blocks translates correctly |
-
-**Parameter Translation Tests**
-
-| Test | Description |
-|------|-------------|
-| `test_messages_parameters_translation` | temperature, top_p, stop_sequences translate correctly |
-| `test_messages_max_tokens_translation` | max_tokens sent upstream, length stop_reason maps to max_tokens |
-
-**Content Filter Tests**
-
-| Test | Description |
-|------|-------------|
-| `test_messages_content_filter_translation` | content_filter finish reason maps correctly |
-
-### test_simulated_stream_adapter.py
-
-This module tests the stream adapter under realistic conditions that are difficult to unit test in isolation, including network-level chunk fragmentation and timing variations.
-
-**Chunk Fragmentation Tests**
-
-Real HTTP responses often arrive split across chunk boundaries. These tests verify the adapter handles fragmentation correctly.
-
-| Test | Description |
-|------|-------------|
-| `test_stream_adapter_fragmented_sse` | SSE events split across chunk boundaries handled correctly |
-| `test_stream_adapter_multiple_events_per_chunk` | Multiple SSE events in single chunk processed correctly |
-
-**Stream End Scenarios**
-
-| Test | Description |
-|------|-------------|
-| `test_stream_adapter_no_done` | Stream ending without [DONE] sentinel handled correctly |
-| `test_stream_with_delay_between_chunks` | Delays between chunks don't break event sequence |
-
-**Tool Call Streaming Tests**
-
-| Test | Description |
-|------|-------------|
-| `test_stream_adapter_interleaved_text_tools` | Text blocks followed by multiple tool_use blocks stream correctly |
-| `test_stream_adapter_tool_arguments_streaming` | Tool argument JSON streamed across chunks reconstructed correctly |
-
-**Stop Reason Mapping Tests**
-
-| Test | Description |
-|------|-------------|
-| `test_stream_adapter_stop_reason_mapping` | Verifies stop/length/tool_calls map to end_turn/max_tokens/tool_use |
-
-**Usage Token Streaming Tests**
-
-| Test | Description |
-|------|-------------|
-| `test_stream_adapter_usage_tokens` | Usage tokens included in message_start and message_delta events |
-
-**Empty Response Tests**
-
-| Test | Description |
-|------|-------------|
-| `test_stream_adapter_empty_content` | Streaming response with empty content still produces valid event sequence |
-
-### test_simulated_translator.py
-
-This module tests translator edge cases through the full proxy stack, where interactions between components more closely resemble production behavior.
-
-**Image Content Block Tests**
-
-| Test | Description |
-|------|-------------|
-| `test_translator_image_base64_url` | Base64 image URL translates to OpenAI image_url format |
-| `test_translator_image_url` | URL-based image reference passes through correctly |
-
-**Multi-turn Conversation Tests**
-
-| Test | Description |
-|------|-------------|
-| `test_translator_multi_turn_conversation` | Multiple conversation turns preserve correct role sequence |
-| `test_translator_multi_turn_with_tool_use` | Tool use and results in multi-turn conversation translate correctly |
-
-**Content Block Simplification Tests**
-
-OpenAI expects single text content as a string, while Anthropic uses arrays. These tests verify correct simplification behavior.
-
-| Test | Description |
-|------|-------------|
-| `test_translator_single_text_simplifies` | Single text content block becomes string for upstream |
-| `test_translator_multiple_text_blocks_preserved` | Multiple text blocks stay as array |
-
-**Tool Choice Translation Tests**
-
-| Test | Description |
-|------|-------------|
-| `test_translator_tool_choice_auto` | tool_choice auto translates correctly |
-| `test_translator_tool_choice_any_to_required` | Anthropic "any" maps to OpenAI "required" |
-| `test_translator_tool_choice_specific_tool` | Tool choice with specific tool name formats correctly |
-
-**Error Response Translation Tests**
-
-| Test | Description |
-|------|-------------|
-| `test_translator_openai_error_to_anthropic` | OpenAI error format translated to appropriate response |
-| `test_translator_rate_limit_error` | 429 rate limit errors handled correctly |
-
-**Edge Case Tests**
-
-| Test | Description |
-|------|-------------|
-| `test_translator_empty_assistant_content` | Assistant message with empty content handled gracefully |
-| `test_translator_tool_result_with_array_content` | tool_result with array content blocks processed correctly |
-| `test_translator_tool_result_error_flag` | tool_result is_error flag handled correctly |
-
-**Metadata Translation Tests**
-
-| Test | Description |
-|------|-------------|
-| `test_translator_metadata_user_id` | metadata.user_id maps to user parameter for upstream |
-
-### test_simulated_concurrency.py
-
-This module tests concurrency behavior under realistic load conditions with 50-100 concurrent requests to catch race conditions and verify slot management. These tests are essential for ensuring the proxy handles production traffic patterns correctly.
-
-**Load Test Parameters**
-
-- `CONCURRENT_REQUESTS`: 50 concurrent requests for standard tests
-- `STRESS_REQUESTS`: 100 requests for stress tests
-
-**Concurrent Request Limit Tests**
-
-| Test | Description |
-|------|-------------|
-| `test_concurrent_requests_respect_limit` | 50+ requests honor per-key concurrency limit without exceeding it |
-| `test_concurrent_requests_queue_fifo` | Queued requests processed in FIFO order within same priority |
-
-**Mixed Workload Tests**
-
-| Test | Description |
-|------|-------------|
-| `test_concurrent_mixed_stream_nonstream` | Mix of streaming and non-streaming requests handled correctly |
-| `test_concurrent_mixed_priorities` | High priority requests jump ahead of queued low priority requests |
-
-**Disconnect Handling Tests**
-
-These tests verify that slots are released when clients disconnect at various points in the request lifecycle.
-
-| Test | Description |
-|------|-------------|
-| `test_concurrent_client_disconnect_while_queued` | Slot released when client disconnects while waiting in queue |
-| `test_concurrent_client_disconnect_during_stream` | Slot released when client disconnects during active streaming |
-
-**Metrics Accuracy Tests**
-
-| Test | Description |
-|------|-------------|
-| `test_concurrent_metrics_accuracy` | Metrics accurately reflect zero active requests after completion |
-
-**Slot Leak Prevention Tests**
-
-Slot leaks are a critical bug class where a request completes but its slot is never released, eventually causing the proxy to stop accepting requests. These tests systematically verify no leaks occur.
-
-| Test | Description |
-|------|-------------|
-| `test_concurrent_no_slot_leak_on_timeout` | No leaks when some requests encounter timeouts |
-| `test_concurrent_no_slot_leak_on_backend_errors` | No leaks when backend returns 500 errors |
-| `test_concurrent_no_slot_leak_mixed_scenarios` | Comprehensive test across 100 requests with mixed success/error/streaming scenarios |
-
-## Test Infrastructure
-
-### FakeUpstream
-
-The `FakeUpstream` class simulates an upstream API server for testing. It supports:
-
-- Enqueueing responses (success or error)
-- Configuring streaming responses with custom chunk delays
-- Recording received requests for verification
-- Simulating chunk fragmentation and timing variations
-
-### ProxyHarness
-
-The `ProxyHarness` class creates a complete test proxy instance with:
-
-- Configurable endpoints (messages, chat, embeddings)
-- Optional module enablement (concurrency, rate limiting)
-- Async client for making test requests
-- Concurrency state inspection
-
-### Assertion Helpers
-
-Key assertions used across tests:
-
-- `assert_anthropic_message_valid(payload)`: Validates response structure matches Anthropic API format
-- `assert_no_slot_leak(harness, timeout)`: Waits until all concurrency slots are released
-- `build_anthropic_request(...)`: Creates valid Anthropic-format request payloads
-
-## Writing New Simulation Tests
-
-When adding new simulation tests, follow these patterns:
-
-1. **Use the harness pattern**: Wrap tests in a `with ProxyHarness(...)` context manager
-2. **Clean up state**: Use autouse fixtures to reset concurrency state and transports
-3. **Verify upstream received**: Check what the fake upstream recorded, not just the response
-4. **Test slot release**: For any test involving the messages endpoint, consider adding slot leak verification
-
-Example test structure:
-
-```python
-@pytest.mark.asyncio
-async def test_new_scenario() -> None:
-    upstream = FakeUpstream()
-    upstream.enqueue_openai_chat_response("Expected response")
-
-    base_url = "http://upstream.local/v1"
-    register_fake_upstream("upstream.local", upstream)
-
-    config = build_messages_config(base_url)
-    with ProxyHarness(config, enable_messages_endpoint=True) as harness:
-        async with harness.make_async_client() as client:
-            response = await client.post(
-                "/v1/messages",
-                json=build_anthropic_request(
-                    messages=[{"role": "user", "content": "Test"}],
-                    max_tokens=100,
-                ),
-            )
-
-    assert response.status_code == 200
-    # Additional assertions...
+```bash
+task smoke:fake
 ```
+
+The fake smoke command starts:
+
+- an emulated upstream API server,
+- the Go proxy handler,
+- a real HTTP client against the proxy.
+
+It verifies:
+
+- `/v1/models` lists the configured model,
+- chat, streaming chat, embeddings, and rerank requests pass through the proxy,
+- request parameters are forwarded to the upstream instead of silently dropped,
+- model rewriting, including embeddings/rerank model rewrite, and forced stream usage settings work,
+- fallback routing retries a retryable primary failure on a secondary backend,
+- stream usage tokens are observed,
+- `/v1/usage` exposes the next controlled UTC calendar reset timestamp for a daily app-key token quota,
+- direct passthrough preserves path normalization, query string, request body, selected headers, upstream auth injection, and response headers,
+- exact cache hits avoid upstream and the `x-yallmp-cache-bypass` header forces an upstream call without leaking upstream,
+- translated `/v1/responses` non-stream and stream usage/reasoning details are preserved, including streamed tool-call deltas and streamed terminal `length`/`content_filter` mappings,
+- translated `/v1/messages` thinking stream behavior is preserved, including streamed tool calls and `tool_use` stop mapping,
+- in-memory OpenTelemetry smoke spans and metrics are emitted for chat, translated Messages/Responses streaming, parser/logging phases, streaming TTFT/TPOT, and passthrough without leaking selected smoke secrets, and at least one admin log row correlates to a recorded proxy-owned request span,
+- opt-in streamed tool/function argument JSON repair produces valid arguments for a malformed fake upstream stream,
+- template inspect reports `tool_parser: qwen_xml` for marker-based Qwen-style templates,
+- `/admin/logs` records token usage, backend names, and OTel trace/span IDs when enabled,
+- `/admin/logs/{id}` exposes full request/response sidecar data, optional OTel trace/span IDs, and parsed response/stream artifacts when enabled.
+
+No persistent server is left running.
+
+## Real Smoke
+
+Run:
+
+```bash
+task smoke:real
+```
+
+Defaults:
+
+- config: `/home/theio/repos/nidai_db/infra/yaLLMproxy/configs/config.yaml`
+- model: `glm_local`
+
+Override them with:
+
+```bash
+task smoke:real -- --config /path/to/config.yaml --model glm_local
+```
+
+The real smoke loads the external config and its adjacent `.env`, then overrides only the logging database and full-request directory to temporary paths. It sends non-stream and stream chat requests through the Go proxy to the selected real upstream model, then checks admin logs and full request detail.
+
+No persistent server is left running.
+
+## Frontend
+
+The React admin frontend is separate from the Go test suite:
+
+```bash
+task frontend:install
+task frontend:build
+```
+
+Build output in `web/admin/dist` is served by the Go app at `/admin`.
+
+The frontend build typechecks the admin Observability tab, including the exact-cache, backend-health, usage/quota, and optional trace ID rendering paths.

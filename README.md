@@ -1,250 +1,169 @@
-# y(et) a(nother) LLM proxy (yallmp)
+# y(et) a(nother) LLM proxy (yaLLMproxy)
 
 <div align="center">
   <img src="static/logo.png" alt="yaLLMproxy Logo" width="200">
 </div>
 
-Yet Another LLM Proxy - A lightweight, modular LLM proxy with OpenAI-compatible API, fallback routing, and response parsing.
+yaLLMproxy is a Go LLM proxy for OpenAI-compatible traffic, local model fleets, and operator-facing observability. It focuses on transparent request forwarding while adding routing, fallback, parser, quota, and logging controls.
 
 ## Features
 
-- **Modular Architecture**: Clean separation of concepts with dedicated modules for routing, logging, API endpoints, and configuration
-- **Backend Failover**: Automatically routes to fallback backends when primary backends fail
-- **Request/Response Logging**: Detailed logs of all requests and responses for debugging
-- **Database Support**: SQLite (default) or PostgreSQL(TODO test) for persistent logging with JSONB columns
-- **OpenAI Compatibility**: Works with OpenAI-compatible clients and tools
-- **Chat, Embeddings, Rerank & Messages**: Supports `/v1/chat/completions`, `/v1/embeddings`, `/v1/rerank`, and `/v1/messages` (Anthropic API) endpoints
-- **Anthropic API Translation**: Route Anthropic Messages API requests to OpenAI-compatible backends with automatic format conversion
-- **Runtime Registration**: Register new backends without restarting the proxy
-- **Environment Variable Support**: Configure via environment variables in YAML files
-- **Streaming Support**: Transparent handling of streaming responses with SSE error detection
-- **Model Inheritance**: Create derived models with configuration overrides (e.g., `GLM-4.7:Cursor` extends `GLM-4.7`)
-- **Model Copying**: Duplicate existing models via API for easy configuration reuse
-- **Template-Based Parsing**: Use Jinja2 templates for custom response parsing and extraction
-- **Logs Viewer**: Built-in UI for browsing and analyzing request logs with filtering
+- OpenAI-compatible `/v1/chat/completions`, `/v1/embeddings`, `/v1/rerank`, and `/v1/models`.
+- Optional Anthropic Messages API at `/v1/messages`, with OpenAI backend translation, thinking-block mapping, or native Anthropic pass-through.
+- Optional OpenAI Responses API at `/v1/responses`, with Chat Completions translation, reasoning output/stream mapping, `store`, `previous_response_id`, sticky follow-up routing, and selected terminal-status mapping.
+- Native GigaChat backend support with cloud OAuth, local mTLS, streaming conversion, and OpenAI tool-call translation.
+- Legacy `model_list` config support plus provider/node/client-model config shapes.
+- Backend fallback, retryable-status failover, health snapshots, active health probes, score-aware routing, opt-in prefix-cache affinity, opt-in least-in-flight routing, and admin-managed fallback chains.
+- Read-only admin model catalog with disabled-by-default provider `/v1/models` availability probes.
+- Round-robin, weighted round-robin, node access control, and sticky routing for conversation/follow-up identifiers.
+- App-key policy with flat/grouped keys, model access, unauthenticated limits, per-key/group limits, token quotas with rolling or UTC calendar resets, opt-in backend quota-aware routing, and admin UI controls.
+- Disabled-by-default exact and semantic inference cache layers with bounded counters and request-level bypass controls.
+- Disabled-by-default Prometheus metrics and OpenTelemetry request tracing/metrics with bounded, secret-safe labels, including backend health/quota/in-flight gauges, optional Prometheus timing histograms, GenAI-style span, token-usage, stream TTFT/TPOT, parser, and logging phase attributes.
+- Response parser modules for reasoning and tool-call normalization across non-stream and SSE responses, including marker-derived Qwen XML tool-call parsing, bounded stream parser buffers, and opt-in streamed tool-argument JSON repair.
+- SQLite/PostgreSQL request metadata logging, full request/response sidecars including parsed response/stream artifacts, admin log detail APIs, token usage extraction, and cleanup helpers.
+- Built-in Go TCP forwarder and HTTP reverse forwarder.
+- React admin frontend source under `web/admin`, including Observability, Catalog, Routing, Logs, App Keys, and read-only Traces views.
 
-## Installation
+Known Go-vs-Python gaps are tracked in [docs/go_feature_gaps.md](docs/go_feature_gaps.md).
 
-### Prerequisites
+## Prerequisites
 
-- Python 3.10+
-- [uv](https://github.com/astral-sh/uv) package manager
-- [task](https://taskfile.dev/) for running automation tasks
+- Go compatible with `go.mod` (`go 1.26` in this branch). The repo also supports a bundled `.tools/go/bin/go` fallback used by `Taskfile.yml`.
+- [go-task](https://taskfile.dev/) for common commands.
+- Optional: Node.js/npm for building the React admin frontend.
+- Optional: mkcert for local forwarder certificates.
 
-Install `task` on your platform:
+## Quick Start
 
-**Linux/macOS:**
 ```bash
-sh -c "$(curl -sSL https://taskfile.dev/install.sh)"
-export PATH="$PWD/bin:$PATH"
+task install
+cp configs/config_example.yaml configs/config.yaml
+# Add secrets to configs/.env if your config references ${...} values.
+task run
 ```
 
-**Windows (winget):**
-```bash
-winget install go-task.go-task
-```
-OR
-```bash
-choco install go-task
-```
-
-**macOS (Homebrew):**
-```bash
-brew install go-task
-```
-
-### Install with uv
+The default server address comes from `proxy_settings.server` in `configs/config.yaml`. `YALLMP_HOST`, `YALLMP_PORT`, and `YALLMP_CONFIG` can override runtime settings.
 
 ```bash
-# Install dependencies
-uv sync
-
-# Configure your API keys in configs/.env
-# Edit configs/config.yaml to add your models
-
-# Run the proxy
-uv run python -m src.main
-# Or use: task run
-```
-
-### Alternative: Using scripts
-
-```bash
-# Linux/macOS
-./scripts/install.sh
-./scripts/run.sh
-
-# Windows
-scripts\install.bat
-scripts\run.bat
-
-# Run with autoreload (development)
-task run:reload
-```
-
-### Quick Test
-
-```bash
-# List available models
 curl http://localhost:7979/v1/models
 
-# Chat completion
 curl http://localhost:7979/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model": "your-model", "messages": [{"role": "user", "content": "Hello!"}]}'
-
-# Embeddings
-curl http://localhost:7979/v1/embeddings \
-  -H "Content-Type: application/json" \
-  -d '{"model": "your-embedding-model", "input": "Hello, world!"}'
-
-# Rerank
-curl http://localhost:7979/v1/rerank \
-  -H "Content-Type: application/json" \
-  -d '{"model": "your-reranker-model", "query": "What is machine learning?", "documents": ["ML is a subset of AI", "Python is a programming language", "Neural networks learn patterns"], "top_n": 2}'
-
-# Anthropic Messages API (routed to OpenAI backend)
-curl http://localhost:7979/v1/messages \
-  -H "Content-Type: application/json" \
-  -d '{"model": "your-model", "max_tokens": 1024, "messages": [{"role": "user", "content": "Hello!"}]}'
+  -d '{"model":"glm_local","messages":[{"role":"user","content":"Hello"}]}'
 ```
 
-### Configuration Structure
+## Commands
+
+| Command | Description |
+| --- | --- |
+| `task run` | Run the Go proxy server |
+| `task run:reload` | Run the Go proxy server; autoreload is not implemented yet |
+| `task test` | Run all Go tests |
+| `task smoke:fake` | Run fake client/upstream smoke tests and verify logging |
+| `task smoke:real` | Run real local-model smoke test; defaults to `glm_local` and external config path |
+| `task forwarder` | Run the Go TCP forwarder |
+| `task forwarder:http` | Run the Go HTTP reverse forwarder |
+| `task frontend:install` | Install React admin frontend dependencies |
+| `task frontend:build` | Build the React admin frontend into `web/admin/dist` |
+| `task db-clean-dry-run` | Preview request/error log cleanup |
+| `task db-clean` | Clean request/error logs |
+
+Real smoke defaults:
+
+```bash
+task smoke:real -- --config /home/theio/repos/nidai_db/infra/yaLLMproxy/configs/config.yaml --model glm_local
+```
+
+The smoke command runs the Go app in-process through HTTP and uses a temporary SQLite DB/request directory, so it does not leave a persistent server running.
+
+## Configuration
+
+Config lives in `configs/config.yaml`; env placeholders are loaded from the matching `.env` file next to the config. The proxy accepts the legacy `model_list` format:
 
 ```yaml
 model_list:
-  - model_name: my-model           # Display name for the model
-    protected: true                # Requires admin password to edit/delete
+  - model_name: glm_local
+    protected: false
     model_params:
-      api_base: https://api.example.com/v1  # Backend URL
-      api_key: sk-xxx              # API key (use env vars for security)
-      model: gpt-4o                # Upstream model name (optional)
-      request_timeout: 30          # Timeout in seconds (optional)
-      target_model: gpt-4          # Rewrite model name in requests (optional)
-      supports_reasoning: false    # Enable reasoning block injection (optional)
-      api_type: openai             # API type: openai (default), anthropic (optional)
-    parameters:                    # Per-model parameter defaults (optional)
-      temperature:
-        default: 1.0               # Default value if not specified in request
-        allow_override: false      # If true, use request value if provided (default: true)
+      api_base: http://localhost:8000/v1
+      model: local-upstream-model
+      api_type: openai
+      request_timeout: 120
+      supports_reasoning: true   # Display metadata only; does not force thinking
+      parameters:
+        stream_options.include_usage:
+          default: true
+          allow_override: false
 
 proxy_settings:
   server:
-    host: 127.0.0.1                # Bind address
-    port: 7979                     # Port number
-  enable_responses_endpoint: false # Enable /v1/responses endpoint
-  logging:                         # Request logging options (optional)
-    log_parsed_response: false     # Write parsed non-stream responses to *.parsed.log
-    log_parsed_stream: false       # Write parsed stream chunks to *.parsed.log
-  parsers:                         # Response parser pipeline (optional)
-    enabled: false
-    response:                      # Ordered response parsers
-      - parse_tags
-      - swap_reasoning_content
-    paths:                         # Apply to paths containing any of these strings
-      - /chat/completions
-    parse_tags:                    # Parse <think> / <tool_call> tags into structured fields
-      template_path: ""            # Optional: auto-detect config from Jinja template
-      parse_thinking: true
-      parse_tool_calls: true
-      think_tag: think
-      tool_arg_format: xml         # xml | json (for K2-style JSON arguments)
-      tool_tag: tool_call          # For xml format
-      tool_open: "<tool_call>"     # Custom open delimiter (auto-set for json format)
-      tool_close: "</tool_call>"   # Custom close delimiter (auto-set for json format)
-      tool_buffer_limit: 200       # Optional: max buffered chars before treating as literal
-    swap_reasoning_content:        # Swap reasoning_content <-> content
-      mode: reasoning_to_content   # reasoning_to_content | content_to_reasoning | auto
-      think_tag: think
-      think_open:
-        prefix: ""                 # Prefix before <think>
-        suffix: ""                 # Suffix after <think>
-      think_close:
-        prefix: ""                 # Prefix before </think>
-        suffix: ""                 # Suffix after </think>
-      include_newline: true        # Default true: add newline between </think> and content
-
-forwarder_settings:
-  listen:
-    host: 0.0.0.0                  # External listen address
-    port: 6969                     # External listen port
-  target:
-    host: 127.0.0.1                # Proxy host
-    port: 7979                     # Proxy port
-
-http_forwarder_settings:
-  preserve_host: true              # Preserve Host header (recommended)
-  listen:
-    host: 0.0.0.0                  # External listen address
-    port: 6969                     # External listen port
-  target:
-    scheme: http
-    host: 127.0.0.1
+    host: 0.0.0.0
     port: 7979
-```
-
-Protected models require `YALLMP_ADMIN_PASSWORD` in `configs/.env` for edits/deletes via admin APIs.
-
-Per-model parser overrides can be added to individual entries in `model_list`.
-When present, they replace the global `proxy_settings.parsers` config for that model.
-If `enabled` is omitted, per-model parsers default to enabled (set `enabled: false`
-to explicitly disable parsing on that model).
-
-Parsing notes: `parse_tags` can auto-detect think/tool tags and argument format from
-a Jinja template when `template_path` is provided. Use `tool_arg_format: json` for
-K2-style models that output JSON arguments (e.g., `<|tool_call_begin|>func<|arg|>{"key":"val"}`).
-Tool parsing buffers until a full block is parsed; if `tool_buffer_limit` is set and
-exceeded, the tag is treated as literal text.
-
-To help align formatting with a Jinja chat template, you can inspect a template
-and print suggested `think_open`/`think_close` prefixes and suffixes:
-
-```bash
-uv run python scripts/inspect_template.py configs/jinja_templates/template_example.jinja
-```
-
-Copy the suggested values into your `swap_reasoning_content` config. If you set
-`think_close.suffix` to include a newline, consider setting `include_newline: false`
-to avoid double newlines.
-
-```yaml
-model_list:
-  - model_name: GLM-4.7
-    model_params:
-      api_base: https://api.z.ai/api/coding/paas/v4
-      api_key: ${GLM_API_KEY}
-    parsers:
+  enable_messages_endpoint: true
+  enable_responses_endpoint: false
+  otel:
+    enabled: false
+    endpoint: ""
+  inference_cache:
+    mode: off
+    ttl_seconds: 300
+    max_age_seconds: 300
+    max_entries: 1024
+    max_entry_bytes: 1048576
+  model_catalog:
+    enabled: false
+    probe_nodes: []
+    probe_providers: []
+  logging:
+    full_request_storage:
       enabled: true
-      response:
-        - swap_reasoning_content
-      swap_reasoning_content:
-        mode: reasoning_to_content
+      path: logs/requests
+      retention_hours: 48
+
+database:
+  backend: sqlite
+  connection:
+    sqlite:
+      path: logs/yaLLM.db
 ```
+
+PostgreSQL log storage is also supported with `database.backend: postgres` or `postgresql`; see [docs/database.md](docs/database.md).
+
+Provider/node/client-model config is also supported for multi-node routing, weighted balancing, model groups, and GigaChat provider settings. See [docs/configuration.md](docs/configuration.md).
+
+When exact inference caching is enabled, callers can send `x-yallmp-cache-bypass: true` to skip cache read/write for a single request; the internal header is removed before forwarding upstream.
+
+`GET /admin/catalog` returns a read-only model/provider/node catalog with bounded advisory warnings. Optional provider `/v1/models` probes are disabled unless `proxy_settings.model_catalog.enabled` is true and nodes or providers are explicitly listed in `probe_nodes` or `probe_providers`; probe results and warnings never change routing. The React admin Catalog tab renders this snapshot.
+
+## Admin And Logs
+
+- `GET /admin/config` returns masked config.
+- `PUT /admin/config` validates, preserves missing secrets, persists YAML, and rebuilds runtime state.
+- `POST /admin/config/validate` returns structured validation issues.
+- `POST /admin/config/reload` reloads config from disk.
+- `POST /admin/models` registers a model and persists it when a config path is known.
+- `GET/POST /admin/templates` and `GET /admin/templates/inspect` list, upload, and inspect Jinja templates under `configs/jinja_templates`, including bounded parser-config inference evidence and warnings.
+- `GET /admin/logs` lists persisted request metadata when database logging is enabled.
+- `GET /admin/logs/{id}` returns decoded full request/response detail when sidecar storage is enabled.
+- `GET /admin/traces/{trace_id}` returns sanitized metadata-only trace navigation.
+- `GET /admin/backend-quotas` returns admin-protected configured backend quota snapshots.
+- `GET /admin/logs/stop-reasons`, `/tool-call-rate`, and `/models` expose analytics.
+- `GET /v1/usage` exposes admission/quota metrics.
+- `GET /v1/health` exposes backend health snapshots.
+- `GET /metrics` exposes disabled-by-default Prometheus metrics when enabled.
+
+Build `web/admin` with `task frontend:build` to serve the React admin UI from `/admin`.
 
 ## Forwarders
 
-### TCP forwarder
+The TCP forwarder is available with `task forwarder`; the HTTP reverse forwarder is available with `task forwarder:http`. Both can also be enabled in-process from config.
 
-The TCP forwarder is optional but useful when you need a separate inbound port or a separate process for the inbound traffic (e.g. you have a VPN which you must use for API access, but it breaks inbound traffic (or WSL shenanigans); you can whitelist the forwarder executable/process, or run the forwarder in Windows, and keep the proxy running under VPN/in WSL).
-
-It reads `forwarder_settings` from `configs/config.yaml`. You can override with
-`FORWARD_LISTEN_HOST`, `FORWARD_LISTEN_PORT`, `FORWARD_TARGET_HOST`,
-`FORWARD_TARGET_PORT` at runtime.
-
-### HTTP forwarder (reverse proxy)
-
-Use the HTTP forwarder when you want a protocol-aware reverse proxy (e.g., to avoid connection resets on large JSON responses). It preserves the `Host` header by default and streams SSE responses.
-
-It reads `http_forwarder_settings` from `configs/config.yaml`. You can override with
-`HTTP_FORWARD_LISTEN_HOST`, `HTTP_FORWARD_LISTEN_PORT`, `HTTP_FORWARD_TARGET_SCHEME`,
-`HTTP_FORWARD_TARGET_HOST`, `HTTP_FORWARD_TARGET_PORT`, and `HTTP_FORWARD_PRESERVE_HOST`.
-
-**SSL/TLS Support:**
-
-The HTTP forwarder supports HTTPS with SSL certificates:
+Common HTTP forwarder settings:
 
 ```yaml
 http_forwarder_settings:
+  enabled: false
+  preserve_host: true
   listen:
     host: 0.0.0.0
     port: 6969
@@ -252,154 +171,22 @@ http_forwarder_settings:
     scheme: http
     host: 127.0.0.1
     port: 7979
-  ssl:
-    enabled: true
-    cert_file: certs/localhost+2.pem
-    key_file: certs/localhost+2-key.pem
-  debug: false  # Enable debug logging
-  timeout_seconds: 300  # Request timeout (optional)
 ```
 
-Generate certificates using mkcert:
-```bash
-task ssl:generate-certs
-```
-
-Environment variable overrides: `HTTP_FORWARD_SSL_ENABLED`, `HTTP_FORWARD_SSL_CERT`, `HTTP_FORWARD_SSL_KEY`, `HTTP_FORWARD_DEBUG`, `HTTP_FORWARD_TIMEOUT`.
-
-Note: both forwarders default to port `6969`. If you want to run both at once, change one of their ports.
-
-## Documentation
-- [API Reference](docs/api.md) - Complete endpoint documentation
-- [Configuration Guide](docs/configuration.md) - Config options, environment variables
-- [Project Structure](docs/project-structure.md) - Directory layout and module descriptions
-- [Known Issues](docs/known_issues.md) - Known bugs, limitations, and workarounds
-
-
-```
-yaLLMproxy/
-├── src/                  # Source code
-│   ├── modules/           # Request/response pipeline modules
-│   ├── parsers/           # Response module pipeline (legacy parsers alias)
-│   ├── core/              # Core proxy functionality
-│   ├── api/               # HTTP API layer
-│   ├── database/           # Database support
-│   ├── logging/           # Request/response logging
-│   ├── middleware/        # Request/response middleware
-│   ├── routing/           # Model routing utilities
-│   └── types/             # Type definitions
-├── static/admin/         # Admin UI (includes logs viewer)
-├── configs/              # Configuration files
-│   └── jinja_templates/  # Jinja2 templates for parsing
-├── docs/                 # Detailed documentation
-├── scripts/              # Utility scripts
-└── tests/                # Test suite
-```
-
-## Commands
-
-| Command | Description |
-|---------|-------------|
-| `task run` | Start the proxy |
-| `task run:reload` | Start with autoreload (development) |
-| `task test` | Run tests |
-| `task forwarder` | Run TCP forwarder |
-| `task forwarder:http` | Run HTTP forwarder |
-| `task ssl:generate-certs` | Generate SSL certificates using mkcert |
-| `uv run pytest tests/` | Run tests directly |
-
-## Runtime Management
-
-### Hot Reload Configuration
-
-You can reload the proxy configuration without restarting by calling the admin API:
+## Testing
 
 ```bash
-curl -X POST http://localhost:7979/admin/config/reload
+task test
+task test:postgres
+task smoke:fake
+task smoke:real
 ```
 
-Or use the **Reload** button in the admin UI (`/admin/`).
+`task test:postgres` skips unless `YALLMP_TEST_POSTGRES_DSN` points at a disposable PostgreSQL database.
 
-This will:
-1. Reload `config.yaml` from disk
-2. Re-parse all models and backends
-3. Update the router's runtime state atomically
-4. Apply model inheritance changes to derived models
+`task smoke:fake` verifies request forwarding, model rewrite for chat/embeddings/rerank, stream usage propagation, passthrough fidelity, daily quota reset visibility from `/v1/usage`, in-memory OTel span/metric emission including parser/logging phases and stream TTFT/TPOT, opt-in streamed tool-argument JSON repair, translated Responses usage/reasoning/tool/terminal stream behavior, translated Messages thinking/tool stream behavior, Qwen template parser inspection, token logging, backend-name logging, exact-cache bypass behavior, and full request sidecars including parsed response/stream artifacts against an emulated upstream.
 
-Useful for applying config changes without interrupting active requests. Note: Changes to base models update derived models in runtime config, but require router reload to apply to active backends.
-
-## Database Configuration
-
-yaLLMproxy supports SQLite (default) and PostgreSQL databases for persistent metadata storage.
-Request analytics and log listing use the configured database. Full request payloads are stored on disk under `proxy_settings.logging.full_request_storage`.
-
-### SQLite (Default)
-
-SQLite is enabled by default with no additional configuration:
-
-```yaml
-database:
-  backend: sqlite
-  connection:
-    sqlite:
-      path: logs/yaLLM.db
-  pool_size: 5                  # Connection pool size (PostgreSQL; ignored for file-based SQLite)
-  max_overflow: 10              # Extra overflow connections above pool_size (PostgreSQL)
-```
-
-```yaml
-proxy_settings:
-  logging:
-    log_parsed_response: false
-    log_parsed_stream: false
-    log_to_disk: false
-    full_request_storage:
-      enabled: true
-      path: logs/requests
-      retention_hours: 48
-      cleanup_on_startup: true
-      cleanup_interval_hours: 24
-```
-
-### PostgreSQL
-
-To use PostgreSQL, update your configuration:
-
-```yaml
-database:
-  backend: postgres
-  connection:
-    postgres:
-      host: localhost
-      port: 5432
-      database: yallm_proxy
-      user: ${DB_USER}
-      password: ${DB_PASSWORD}
-  pool_size: 5                  # Base pool size for PostgreSQL connections
-  max_overflow: 10              # Extra overflow connections above pool_size
-```
-
-Add credentials to your `.env` file:
-
-```bash
-DB_USER=your_postgres_user
-DB_PASSWORD=your_postgres_password
-```
-
-### Database Tasks
-
-```bash
-task db:migrate    # Run database migrations
-task db:rollback   # Rollback last migration
-task db:current    # Show current revision
-task db:history    # Show migration history
-task clean         # Clear logs (preserves database)
-```
-
-### See Also
-
-- [Database Documentation](docs/database.md) - Detailed database guide
-- [Project Structure](docs/project-structure.md) - Module descriptions
+`task smoke:real` loads the external config path, defaults to `glm_local`, sends non-stream and stream requests through the Go proxy, and verifies logs using a temporary smoke database.
 
 ## License
 
