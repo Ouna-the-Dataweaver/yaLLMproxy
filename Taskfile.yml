@@ -7,67 +7,92 @@ tasks:
       - task -l
 
   run:
-    desc: Run proxy server (uses run script)
+    desc: Run Go proxy server
     cmds:
-      - cmd: cmd /c "{{.TASKFILE_DIR}}\\scripts\\run.bat"
-        platforms: [windows]
-      - cmd: bash ./scripts/run.sh
+      - cmd: bash -c 'GO_BIN="${GO:-$(command -v go || printf .tools/go/bin/go)}"; "$GO_BIN" run ./cmd/yallmp'
         platforms: [linux, darwin]
+      - cmd: cmd /c go run .\cmd\yallmp
+        platforms: [windows]
 
   run:reload:
-    desc: Run proxy server with autoreload
+    desc: Run Go proxy server (reload not yet implemented)
     cmds:
-      - cmd: cmd /c call "{{.TASKFILE_DIR}}\\scripts\\run.bat" --reload
-        platforms: [windows]
-      - cmd: bash ./scripts/run.sh --reload
+      - cmd: bash -c 'GO_BIN="${GO:-$(command -v go || printf .tools/go/bin/go)}"; "$GO_BIN" run ./cmd/yallmp'
         platforms: [linux, darwin]
+      - cmd: cmd /c go run .\cmd\yallmp
+        platforms: [windows]
 
   forwarder:
-    desc: Run TCP forwarder (separate venv)
+    desc: Run Go TCP forwarder
     cmds:
-      - cmd: cmd /c "{{.TASKFILE_DIR}}\\scripts\\run_forwarder.bat"
+      - cmd: cmd /c go run .\cmd\yallmp-tcp-forwarder
         platforms: [windows]
-      - cmd: bash ./scripts/run_forwarder.sh
+      - cmd: bash -c 'GO_BIN="${GO:-$(command -v go || printf .tools/go/bin/go)}"; "$GO_BIN" run ./cmd/yallmp-tcp-forwarder'
         platforms: [linux, darwin]
 
   forwarder:http:
-    desc: Run HTTP forwarder (reverse proxy)
+    desc: Run Go HTTP forwarder (reverse proxy)
     cmds:
-      - cmd: cmd /c "{{.TASKFILE_DIR}}\\scripts\\run_http_forwarder.bat"
-        platforms: [windows]
-      - cmd: bash ./scripts/run_http_forwarder.sh
+      - cmd: bash -c 'GO_BIN="${GO:-$(command -v go || printf .tools/go/bin/go)}"; "$GO_BIN" run ./cmd/yallmp-forwarder'
         platforms: [linux, darwin]
+      - cmd: cmd /c go run .\cmd\yallmp-forwarder
+        platforms: [windows]
 
   ssl:generate-certs:
-    desc: Generate SSL certificates using mkcert (reads hosts from config)
+    desc: Generate SSL certificates using mkcert
     cmds:
-      - cmd: cmd /c "{{.TASKFILE_DIR}}\\scripts\\generate_certs.bat"
+      - cmd: cmd /c "if not exist certs mkdir certs && mkcert -cert-file certs\\cert.pem -key-file certs\\key.pem localhost 127.0.0.1"
         platforms: [windows]
-      - cmd: bash ./scripts/generate_certs.sh
+      - cmd: bash -c 'HOSTS="${SSL_HOSTS:-localhost 127.0.0.1}"; CERT="${SSL_CERT:-certs/cert.pem}"; KEY="${SSL_KEY:-certs/key.pem}"; mkdir -p "$(dirname "$CERT")" "$(dirname "$KEY")"; mkcert -cert-file "$CERT" -key-file "$KEY" $HOSTS'
         platforms: [linux, darwin]
 
   install:
-    desc: Create venv + sync dependencies (uses install script)
+    desc: Download Go module dependencies
     cmds:
-      - cmd: cmd /c "{{.TASKFILE_DIR}}\\scripts\\install.bat"
-        platforms: [windows]
-      - cmd: bash ./scripts/install.sh
-        platforms: [linux, darwin]
+      - bash -c 'GO_BIN="${GO:-$(command -v go || printf .tools/go/bin/go)}"; "$GO_BIN" mod download'
 
   install:dev:
-    desc: Sync dev dependencies into the project venv
+    desc: Download Go module dependencies
     cmds:
-      - uv sync --extra dev
+      - bash -c 'GO_BIN="${GO:-$(command -v go || printf .tools/go/bin/go)}"; "$GO_BIN" mod download'
 
   test:
-    desc: Run tests
+    desc: Run Go tests
     cmds:
-      - uv run pytest tests -v
+      - bash -c 'GO_BIN="${GO:-$(command -v go || printf .tools/go/bin/go)}"; "$GO_BIN" test ./...'
 
-  simulate:
-    desc: Run proxy simulation harness (see scripts/simulate_proxy.py)
+  test:postgres:
+    desc: Run gated PostgreSQL logdb integration tests when YALLMP_TEST_POSTGRES_DSN is set
     cmds:
-      - uv run python scripts/simulate_proxy.py {{.CLI_ARGS}}
+      - bash -c 'if [ -z "$YALLMP_TEST_POSTGRES_DSN" ]; then echo "YALLMP_TEST_POSTGRES_DSN not set; skipping PostgreSQL logdb integration tests"; exit 0; fi; GO_BIN="${GO:-$(command -v go || printf .tools/go/bin/go)}"; "$GO_BIN" test ./internal/logdb -run TestPostgresIntegrationLogDB -count=1'
+
+  smoke:fake:
+    desc: Run fake upstream/client smoke test against Go proxy
+    cmds:
+      - bash -c 'GO_BIN="${GO:-$(command -v go || printf .tools/go/bin/go)}"; "$GO_BIN" run ./cmd/yallmp-smoke --mode=fake {{.CLI_ARGS}}'
+
+  smoke:real:
+    desc: Run real local-model smoke test with external config (defaults to glm_local)
+    cmds:
+      - bash -c 'GO_BIN="${GO:-$(command -v go || printf .tools/go/bin/go)}"; "$GO_BIN" run ./cmd/yallmp-smoke --mode=real {{.CLI_ARGS}}'
+
+  frontend:install:
+    desc: Install admin frontend dependencies
+    dir: web/admin
+    cmds:
+      - npm install
+
+  frontend:dev:
+    desc: Run Vite admin frontend dev server
+    dir: web/admin
+    cmds:
+      - npm run dev -- {{.CLI_ARGS}}
+
+  frontend:build:
+    desc: Build admin frontend into web/admin/dist
+    dir: web/admin
+    cmds:
+      - npm run build
 
   clean:
     desc: Clear all logs (deletes all files in logs directory except database)
@@ -86,14 +111,14 @@ tasks:
   db-clean:
     desc: Clean request/error logs from database
     cmds:
-      - uv run python scripts/db_clean.py
+      - bash -c 'GO_BIN="${GO:-$(command -v go || printf .tools/go/bin/go)}"; "$GO_BIN" run ./cmd/yallmp-db-clean {{.CLI_ARGS}}'
 
   db-clean-dry-run:
     desc: Preview what would be cleaned (dry run)
     cmds:
-      - uv run python scripts/db_clean.py --dry-run
+      - bash -c 'GO_BIN="${GO:-$(command -v go || printf .tools/go/bin/go)}"; "$GO_BIN" run ./cmd/yallmp-db-clean --dry-run {{.CLI_ARGS}}'
 
   db-clean-old:
     desc: Clean logs older than N days
     cmds:
-      - uv run python scripts/db_clean.py --all --keep-days={{.KEEPS_DAYS | default "7"}}
+      - bash -c 'GO_BIN="${GO:-$(command -v go || printf .tools/go/bin/go)}"; "$GO_BIN" run ./cmd/yallmp-db-clean --all --keep-days={{.KEEPS_DAYS | default "7"}} {{.CLI_ARGS}}'
