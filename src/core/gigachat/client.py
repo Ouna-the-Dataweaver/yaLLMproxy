@@ -184,11 +184,16 @@ def _make_http_client(config: GigaChatBackendConfig) -> httpx.AsyncClient:
         cert = (config.client_cert_file, config.client_key_file)
     elif config.client_cert_file:
         cert = config.client_cert_file
+
+    verify: bool | str = config.verify_ssl
+    if config.verify_ssl and config.ca_cert_file:
+        verify = config.ca_cert_file
+
     transport = get_upstream_transport(config.base_url)
     return httpx.AsyncClient(
         base_url=config.base_url.rstrip("/"),
         timeout=config.timeout,
-        verify=config.verify_ssl,
+        verify=verify,
         cert=cert,
         transport=transport,
     )

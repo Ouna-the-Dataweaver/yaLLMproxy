@@ -220,6 +220,7 @@ model_list:
     api_base: http://localhost:8000/v1
     client_cert: ${GIGACHAT_CLIENT_CERT}
     client_key: ${GIGACHAT_CLIENT_KEY}
+    ca_cert: ${GIGACHAT_CA_CERT}
     verify_ssl: true
     request_timeout: 120
 router_settings:

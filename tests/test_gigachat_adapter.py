@@ -51,11 +51,28 @@ def test_build_cloud_config() -> None:
 
 
 def test_build_local_config() -> None:
-    cfg = build_gigachat_config(_gigachat_local_params())
+    cfg = build_gigachat_config(_gigachat_local_params(ca_cert="/certs/ca.pem"))
     assert cfg.mode == "local"
     assert cfg.client_cert_file == "/certs/client.pem"
     assert cfg.client_key_file == "/certs/client.key"
+    assert cfg.ca_cert_file == "/certs/ca.pem"
     assert cfg.api_key is None
+
+
+def test_client_uses_ca_cert_for_local_tls_verification(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured_kwargs: dict[str, Any] = {}
+
+    class _FakeAsyncClient:
+        def __init__(self, **kwargs: Any) -> None:
+            captured_kwargs.update(kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", _FakeAsyncClient)
+
+    cfg = build_gigachat_config(_gigachat_local_params(ca_cert="/certs/ca.pem"))
+    GigaChatHTTPClient(cfg)
+
+    assert captured_kwargs["cert"] == ("/certs/client.pem", "/certs/client.key")
+    assert captured_kwargs["verify"] == "/certs/ca.pem"
 
 
 def test_build_config_requires_credentials() -> None:
