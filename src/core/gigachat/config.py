@@ -25,6 +25,7 @@ class GigaChatBackendConfig:
     api_key: str | None
     client_cert_file: str | None
     client_key_file: str | None
+    ca_cert_file: str | None
     verify_ssl: bool
     timeout: float
     emulate_tool_calls: bool
@@ -75,6 +76,7 @@ def build_gigachat_config(params: Mapping[str, Any]) -> GigaChatBackendConfig:
     scope = _str_or_none(params.get("scope")) or DEFAULT_SCOPE
     client_cert_file = _str_or_none(params.get("client_cert"))
     client_key_file = _str_or_none(params.get("client_key"))
+    ca_cert_file = _str_or_none(params.get("ca_cert"))
 
     mode = _resolve_mode(
         mode_value=_str_or_none(params.get("mode")),
@@ -93,6 +95,7 @@ def build_gigachat_config(params: Mapping[str, Any]) -> GigaChatBackendConfig:
         api_key=api_key,
         client_cert_file=client_cert_file,
         client_key_file=client_key_file,
+        ca_cert_file=ca_cert_file,
         verify_ssl=_parse_bool(params.get("verify_ssl"), DEFAULT_VERIFY_SSL),
         timeout=_float_or_default(params.get("request_timeout"), DEFAULT_TIMEOUT),
         emulate_tool_calls=_parse_bool(

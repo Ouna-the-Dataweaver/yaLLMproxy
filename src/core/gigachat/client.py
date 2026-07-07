@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import ssl
 import time
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
@@ -179,17 +180,24 @@ class GigaChatHTTPClient:
 
 
 def _make_http_client(config: GigaChatBackendConfig) -> httpx.AsyncClient:
-    cert: str | tuple[str, str] | None = None
-    if config.client_cert_file and config.client_key_file:
-        cert = (config.client_cert_file, config.client_key_file)
-    elif config.client_cert_file:
-        cert = config.client_cert_file
+    verify: bool | str | ssl.SSLContext = config.verify_ssl
+    if config.client_cert_file:
+        if config.verify_ssl:
+            verify = ssl.create_default_context(cafile=config.ca_cert_file)
+        else:
+            verify = ssl._create_unverified_context()
+        verify.load_cert_chain(
+            certfile=config.client_cert_file,
+            keyfile=config.client_key_file,
+        )
+    elif config.verify_ssl and config.ca_cert_file:
+        verify = config.ca_cert_file
+
     transport = get_upstream_transport(config.base_url)
     return httpx.AsyncClient(
         base_url=config.base_url.rstrip("/"),
         timeout=config.timeout,
-        verify=config.verify_ssl,
-        cert=cert,
+        verify=verify,
         transport=transport,
     )
 
