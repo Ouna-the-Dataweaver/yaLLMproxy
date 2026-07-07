@@ -12,8 +12,10 @@ yaLLMproxy/
 │   └── yallmp-tcp-forwarder/  # TCP forwarder
 ├── internal/
 │   ├── admission/             # Concurrency, priority, RPS/RPM admission
+│   ├── catalog/               # Read-only model catalog snapshots, probes, and warnings
 │   ├── config/                # YAML/env config loading, validation, masking, inheritance
 │   ├── forwarder/             # HTTP and TCP forwarder implementations
+│   ├── gigachat/              # Native GigaChat client, auth, and response conversion
 │   ├── logdb/                 # SQLite/PostgreSQL metadata, analytics, response state, cleanup
 │   ├── logstore/              # Full request/response sidecar files
 │   ├── messages/              # Anthropic Messages translation and streaming
@@ -51,6 +53,8 @@ yaLLMproxy/
 | `internal/server` | HTTP route dispatch, admin APIs, request validation, logging integration, usage/health |
 | `internal/proxy` | Backend definitions, outbound header/body building, route selection, fallback, forwarding |
 | `internal/config` | Config structs, env substitution, YAML persistence, inheritance, validation |
+| `internal/catalog` | Read-only catalog snapshots, provider `/v1/models` probes, and advisory warnings |
+| `internal/gigachat` | Native GigaChat cloud/local auth, chat conversion, streaming, and error normalization |
 | `internal/policy` | App-key authentication, group/key model access, merged per-key limits |
 | `internal/admission` | Concurrency queue, priorities, RPS/RPM token buckets, metrics |
 | `internal/quota` | Token quota reservations, commits, rollback, windowing, metrics |

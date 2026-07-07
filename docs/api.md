@@ -470,6 +470,8 @@ GET /admin/traces/{trace_id}
 
 `GET /admin/logs` uses persistent request metadata when configured and falls back to in-memory request logs otherwise.
 
+Compatibility aliases are also available at `/api/logs`, `/api/logs/{id}`, `/api/logs/stop-reasons`, `/api/logs/tool-call-rate`, and `/api/logs/models`. Trace filtering with `trace_id` is admin-gated only on `/admin/logs`.
+
 When OTel tracing is enabled, request log rows may include `trace_id` and `span_id` from the proxy-owned `proxy.request` span. These fields are empty or omitted when OTel is disabled/noop.
 
 Supported SQLite query parameters:
@@ -522,6 +524,8 @@ Metric families currently exposed:
 GET /admin
 GET /admin/
 GET /admin/assets/{asset}
+GET /logs
+GET /usage
 ```
 
 Serves the built React admin frontend when `web/admin/dist` exists. Build it with:
@@ -531,6 +535,8 @@ task frontend:build
 ```
 
 The admin frontend includes an Observability tab that summarizes `GET /admin/cache`, `GET /v1/health`, and `GET /v1/usage` without rendering raw request or response payloads. `/admin/cache` uses the existing admin-password request behavior; the health and usage panels consume the public runtime metrics endpoints. The read-only Traces tab consumes admin-password-gated `GET /admin/traces/{trace_id}` responses, deep-links from trace IDs shown in admin logs, and renders only sanitized trace metadata, attempts, linked categorical errors, token counts, outcomes, backend names, endpoint kinds, and timing fields.
+
+The legacy static `/logs` and `/usage` pages are still served from `static/admin` when those files are present. They are compatibility pages; the maintained admin UI is `/admin`, and usage JSON is exposed at `/v1/usage` rather than the old `/api/usage` alias.
 
 ## Error Format
 

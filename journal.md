@@ -3650,5 +3650,20 @@
   - Shared multi-replica/HA state for backend quotas, response-state stickiness, budget usage, and distributed config reloads.
   - Upstream 429 learning, adaptive latency/queue-aware routing, centralized flow-control queues, richer quota tiers, hierarchical budgets, and provider-key allowlists per app key.
   - Broader operational dashboards for queue size, quota burn-down, SLOs, per-model cost, and deeper metrics beyond the current Observability/Traces views.
-  - Legacy Python static routes such as `/logs`, `/usage`, and `/api/usage`.
+  - Legacy `/api/usage` compatibility alias. The maintained usage endpoint is `/v1/usage`; legacy `/logs`, `/usage`, and `/api/logs` paths are present.
   - Real-provider live conformance matrix and any remaining one-for-one Python parser corpus ports.
+
+### 2026-07-05T22:55:57Z - Markdown documentation audit
+
+- Audited tracked markdown plus the ignored `.codex-upgrade/` feature-batch archive.
+- Confirmed the last completed feature pass was Batch 28, integrated on 2026-06-29: concurrency-aware node selection, Prometheus timing histograms, routing test hardening, and GigaChat error normalization.
+- Updated maintained docs for current status:
+  - Added a README documentation map and noted `.codex-upgrade/` as an ignored local archive.
+  - Marked `go_refactor.md` and `shared_core.md` as historical/planning notes.
+  - Updated feature/gap dates to 2026-07-05.
+  - Corrected legacy route status: `/logs`, `/usage`, and `/api/logs` exist; `/api/usage` remains absent.
+  - Added `internal/catalog` and `internal/gigachat` to the project-structure guide.
+  - Reframed attempt trail logging and fake upstream smoke testing as implemented, with remaining follow-up limited to richer UI/latency/conformance coverage.
+- Verification:
+  - `git diff --check` passed.
+  - `task test` passed.

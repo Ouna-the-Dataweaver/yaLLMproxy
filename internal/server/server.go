@@ -910,7 +910,7 @@ func (a *App) RouterRegister(entry config.ModelEntry, fallbacks []string) (bool,
 }
 
 func (a *App) hasAdminPassword(r *http.Request) bool {
-	expected := strings.TrimSpace(os.Getenv(config.AdminPasswordEnv))
+	expected := a.expectedAdminPassword()
 	if expected == "" {
 		return false
 	}
@@ -919,6 +919,20 @@ func (a *App) hasAdminPassword(r *http.Request) bool {
 		provided = r.URL.Query().Get("admin_password")
 	}
 	return provided == expected
+}
+
+func (a *App) expectedAdminPassword() string {
+	if expected := strings.TrimSpace(os.Getenv(config.AdminPasswordEnv)); expected != "" {
+		return expected
+	}
+	if a == nil || a.Config == nil || a.Config.Path == "" {
+		return ""
+	}
+	envValues, err := config.LoadEnvValues(config.ResolveEnvPath(a.Config.Path, ""))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(envValues[config.AdminPasswordEnv])
 }
 
 func (a *App) handleLogs(w http.ResponseWriter, r *http.Request) {

@@ -60,6 +60,7 @@
 - SQLite/PostgreSQL-backed persistent request metadata logging using the top-level `database` config, including non-stream and SSE token usage, outcome, timing, app-key id, proxy-owned OTel trace/span IDs when enabled, full-request sidecar links, filtered/paginated `/admin/logs` with admin-protected exact trace filtering, decoded sidecar search, `/admin/logs/{id}` detail lookup, admin-protected metadata-only `/admin/traces/{trace_id}` aggregation, linked error logs, stop-reason/tool-call/model aggregate endpoints, and request/error metadata cleanup helpers.
 - Proxy logs record selected backend names for Chat Completions, Embeddings, Rerank, Messages, and Responses flows, including SQLite metadata.
 - `/v1/health` endpoint.
+- Legacy static admin pages at `/logs` and `/usage`, plus compatibility `/api/logs` JSON aliases for log list/detail/aggregate endpoints.
 - On-disk full request/response payload sidecars with retention cleanup and `payload_path` links from logs, including non-stream `parsed_response` raw/transformed fields and strict-gated parsed-stream raw/transformed `.sse` sidecars.
 - Go fake and real smoke harness at `cmd/yallmp-smoke`, exposed as `task smoke:fake` and `task smoke:real`, checking client/upstream proxying, request body capture, backend logging, full request sidecars, parsed response/stream sidecars, token usage logging, daily quota reset visibility, direct passthrough fidelity, in-memory OTel span/metric emission including parser/logging phases and stream TTFT/TPOT plus admin-log trace correlation, exact-cache hits/bypass behavior for chat, embeddings, translated non-stream Messages/Responses, and opt-in persistence, embeddings/rerank model rewrite, opt-in streamed tool-argument JSON repair, translated `/v1/responses` non-stream/stream usage details plus streamed tool/terminal edge behavior, and translated Responses/Messages reasoning/thinking/tool-stream behavior.
 - `stream_options.*` model defaults are only applied to streaming upstream requests, avoiding non-stream OpenAI-compatible validation failures.
@@ -84,7 +85,7 @@
 - Remaining Anthropic Messages edge-case parity beyond the implemented text/tool/image/thinking/cache-usage stream adapter paths and added long-tail translator corpus.
 - Remaining Responses API edge-case parity beyond the implemented text/tool/image/reasoning/usage, service-tier/cache-key, safe error shape, detailed usage mapping paths, and added long-tail translator corpus.
 - Advanced app-key policy tiers beyond the current flat/grouped/default/unauthenticated model and merged limit fields.
-- Legacy Python static routes such as `/logs`, `/usage`, and `/api/usage`.
+- Legacy `/api/usage` compatibility alias. The maintained usage endpoint is `/v1/usage`; legacy `/logs`, `/usage`, and `/api/logs` paths are present.
 - Richer quota policy, including more advanced quota tiers beyond flat/grouped scopes and fixed rolling or UTC calendar reset modes, shared multi-replica backend quota state, and upstream 429 learning.
 - Richer circuit-breaker policy beyond current opt-in half-open failback, such as adaptive latency/queue-aware recovery.
 - Broader operational dashboards beyond the current cache/health/usage observability panel, read-only trace dashboard, and metadata trace-navigation APIs, including richer metrics, queues, quota burn-down, and per-model cost.

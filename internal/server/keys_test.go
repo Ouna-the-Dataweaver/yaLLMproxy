@@ -49,6 +49,43 @@ func TestAdminKeysRequireConfiguredPassword(t *testing.T) {
 	}
 }
 
+func TestAdminKeysAcceptPasswordFromConfigEnvFile(t *testing.T) {
+	t.Setenv(config.AdminPasswordEnv, "")
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte(`
+model_list:
+  - model_name: alpha
+    model_params:
+      api_base: http://upstream.test/v1
+      model: openai/alpha
+app_keys:
+  enabled: true
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte(config.AdminPasswordEnv+"=file-pw\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadWithOptions(config.LoadOptions{Path: cfgPath, SubstituteEnv: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	app, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wrong := adminKeyRequest(app, http.MethodGet, "/admin/keys", "", "wrong")
+	if wrong.Code != http.StatusForbidden {
+		t.Fatalf("wrong password status = %d body=%s", wrong.Code, wrong.Body.String())
+	}
+	resp := adminKeyRequest(app, http.MethodGet, "/admin/keys", "", "file-pw")
+	if resp.Code != http.StatusOK {
+		t.Fatalf("config env password status = %d body=%s", resp.Code, resp.Body.String())
+	}
+}
+
 func TestAdminKeysCreateListGetMasksSecrets(t *testing.T) {
 	t.Setenv(config.AdminPasswordEnv, "pw")
 	app := newTestApp(t, "http://upstream.test/v1")

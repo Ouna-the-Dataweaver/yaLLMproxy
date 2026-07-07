@@ -26,6 +26,15 @@ yaLLMproxy is a Go LLM proxy for OpenAI-compatible traffic, local model fleets, 
 
 Known Go-vs-Python gaps are tracked in [docs/go_feature_gaps.md](docs/go_feature_gaps.md).
 
+## Documentation Map
+
+- [docs/api.md](docs/api.md), [docs/configuration.md](docs/configuration.md), [docs/database.md](docs/database.md), [docs/testing.md](docs/testing.md), and [docs/project-structure.md](docs/project-structure.md) are the maintained user/operator docs.
+- [state.md](state.md) is the current Go refactor status snapshot.
+- [feature_list_go.md](feature_list_go.md) is the feature backlog and batch status tracker; as of 2026-07-05 the last completed feature pass is Batch 28.
+- [journal.md](journal.md) is the chronological work log. It is useful for resuming context but is not a concise product doc.
+- [go_refactor.md](go_refactor.md) and [shared_core.md](shared_core.md) are historical/planning notes. Treat maintained docs and code as authoritative before following those plans.
+- `.codex-upgrade/` is an ignored local archive of feature-batch planning and review artifacts; it is intentionally not tracked.
+
 ## Prerequisites
 
 - Go compatible with `go.mod` (`go 1.26` in this branch). The repo also supports a bundled `.tools/go/bin/go` fallback used by `Taskfile.yml`.
@@ -64,6 +73,7 @@ curl http://localhost:7979/v1/chat/completions \
 | `task forwarder` | Run the Go TCP forwarder |
 | `task forwarder:http` | Run the Go HTTP reverse forwarder |
 | `task frontend:install` | Install React admin frontend dependencies |
+| `task frontend:dev` | Run the Vite admin frontend dev server |
 | `task frontend:build` | Build the React admin frontend into `web/admin/dist` |
 | `task db-clean-dry-run` | Preview request/error log cleanup |
 | `task db-clean` | Clean request/error logs |
@@ -153,6 +163,8 @@ When exact inference caching is enabled, callers can send `x-yallmp-cache-bypass
 - `GET /metrics` exposes disabled-by-default Prometheus metrics when enabled.
 
 Build `web/admin` with `task frontend:build` to serve the React admin UI from `/admin`.
+
+Compatibility log aliases are available under `/api/logs`. Legacy static `/logs` and `/usage` pages are still served from `static/admin`, but the maintained UI is `/admin` and usage JSON is `/v1/usage`.
 
 ## Forwarders
 

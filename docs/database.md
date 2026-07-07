@@ -161,6 +161,8 @@ Sidecars are linked from `request_metadata.full_request_path` and surfaced by `G
 
 `GET /admin/logs/{id}` returns a decoded sidecar detail when available, plus `attempt_trail` and `attempts` when upstream attempts were recorded.
 
+Compatibility `/api/logs` aliases are also available for the list, detail, and aggregate log endpoints. Admin-gated trace filtering remains on `/admin/logs`.
+
 Analytics endpoints:
 
 - `GET /admin/logs/stop-reasons`

@@ -1,5 +1,7 @@
 # Shared Core Plan: Internal Primitives
 
+Status note, 2026-07-05: this is a research/design note, not an implemented package. The implementation plan at the bottom predates the Go-only refactor and mentions Python paths. If this work is revived, translate the primitives into Go packages under `internal/` and re-check the external API references before using provider-specific details.
+
 ## Goal
 Define a minimal, loss-minimizing internal representation (IR) that lets us:
 - Support multiple provider schemas (OpenAI Chat/Responses, Anthropic Messages, Gemini, xAI).
@@ -152,18 +154,16 @@ Keep this per-backend in config to avoid hardcoding:
 - supports_reasoning_content (and whether it is allowed to pass through)
 
 ## Implementation plan (repo-level)
-1) Add `src/shared_core/primitives.py` for dataclasses/types.
-2) Add `src/shared_core/codec/` with helper converters:
-   - `content.py` for ContentPart conversion helpers
-   - `tooling.py` for tool schema conversion
-   - `usage.py` for usage normalization
-3) Refactor existing translators to use the shared content/tool helpers.
-4) Implement new adapters as API-specific edges:
-   - Anthropic Messages translator + streaming adapter
-   - Gemini native translator (generateContent)
+If revived in the current Go repository:
+1. Add a small Go package for primitives under `internal/`, likely adjacent to existing `internal/messages` and `internal/responses` translator code.
+2. Add helper packages or files for content-part conversion, tool schema conversion, and usage normalization.
+3. Refactor existing translators only where the shared helpers reduce duplication without changing client-visible behavior.
+4. Implement new adapters as API-specific edges:
+   - Anthropic Messages translator + streaming adapter refinements
+   - Gemini native translator (`generateContent`)
    - xAI Responses translator (stateful)
-5) Add tests per adapter + shared-core mapping tests.
-6) Keep passthrough fields in `extra` and preserve ordering.
+5. Add tests per adapter plus shared-core mapping tests.
+6. Keep passthrough fields in `extra` and preserve ordering.
 
 ## Open questions
 - Do we treat `model` as a role or normalize to `assistant` internally?

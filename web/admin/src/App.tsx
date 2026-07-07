@@ -1,10 +1,12 @@
 import { Activity, BarChart3, CheckCircle2, Clock3, Copy, Database, FileJson, Gauge, GitBranch, HardDrive, HeartPulse, KeyRound, ListFilter, Network, Pencil, Plus, RefreshCw, Save, Search, Server, Shield, Trash2, UploadCloud, X } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 
 type JsonRecord = Record<string, unknown>;
 type TabID = "overview" | "observability" | "traces" | "catalog" | "logs" | "config" | "models" | "routing" | "keys";
+type AdminPasswordStatusTone = "neutral" | "good" | "warn" | "bad";
+type AdminPasswordFeedback = { text: string; tone: AdminPasswordStatusTone };
 
 type LogRecord = {
   id?: string;
@@ -462,6 +464,16 @@ const tabs: Array<{ id: TabID; label: string; icon: typeof Activity }> = [
   { id: "keys", label: "App Keys", icon: KeyRound }
 ];
 
+const adminPasswordStorageKey = "yallmp.adminPassword";
+
+function readStoredAdminPassword() {
+  try {
+    return localStorage.getItem(adminPasswordStorageKey) || "";
+  } catch {
+    return "";
+  }
+}
+
 const emptyAppKeyForm: AppKeyForm = {
   key_id: "",
   group_id: "",
@@ -494,7 +506,13 @@ const emptyCopyModelForm: CopyModelForm = {
 
 export function AdminApp() {
   const [activeTab, setActiveTab] = useState<TabID>(() => tabFromLocation(window.location));
-  const [adminPassword, setAdminPassword] = useState(() => localStorage.getItem("yallmp.adminPassword") || "");
+  const [adminPassword, setAdminPassword] = useState(readStoredAdminPassword);
+  const [adminPasswordInput, setAdminPasswordInput] = useState(readStoredAdminPassword);
+  const [adminPasswordVerified, setAdminPasswordVerified] = useState(false);
+  const [adminPasswordChecking, setAdminPasswordChecking] = useState(false);
+  const [adminPasswordPopoverOpen, setAdminPasswordPopoverOpen] = useState(false);
+  const [adminPasswordFeedback, setAdminPasswordFeedback] = useState<AdminPasswordFeedback | null>(null);
+  const adminPasswordControlRef = useRef<HTMLDivElement | null>(null);
   const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
@@ -606,12 +624,21 @@ export function AdminApp() {
   const legacyModelNames = useMemo(() => modelTreeNames(modelTree), [modelTree]);
   const fallbackModelNames = useMemo(() => fallbackNameOptions(legacyModelNames, clientModels, nodes, routerFallbacks), [legacyModelNames, clientModels, nodes, routerFallbacks]);
   const appKeyGroupIDs = useMemo(() => appKeyGroups(appKeysConfig).map((group) => String(group.group_id || "")).filter(isNonEmptyString), [appKeysConfig]);
+  const adminPasswordPending = adminPasswordInput !== adminPassword;
+  const adminPasswordStatus = adminPasswordStatusText(adminPasswordInput, adminPassword, adminPasswordVerified, adminPasswordChecking);
+  const adminPasswordStatusTone = adminPasswordStatusClass(adminPasswordInput, adminPassword, adminPasswordVerified, adminPasswordChecking);
+  const adminPasswordButtonText = adminPasswordButtonLabel(adminPasswordStatus);
+  const adminPasswordSubmitDisabled = adminPasswordChecking || (!adminPasswordInput && !adminPassword) || (!adminPasswordPending && adminPasswordVerified);
 
   useEffect(() => {
-    if (adminPassword) {
-      localStorage.setItem("yallmp.adminPassword", adminPassword);
-    } else {
-      localStorage.removeItem("yallmp.adminPassword");
+    try {
+      if (adminPassword) {
+        localStorage.setItem(adminPasswordStorageKey, adminPassword);
+      } else {
+        localStorage.removeItem(adminPasswordStorageKey);
+      }
+    } catch {
+      // Ignore storage errors; the in-memory password still works for this page.
     }
   }, [adminPassword]);
 
@@ -659,6 +686,23 @@ export function AdminApp() {
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
   }, [adminPassword]);
+
+  useEffect(() => {
+    if (!adminPasswordPopoverOpen) return;
+    function handlePointerDown(event: PointerEvent) {
+      if (adminPasswordControlRef.current?.contains(event.target as Node)) return;
+      setAdminPasswordPopoverOpen(false);
+    }
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setAdminPasswordPopoverOpen(false);
+    }
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [adminPasswordPopoverOpen]);
 
   function switchTab(tab: TabID) {
     setActiveTab(tab);
@@ -827,12 +871,37 @@ export function AdminApp() {
     setDependencyModel((current) => current || modelTreeNames(normalizedTree)[0] || "");
   }
 
-  async function loadAppKeys() {
-    const payload = await requestJSON<AppKeysPayload>("/admin/keys", undefined, adminPassword);
+  function resetAppKeyState() {
+    setAppKeys([]);
+    setAppKeysConfig({});
+    setAppKeyConfigForm(emptyAppKeyConfigForm);
+    setAppKeyConfigErrors({});
+    setAppKeyEdit(null);
+    setSecretReveal(null);
+  }
+
+  function applyAppKeysPayload(payload: AppKeysPayload) {
     setAppKeys(asArray<AppKeyRecord>(payload.keys));
     setAppKeysConfig(payload);
     setAppKeyConfigForm(appKeyConfigFormFromPayload(payload));
     setAppKeyConfigErrors({});
+  }
+
+  async function loadAppKeys() {
+    try {
+      const payload = await requestJSON<AppKeysPayload>("/admin/keys", undefined, adminPassword);
+      applyAppKeysPayload(payload);
+      if (adminPassword) setAdminPasswordVerified(true);
+    } catch (err) {
+      if (adminPassword && isAdminPasswordAuthError(err)) {
+        setAdminPassword("");
+        setAdminPasswordInput("");
+        setAdminPasswordVerified(false);
+        setAdminPasswordFeedback(null);
+        resetAppKeyState();
+      }
+      throw err;
+    }
   }
 
   async function loadModelDependencies(name: string) {
@@ -1623,6 +1692,44 @@ export function AdminApp() {
     }
   }
 
+  async function confirmAdminPassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!adminPasswordInput) {
+      clearAdminPassword();
+      return;
+    }
+    setAdminPasswordChecking(true);
+    setError("");
+    setNotice("");
+    setAdminPasswordFeedback(null);
+    try {
+      const payload = await requestJSON<AppKeysPayload>("/admin/keys", undefined, adminPasswordInput);
+      setAdminPassword(adminPasswordInput);
+      setAdminPasswordVerified(true);
+      applyAppKeysPayload(payload);
+      setAdminPasswordPopoverOpen(false);
+    } catch (err) {
+      setAdminPassword("");
+      setAdminPasswordVerified(false);
+      resetAppKeyState();
+      setAdminPasswordFeedback({ text: adminPasswordVerificationMessage(err), tone: "bad" });
+      setAdminPasswordPopoverOpen(true);
+    } finally {
+      setAdminPasswordChecking(false);
+    }
+  }
+
+  function clearAdminPassword() {
+    setAdminPassword("");
+    setAdminPasswordInput("");
+    setAdminPasswordVerified(false);
+    resetAppKeyState();
+    setError("");
+    setNotice("");
+    setAdminPasswordFeedback(null);
+    setAdminPasswordPopoverOpen(false);
+  }
+
   return (
     <main className="shell">
       <aside className="sidebar">
@@ -1646,10 +1753,6 @@ export function AdminApp() {
             );
           })}
         </nav>
-        <label className="field compact-field">
-          <span>Admin password</span>
-          <input type="password" value={adminPassword} onChange={(event) => setAdminPassword(event.target.value)} autoComplete="current-password" />
-        </label>
       </aside>
 
       <section className="workspace">
@@ -1659,8 +1762,71 @@ export function AdminApp() {
             <p>{statusLine(health.length, healthyCount, logMeta.total)}</p>
           </div>
           <div className="toolbar">
-            {notice && <Badge tone="good">{notice}</Badge>}
-            {error && <Badge tone="bad">{error}</Badge>}
+            <div className="admin-password-control" ref={adminPasswordControlRef}>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                className={`admin-password-trigger admin-password-trigger-${adminPasswordStatusTone}`}
+                onClick={() => {
+                  setAdminPasswordPopoverOpen((open) => !open);
+                  setAdminPasswordFeedback(null);
+                }}
+                aria-expanded={adminPasswordPopoverOpen}
+                aria-controls="admin-password-popover"
+                title="Admin access"
+              >
+                <Shield size={15} aria-hidden="true" />
+                {adminPasswordButtonText}
+              </Button>
+              {adminPasswordPopoverOpen && (
+                <div id="admin-password-popover" className="admin-password-popover" role="dialog" aria-label="Admin access">
+                  <form className="admin-password-form" onSubmit={confirmAdminPassword}>
+                    <label className="field admin-password-field">
+                      <span>Admin password</span>
+                      <input
+                        type="password"
+                        value={adminPasswordInput}
+                        onChange={(event) => {
+                          setAdminPasswordInput(event.target.value);
+                          setAdminPasswordFeedback(null);
+                          setNotice("");
+                          setError("");
+                        }}
+                        autoComplete="current-password"
+                        autoFocus
+                      />
+                    </label>
+                    <Button type="submit" size="sm" disabled={adminPasswordSubmitDisabled} title="Verify admin password">
+                      <CheckCircle2 size={15} aria-hidden="true" />
+                      Verify
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="admin-password-clear"
+                      onClick={clearAdminPassword}
+                      disabled={!adminPassword && !adminPasswordInput}
+                      title="Clear admin password"
+                    >
+                      <X size={15} aria-hidden="true" />
+                    </Button>
+                    <span
+                      className={`admin-password-status admin-password-status-${adminPasswordFeedback?.tone || adminPasswordStatusTone}`}
+                      aria-live="polite"
+                    >
+                      {adminPasswordFeedback?.text || adminPasswordStatus}
+                    </span>
+                  </form>
+                </div>
+              )}
+            </div>
+            {(error || notice) && (
+              <span className={error ? "topbar-status topbar-status-bad" : "topbar-status topbar-status-good"} role={error ? "alert" : "status"}>
+                {error || notice}
+              </span>
+            )}
             <Button variant="secondary" size="icon" onClick={() => void refreshAll()} disabled={loading} title="Refresh">
               <RefreshCw size={17} aria-hidden="true" />
             </Button>
@@ -3171,6 +3337,37 @@ class APIError extends Error {
     this.status = status;
     this.payload = payload;
   }
+}
+
+function isAdminPasswordAuthError(err: unknown) {
+  return err instanceof APIError && (err.status === 401 || err.status === 403);
+}
+
+function adminPasswordVerificationMessage(err: unknown) {
+  if (isAdminPasswordAuthError(err)) return "Admin password is invalid";
+  return `Could not verify admin password: ${errorMessage(err)}`;
+}
+
+function adminPasswordStatusText(input: string, applied: string, verified: boolean, checking: boolean) {
+  if (checking) return "checking";
+  if (!input && !applied) return "locked";
+  if (input !== applied) return "not applied";
+  if (verified) return "verified";
+  return "unverified";
+}
+
+function adminPasswordButtonLabel(status: string) {
+  if (status === "not applied") return "Admin pending";
+  if (status === "checking") return "Admin checking";
+  return `Admin ${status}`;
+}
+
+function adminPasswordStatusClass(input: string, applied: string, verified: boolean, checking: boolean): AdminPasswordStatusTone {
+  if (checking) return "warn";
+  if (!input && !applied) return "neutral";
+  if (input !== applied) return "warn";
+  if (verified) return "good";
+  return "neutral";
 }
 
 function apiErrorPayload(err: unknown) {

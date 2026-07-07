@@ -1,5 +1,7 @@
 This is a small plan for refactor, with definitions and things like that. This is more "what we want to achieve/have" and less "what we have right now"
 
+Status note, 2026-07-05: this is a historical pre-refactor planning note. The Go implementation has since landed and the maintained status lives in `README.md`, `state.md`, `feature_list_go.md`, and `docs/go_feature_gaps.md`. Use this file for original design intent only, not as current implementation truth.
+
 ## What is this app
 
 This is app for LLM OPS. Basically, it should provide

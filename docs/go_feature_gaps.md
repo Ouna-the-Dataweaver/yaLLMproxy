@@ -1,6 +1,6 @@
 # Go Feature Gaps
 
-Last verified: 2026-06-29.
+Last verified: 2026-07-05.
 
 This document records Python-era behavior that is not yet fully present in the Go implementation. Core proxy traffic is covered by the Go server, but the items below remain publish risks or deliberate follow-up work.
 
@@ -130,9 +130,9 @@ Why it mattered: old bookmarks and scripts may still hit those paths.
 
 How Python worked: FastAPI mounted static assets from `static/admin`, served HTML files directly, and exposed `/api/usage` alongside `/v1/usage`-style runtime metrics.
 
-Go status: Go serves the built React admin app under `/admin` when `web/admin/dist` exists, exposes `/v1/usage`, exposes JSON log APIs under `/admin/logs`, and the React admin Observability tab summarizes `/admin/cache`, `/v1/health`, and `/v1/usage`. The React Traces tab consumes sanitized `/admin/traces/{trace_id}` metadata. It does not preserve the old `/logs`, `/usage`, or `/api/usage` pages.
+Go status: mostly implemented. Go serves the built React admin app under `/admin` when `web/admin/dist` exists, keeps static legacy `/logs` and `/usage` pages from `static/admin`, exposes `/v1/usage`, exposes JSON log APIs under both `/admin/logs` and compatibility `/api/logs` paths, and the React admin Observability tab summarizes `/admin/cache`, `/v1/health`, and `/v1/usage`. The React Traces tab consumes sanitized `/admin/traces/{trace_id}` metadata. The old `/api/usage` alias is not preserved.
 
-Current workaround: use `/admin` for UI and `/v1/usage` or `/admin/logs` for JSON.
+Current workaround: use `/admin` for the maintained UI, `/logs` or `/usage` only for legacy static pages, `/v1/usage` for usage JSON, and `/admin/logs` or `/api/logs` for log JSON.
 
 ## Parsed Response Sidecar Logs
 
