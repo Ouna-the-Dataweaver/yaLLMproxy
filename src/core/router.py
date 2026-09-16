@@ -834,6 +834,14 @@ async def _streaming_request(
     if request_log and stream_parser:
         request_log.record_parsed_stream_headers(resp.status_code, resp.headers)
 
+    def _parser_requested_early_stop() -> bool:
+        # An upstream finish_reason is not EOF; usage and [DONE] may still follow.
+        return bool(
+            stream_parser
+            and stream_parser.stop_requested
+            and stream_parser.stop_source == "proxy"
+        )
+
     def _process_chunk(chunk: bytes) -> list[bytes]:
         if not stream_parser:
             return [chunk]
@@ -980,7 +988,7 @@ async def _streaming_request(
                         _handle_payload(payload, chunk_count)
                 for out_chunk in _process_chunk(chunk):
                     yield out_chunk
-                if stream_parser and stream_parser.stop_requested and not stop_early:
+                if _parser_requested_early_stop() and not stop_early:
                     stop_reason = stream_parser.stop_reason or stream_parser._last_finish_reason or "stop"
                     stop_early = True
                     last_finish_reason = stop_reason
@@ -1035,7 +1043,7 @@ async def _streaming_request(
                             request_log.record_stream_chunk(chunk)
                         for out_chunk in _process_chunk(chunk):
                             yield out_chunk
-                        if stream_parser and stream_parser.stop_requested and not stop_early:
+                        if _parser_requested_early_stop() and not stop_early:
                             stop_reason = stream_parser.stop_reason or stream_parser._last_finish_reason or "stop"
                             stop_early = True
                             last_finish_reason = stop_reason
