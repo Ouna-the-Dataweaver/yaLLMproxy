@@ -20,7 +20,7 @@ try:
 except ImportError:
     get_db_logger = None  # type: ignore
 
-from .full_request_store import get_full_request_store
+from .full_request_store import get_full_request_store, is_logging_enabled
 
 logger = logging.getLogger("yallmp-proxy")
 
@@ -278,6 +278,8 @@ def log_error_event(
     
     This creates a separate, smaller log file per error for quick scanning.
     """
+    if not is_logging_enabled():
+        return
     ERROR_LOG_DIR.mkdir(parents=True, exist_ok=True)
     
     import uuid
@@ -360,6 +362,7 @@ class RequestLogRecorder:
         log_to_disk: bool = True,
         db_log_target: Optional[DbLogTarget] = None,
     ) -> None:
+        self._logging_enabled = is_logging_enabled()
         self._request_id = uuid4()
         self._started_dt = datetime.now(timezone.utc)
         self._started = self._started_dt.isoformat()
@@ -413,14 +416,15 @@ class RequestLogRecorder:
         # App key tracking
         self._app_key_id: Optional[str] = None
 
-        REQUEST_LOG_DIR.mkdir(parents=True, exist_ok=True)
+        if self._logging_enabled:
+            REQUEST_LOG_DIR.mkdir(parents=True, exist_ok=True)
         self._append_text(f"log_start={self._started}\n")
 
         # Initialize database logger (if available and enabled)
         self._db_logger: Optional[Any] = None
         self._db_log_id: Optional[str] = None
         self._db_log_target = db_log_target or DbLogTarget()
-        if _DB_LOGGING_ENABLED and self._db_log_target.enabled and get_db_logger is not None:
+        if self._logging_enabled and _DB_LOGGING_ENABLED and self._db_log_target.enabled and get_db_logger is not None:
             try:
                 self._db_logger = get_db_logger(
                     instance_key=self._db_log_target.instance_key,
@@ -970,6 +974,8 @@ class RequestLogRecorder:
         if self._finalized:
             return
         self._finalized = True
+        if not self._logging_enabled:
+            return
         finished_dt = datetime.now(timezone.utc)
         finished = finished_dt.isoformat()
         self._append_text(f"=== FINAL STATUS: {outcome} at {finished} ===\n")

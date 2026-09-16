@@ -13,6 +13,7 @@ from fastapi.responses import Response
 from .logging import setup_logging
 from .logging.setup import reconfigure_logging, CONSOLE_LOG_PATH
 from .logging.full_request_store import (
+    is_logging_enabled,
     get_full_request_storage_settings,
     get_full_request_store,
 )
@@ -46,8 +47,11 @@ config = CONFIG_STORE.get_runtime_config()
 
 # Reconfigure logging if debug mode is enabled in config
 proxy_settings_for_debug = config.get("proxy_settings") or {}
+logging_enabled = is_logging_enabled(config)
+if not logging_enabled:
+    logging.disable(logging.CRITICAL)
 debug_enabled = bool(proxy_settings_for_debug.get("debug", False))
-if debug_enabled:
+if logging_enabled and debug_enabled:
     logger = reconfigure_logging(debug=True, log_file=CONSOLE_LOG_PATH)
     logger.info("Debug mode enabled - logging to %s", CONSOLE_LOG_PATH)
 

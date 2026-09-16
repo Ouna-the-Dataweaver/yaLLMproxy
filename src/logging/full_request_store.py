@@ -33,6 +33,13 @@ def _parse_bool(value: Any, default: bool) -> bool:
     return bool(value)
 
 
+def is_logging_enabled(config: dict[str, Any] | None = None) -> bool:
+    """Return the master logging switch; changes take effect after restart."""
+    runtime_config = config if config is not None else CONFIG_STORE.get_runtime_config()
+    logging_cfg = (runtime_config.get("proxy_settings") or {}).get("logging") or {}
+    return _parse_bool(logging_cfg.get("enabled"), True)
+
+
 def get_full_request_storage_settings(
     config: dict[str, Any] | None = None,
 ) -> FullRequestStorageSettings:
@@ -51,7 +58,7 @@ def get_full_request_storage_settings(
     cleanup_interval_hours = max(1, int(storage_cfg.get("cleanup_interval_hours", 24)))
 
     return FullRequestStorageSettings(
-        enabled=_parse_bool(storage_cfg.get("enabled"), True),
+        enabled=is_logging_enabled(runtime_config) and _parse_bool(storage_cfg.get("enabled"), True),
         path=path,
         retention_hours=retention_hours,
         cleanup_on_startup=_parse_bool(storage_cfg.get("cleanup_on_startup"), True),
