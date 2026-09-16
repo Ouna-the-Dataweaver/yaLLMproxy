@@ -12,10 +12,11 @@ from uuid import uuid4
 
 import httpx
 
-from .config import GigaChatBackendConfig
 from ..upstream_transport import get_upstream_transport
+from .config import GigaChatBackendConfig
+from .tool_schema import ToolArguments
+from .tool_stream import ToolCallStream
 from .translator import (
-    gigachat_chunk_to_openai,
     gigachat_response_to_openai,
     openai_chat_to_gigachat,
     openai_chat_to_gigachat_tool_emulation,
@@ -56,11 +57,16 @@ class GigaChatHTTPClient:
             await self._client.aclose()
 
     async def chat_completions(self, payload: Mapping[str, Any]) -> dict[str, Any]:
+        try:
+            payload, arguments = ToolArguments.prepare(payload)
+        except ValueError as exc:
+            raise UpstreamError(400, str(exc)) from exc
         request_model = str(payload.get("model") or self.config.model_name)
         if _should_emulate_tools(self.config, payload):
-            return await self._chat_completions_with_tool_emulation(
+            result = await self._chat_completions_with_tool_emulation(
                 payload, request_model=request_model
             )
+            return arguments.restore_response(result)
 
         gigachat_payload = openai_chat_to_gigachat(
             payload, default_model=self.config.model_name
@@ -72,17 +78,29 @@ class GigaChatHTTPClient:
         if response.status_code >= 400:
             raise UpstreamError(response.status_code, response.text)
         data = response.json()
-        return gigachat_response_to_openai(data, request_model=request_model)
+        return arguments.restore_response(
+            gigachat_response_to_openai(data, request_model=request_model)
+        )
 
     async def stream_chat_completions(
         self, payload: Mapping[str, Any]
     ) -> AsyncIterator[str]:
+        try:
+            payload, arguments = ToolArguments.prepare(payload)
+        except ValueError as exc:
+            raise UpstreamError(400, str(exc)) from exc
         request_model = str(payload.get("model") or self.config.model_name)
         if _should_emulate_tools(self.config, payload):
             response = await self._chat_completions_with_tool_emulation(
                 payload, request_model=request_model
             )
+            # Convert to legacy deltas after forming the normal tool-call SSE.
+            response = arguments.restore_response(response, convert_legacy=False)
             for chunk in openai_response_to_sse(response):
+                if arguments.legacy and chunk != "data: [DONE]\n\n":
+                    event = json.loads(chunk.removeprefix("data: ").strip())
+                    event = arguments.client_format(event, streaming=True)
+                    chunk = f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
                 yield chunk
             return
 
@@ -92,6 +110,7 @@ class GigaChatHTTPClient:
         gigachat_payload["stream"] = True
         headers = await self._headers()
         headers["Accept"] = "text/event-stream"
+        stream = ToolCallStream(arguments, request_model)
 
         async with self._client.stream(
             "POST", "/chat/completions", json=gigachat_payload, headers=headers
@@ -101,11 +120,13 @@ class GigaChatHTTPClient:
                 raise UpstreamError(response.status_code, body)
             async for data in _iter_sse_data(response):
                 if data == "[DONE]":
+                    for chunk in stream.finish():
+                        yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
                     yield "data: [DONE]\n\n"
                     return
-                chunk = gigachat_chunk_to_openai(
-                    json.loads(data), request_model=request_model
-                )
+                for chunk in stream.feed(json.loads(data)):
+                    yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+            for chunk in stream.finish():
                 yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
             yield "data: [DONE]\n\n"
 

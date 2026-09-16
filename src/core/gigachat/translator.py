@@ -4,9 +4,10 @@ import json
 import re
 import time
 from ast import literal_eval
-from copy import deepcopy
 from typing import Any, Mapping, Sequence
 from uuid import uuid4
+
+from .tool_schema import adapt_schema
 
 TOOL_EMULATION_SCHEMA = {
     "action": "call_tool | final_answer",
@@ -487,7 +488,7 @@ def tools_to_gigachat_functions(tools: Sequence[Any]) -> list[dict[str, Any]]:
 
 
 def prepare_gigachat_json_schema(schema: dict[str, Any]) -> dict[str, Any]:
-    return _normalize_gigachat_json_schema(_inline_json_schema_refs(schema))
+    return adapt_schema(schema).schema
 
 
 def gigachat_response_to_openai(data: Mapping[str, Any], *, request_model: str) -> dict[str, Any]:
@@ -596,69 +597,6 @@ def _gigachat_function_delta_to_openai_tool_call_delta(function_call: Mapping[st
     if "arguments" in function_call:
         delta["function"]["arguments"] = _arguments_to_json(function_call.get("arguments"))
     return delta
-
-
-def _inline_json_schema_refs(schema: dict[str, Any]) -> dict[str, Any]:
-    schema = deepcopy(schema)
-    defs = schema.get("$defs") or schema.get("definitions") or {}
-
-    def resolve(node: Any) -> Any:
-        if isinstance(node, list):
-            return [resolve(item) for item in node]
-        if not isinstance(node, dict):
-            return node
-
-        ref = node.get("$ref")
-        if isinstance(ref, str) and ref.startswith("#/$defs/"):
-            ref_name = ref.removeprefix("#/$defs/")
-            target = deepcopy(defs.get(ref_name, {}))
-            target.update({key: value for key, value in node.items() if key != "$ref"})
-            return resolve(target)
-        if isinstance(ref, str) and ref.startswith("#/definitions/"):
-            ref_name = ref.removeprefix("#/definitions/")
-            target = deepcopy(defs.get(ref_name, {}))
-            target.update({key: value for key, value in node.items() if key != "$ref"})
-            return resolve(target)
-
-        return {key: resolve(value) for key, value in node.items() if key not in {"$defs", "definitions"}}
-
-    resolved = resolve(schema)
-    return resolved if isinstance(resolved, dict) else schema
-
-
-def _normalize_gigachat_json_schema(schema: dict[str, Any]) -> dict[str, Any]:
-    def normalize(node: Any) -> Any:
-        if isinstance(node, list):
-            return [normalize(item) for item in node]
-        if not isinstance(node, dict):
-            return node
-
-        normalized = {key: normalize(value) for key, value in node.items()}
-        for union_key in ("anyOf", "oneOf"):
-            variants = normalized.get(union_key)
-            if not isinstance(variants, list):
-                continue
-            non_null_variants = [variant for variant in variants if not (isinstance(variant, dict) and variant.get("type") == "null")]
-            if len(non_null_variants) == 1 and len(non_null_variants) != len(variants):
-                merged = dict(non_null_variants[0])
-                for key, value in normalized.items():
-                    if key == union_key or (key == "default" and value is None):
-                        continue
-                    merged[key] = value
-                normalized = merged
-                break
-
-        schema_type = normalized.get("type")
-        if isinstance(schema_type, list):
-            non_null_types = [item for item in schema_type if item != "null"]
-            if len(non_null_types) == 1:
-                normalized["type"] = non_null_types[0]
-                if normalized.get("default") is None:
-                    normalized.pop("default", None)
-        return normalized
-
-    normalized_schema = normalize(schema)
-    return normalized_schema if isinstance(normalized_schema, dict) else schema
 
 
 def _content_to_text(content: Any) -> str:
