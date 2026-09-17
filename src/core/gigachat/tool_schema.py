@@ -101,8 +101,8 @@ def adapt_schema(schema: Mapping[str, Any]) -> ArgumentSchema:
         schema_type = node.get("type")
         if schema_type == "null":
             nullable = True
-        if isinstance(schema_type, list) and "null" in schema_type:
-            nullable = True
+        if isinstance(schema_type, list) and schema_type:
+            nullable = nullable or "null" in schema_type
             types = [item for item in schema_type if item != "null"]
             node["type"] = types[0] if len(types) == 1 else types or "null"
         enum = node.get("enum")

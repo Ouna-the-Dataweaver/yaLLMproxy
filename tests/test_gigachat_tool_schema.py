@@ -17,6 +17,59 @@ NULLABLE_FORMS = [
 
 
 @pytest.mark.parametrize(
+    "kind", ["string", "integer", "number", "boolean", "array", "object"]
+)
+def test_single_type_lists_preserve_required_non_nullable_properties(kind):
+    original = {
+        "type": ["object"],
+        "properties": {"categories": {"type": [kind]}},
+        "required": ["categories"],
+    }
+    before = deepcopy(original)
+    plan = adapt_schema(original)
+    assert plan.schema == {
+        "type": "object",
+        "properties": {"categories": {"type": kind}},
+        "required": ["categories"],
+    }
+    assert plan.transform({}) == {}  # A missing non-nullable field is not repaired.
+    assert not plan.nullable and not plan.properties["categories"].nullable
+    assert original == before
+
+
+def test_single_type_lists_in_refs_items_maps_and_nullable_unions():
+    original = {
+        "$defs": {"Category": {"type": ["string"]}},
+        "type": ["object"],
+        "properties": {
+            "categories": {"type": ["array"], "items": {"$ref": "#/$defs/Category"}},
+            "mapping": {
+                "type": ["object"],
+                "additionalProperties": {"type": ["integer"]},
+            },
+            "period": {"anyOf": [{"type": ["string"]}, {"type": ["null"]}]},
+        },
+        "required": ["categories", "period"],
+    }
+    plan = adapt_schema(original)
+    assert plan.schema["properties"] == {
+        "categories": {"type": "array", "items": {"type": "string"}},
+        "mapping": {"type": "object", "additionalProperties": {"type": "integer"}},
+        "period": {"type": "string"},
+    }
+    assert plan.schema["required"] == ["categories"]
+    assert plan.transform({"categories": []}) == {"categories": [], "period": None}
+
+
+@pytest.mark.parametrize("nullable", [False, True])
+def test_multiple_non_null_types_are_not_arbitrarily_narrowed(nullable):
+    types = ["string", "array"] + (["null"] if nullable else [])
+    plan = adapt_schema({"type": types})
+    assert plan.schema["type"] == ["string", "array"]
+    assert plan.nullable is nullable
+
+
+@pytest.mark.parametrize(
     "values, expected_type",
     [
         ([False, True, None], "boolean"),

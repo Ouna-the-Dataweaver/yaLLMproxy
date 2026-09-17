@@ -611,3 +611,87 @@ async def test_native_arguments_preserve_false_zero_and_empty_values(streaming):
         else:
             response = httpx.Response(200, json=await client.chat_completions(payload))
         assert response_arguments("chat", response, streaming) == expected
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("nullable", [False, True])
+async def test_categories_type_list_roundtrip_includes_history(streaming, nullable):
+    expected = {"categories": None if nullable else ["news"]}
+    schema = {
+        "type": ["object"],
+        "properties": {
+            "categories": {
+                "type": ["array", "null"] if nullable else ["array"],
+                "items": {"type": ["string"]},
+            },
+        },
+        "required": ["categories"],
+    }
+    upstream_args = {} if nullable else expected
+
+    async def handler(request):
+        payload = json.loads(request.content)
+        assert payload["functions"][0]["parameters"] == {
+            "type": "object",
+            "properties": {
+                "categories": {"type": "array", "items": {"type": "string"}}
+            },
+            "required": [] if nullable else ["categories"],
+        }
+        assert payload["messages"][1]["function_call"]["arguments"] == upstream_args
+        call = {"name": "categorize", "arguments": upstream_args}
+        body = {
+            "choices": [
+                {
+                    "delta" if streaming else "message": {"function_call": call},
+                    "finish_reason": "tool_call",
+                }
+            ]
+        }
+        if streaming:
+            return httpx.Response(
+                200, content="data: " + json.dumps(body) + "\n\ndata: [DONE]\n\n"
+            )
+        return httpx.Response(200, json=body)
+
+    cfg = build_gigachat_config(
+        {"mode": "local", "client_cert": "mock", "client_key": "mock"}
+    )
+    async with httpx.AsyncClient(
+        base_url="https://giga.test", transport=httpx.MockTransport(handler)
+    ) as http:
+        client = GigaChatHTTPClient(cfg, http_client=http)
+        payload = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {"name": "categorize", "parameters": schema},
+                }
+            ],
+            "messages": [
+                {"role": "user", "content": "Categorize"},
+                {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": "categorize",
+                                "arguments": json.dumps(expected),
+                            },
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call_1", "content": "[]"},
+                {"role": "user", "content": "Repeat"},
+            ],
+        }
+        before = deepcopy(payload)
+        if streaming:
+            chunks = [chunk async for chunk in client.stream_chat_completions(payload)]
+            response = httpx.Response(200, content="".join(chunks))
+        else:
+            response = httpx.Response(200, json=await client.chat_completions(payload))
+        assert response_arguments("chat", response, streaming) == expected
+        assert payload == before
