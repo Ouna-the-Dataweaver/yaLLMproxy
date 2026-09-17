@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sys
 from typing import Any
 
@@ -8,6 +9,7 @@ import httpx
 import pytest
 
 from src.core.gigachat import GigaChatBackendAdapter, GigaChatHTTPClient, build_gigachat_config
+from src.core.gigachat import client as gigachat_client
 from src.core.gigachat.config import DEFAULT_SCOPE
 from src.core.gigachat.translator import (
     gigachat_response_to_openai,
@@ -39,6 +41,56 @@ def _gigachat_local_params(**overrides: Any) -> dict[str, Any]:
     }
     params.update(overrides)
     return params
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_stream", [False, True])
+@pytest.mark.parametrize("logging_enabled", [False, True])
+async def test_adapter_logs_upstream_error_without_changing_client_response(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    is_stream: bool,
+    logging_enabled: bool,
+) -> None:
+    provider_body = json.dumps({
+        "status": 422,
+        "message": "Field 'properties.categories.type' is of a wrong type. "
+        "Expected: stringValue, actual: arrayValue",
+    })
+    http_client = httpx.AsyncClient(
+        base_url="https://gigachat.local/api/v1",
+        transport=httpx.MockTransport(lambda request: httpx.Response(422, text=provider_body)),
+    )
+    monkeypatch.setattr(gigachat_client, "_make_http_client", lambda config: http_client)
+    caplog.set_level(
+        logging.ERROR if logging_enabled else logging.CRITICAL + 1,
+        logger="yallmp-proxy",
+    )
+    adapter = GigaChatBackendAdapter(build_gigachat_config(_gigachat_local_params()))
+    try:
+        response = await adapter.request(
+            payload={"model": "test-model", "messages": [{"role": "user", "content": "private-prompt"}]},
+            is_stream=is_stream,
+        )
+        if is_stream:
+            chunks = [chunk async for chunk in response.body_iterator]
+            assert response.status_code == 200
+            assert chunks[-1] == b"data: [DONE]\n\n"
+            error = json.loads(chunks[0].decode().removeprefix("data: "))
+        else:
+            assert response.status_code == 422
+            error = json.loads(response.body)
+        assert error == {"error": {"message": provider_body, "type": "upstream_error", "code": 422}}
+        records = [record for record in caplog.records if record.name == "yallmp-proxy"]
+        assert len(records) == int(logging_enabled)
+        if logging_enabled:
+            message = records[0].getMessage()
+            assert records[0].levelno == logging.ERROR
+            assert f"model=test-model, stream={is_stream}, status=422" in message
+            assert provider_body in message
+            assert "private-prompt" not in message
+    finally:
+        await adapter.aclose()
 
 
 def test_build_cloud_config() -> None:

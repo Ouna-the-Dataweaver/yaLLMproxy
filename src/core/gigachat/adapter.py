@@ -47,6 +47,12 @@ class GigaChatBackendAdapter:
         try:
             openai_response = await self._client.chat_completions(payload)
         except UpstreamError as exc:
+            logger.error(
+                "GigaChat request failed (model=%s, stream=False, status=%s): %s",
+                payload.get("model") or self.config.model_name,
+                exc.status_code,
+                exc.body,
+            )
             error_body = json.dumps(
                 {
                     "error": {
@@ -77,6 +83,12 @@ class GigaChatBackendAdapter:
                 async for chunk in self._client.stream_chat_completions(payload):
                     yield chunk.encode("utf-8")
             except UpstreamError as exc:
+                logger.error(
+                    "GigaChat request failed (model=%s, stream=True, status=%s): %s",
+                    payload.get("model") or self.config.model_name,
+                    exc.status_code,
+                    exc.body,
+                )
                 error = {
                     "error": {
                         "message": exc.body,
