@@ -202,6 +202,18 @@ def adapt_schema(schema: Mapping[str, Any]) -> ArgumentSchema:
 
         node.pop("$defs", None)
         node.pop("definitions", None)
+        # GigaChat only accepts temporal formats. Keep other format annotations
+        # as model guidance; the caller still validates against its own schema.
+        schema_format = node.get("format")
+        if isinstance(schema_format, str) and schema_format not in {
+            "date",
+            "date-time",
+            "time",
+        }:
+            node.pop("format")
+            node["description"] = (
+                str(node.get("description") or "") + f" Format: {schema_format}."
+            ).strip()
         const_null = "const" in node and node["const"] is None
         nullable = node.get("nullable") is True or const_null
         schema_type = node.get("type")

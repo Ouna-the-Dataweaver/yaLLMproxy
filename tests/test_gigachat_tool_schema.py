@@ -15,6 +15,37 @@ NULLABLE_FORMS = [
 ]
 
 
+@pytest.mark.parametrize("schema_format", ["uuid", "uri", "email", "int64"])
+def test_unsupported_formats_become_upstream_description_hints(schema_format):
+    original = {
+        "type": "object",
+        "properties": {
+            "format": {
+                "type": "string",
+                "format": schema_format,
+                "description": "Identifier.",
+            },
+        },
+        "required": ["format"],
+    }
+    before = deepcopy(original)
+    plan = adapt_schema(original)
+    field = plan.schema["properties"]["format"]
+    assert field["type"] == "string"
+    assert "format" not in field
+    assert field["description"] == f"Identifier. Format: {schema_format}."
+    assert plan.schema["required"] == ["format"]
+    assert plan.transform({"format": "unchanged"}) == {"format": "unchanged"}
+    assert adapt_schema(plan.schema).schema == plan.schema
+    assert original == before
+
+
+@pytest.mark.parametrize("schema_format", ["date", "date-time", "time"])
+def test_supported_gigachat_formats_are_preserved(schema_format):
+    original = {"type": "string", "format": schema_format}
+    assert adapt_schema(original).schema == original
+
+
 @pytest.mark.parametrize("keyword", ["anyOf", "oneOf"])
 @pytest.mark.parametrize("required", [False, True])
 def test_scalar_nullable_union_preserves_date_types_and_omissions(keyword, required):
