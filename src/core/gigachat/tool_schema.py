@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any, Mapping
+from typing import Any
 
 
 @dataclass
@@ -17,11 +18,12 @@ class ArgumentSchema:
     required_nulls: set[str] = field(default_factory=set)
     items: ArgumentSchema | None = None
     additional: ArgumentSchema | None = None
+    scalar_variants: dict[str, ArgumentSchema] = field(default_factory=dict)
 
     @property
     def needs_restoration(self) -> bool:
         return (
-            bool(self.required_nulls)
+            bool(self.required_nulls or self.scalar_variants)
             or any(child.needs_restoration for child in self.properties.values())
             or bool(
                 (self.items and self.items.needs_restoration)
@@ -31,6 +33,27 @@ class ArgumentSchema:
 
     def transform(self, value: Any, *, upstream: bool = False) -> Any:
         """Copy arguments, restoring missing nulls or omitting nulls upstream."""
+        if self.scalar_variants:
+            if value is None and self.nullable:
+                return None
+            if upstream:
+                kind = _scalar_kind(value)
+                if kind == "integer" and kind not in self.scalar_variants:
+                    kind = "number"
+                if kind not in self.scalar_variants:
+                    raise ValueError("Invalid GigaChat scalar union argument type")
+                return {kind: deepcopy(value)}
+            if not isinstance(value, dict) or len(value) != 1:
+                raise ValueError(
+                    "GigaChat scalar union requires exactly one typed value"
+                )
+            kind, scalar = next(iter(value.items()))
+            actual = _scalar_kind(scalar)
+            if kind not in self.scalar_variants or not (
+                actual == kind or (kind == "number" and actual == "integer")
+            ):
+                raise ValueError("Invalid GigaChat scalar union argument type")
+            return deepcopy(scalar)
         if isinstance(value, dict):
             result = {}
             for name, child_value in value.items():
@@ -62,8 +85,91 @@ class ArgumentSchema:
         return self.transform(value, upstream=upstream)
 
 
+def _scalar_kind(value: Any) -> str | None:
+    # bool is an int subclass, but must never select the integer branch.
+    # JSON Schema also considers integral JSON numbers (e.g. 1.0) integers.
+    if isinstance(value, float) and value.is_integer():
+        return "integer"
+    return {str: "string", bool: "boolean", int: "integer", float: "number"}.get(
+        type(value)
+    )
+
+
+def _scalar_union(
+    node: dict[str, Any], key: str, variants: list[ArgumentSchema], nullable: bool
+) -> ArgumentSchema | None:
+    """Represent distinct scalar types using GigaChat's supported object schema.
+
+    GigaChat requires a single string-valued `type`; native anyOf and type lists
+    fail upstream. A typed envelope preserves scalar types in both directions.
+    Object unions and intersections still need branch-aware schema handling.
+    """
+    if key not in {"anyOf", "oneOf"} or len(variants) < 2:
+        return None
+    kinds = [variant.schema.get("type") for variant in variants]
+    if not all(
+        isinstance(kind, str) and kind in {"string", "integer", "number", "boolean"}
+        for kind in kinds
+    ):
+        return None
+    if len(set(kinds)) != len(kinds) or (
+        key == "oneOf" and {"integer", "number"}.issubset(kinds)
+    ):
+        raise ValueError("GigaChat scalar union branches must have distinct types")
+    # Constraints outside the branches apply to the scalar, not the envelope.
+    # Do not silently discard them or move them onto an object.
+    if set(node) - {
+        key,
+        "title",
+        "description",
+        "default",
+        "examples",
+        "nullable",
+    } or any(
+        variant.needs_restoration
+        or any(k in variant.schema for k in ("anyOf", "oneOf", "allOf", "not"))
+        for variant in variants
+    ):
+        raise ValueError("Unsupported constraints on GigaChat scalar union")
+    properties = {}
+    for kind, variant in zip(kinds, variants, strict=True):
+        properties[kind] = deepcopy(variant.schema)
+        properties[kind].setdefault(
+            "description",
+            f"The {kind} value. Set only this member when choosing {kind}.",
+        )
+    description = (
+        str(node.get("description") or "")
+        + " Provide exactly one member: "
+        + ", ".join(kinds)
+        + ". Do not set the other members."
+    ).strip()
+    schema = {
+        "type": "object",
+        "properties": properties,
+        "additionalProperties": False,
+        "description": description,
+    }
+    if "title" in node:
+        schema["title"] = node["title"]
+    plan = ArgumentSchema(
+        schema,
+        nullable=nullable,
+        scalar_variants=dict(zip(kinds, variants, strict=True)),
+    )
+    if "default" in node and node["default"] is not None:
+        schema["default"] = plan.transform(node["default"], upstream=True)
+    if "examples" in node:
+        schema["examples"] = [
+            plan.transform(value, upstream=True)
+            for value in node["examples"]
+            if value is not None
+        ]
+    return plan
+
+
 def adapt_schema(schema: Mapping[str, Any]) -> ArgumentSchema:
-    """Resolve local references and adapt enum/type/simple-union nullability.
+    """Resolve references, adapt nullability, and encode scalar union choices.
 
     Only schema-bearing keywords are traversed: defaults, examples, and object
     enum values are data, and property names may themselves be schema keywords.
@@ -141,7 +247,9 @@ def adapt_schema(schema: Mapping[str, Any]) -> ArgumentSchema:
                 # Keep the selected branch's restoration metadata, not just its
                 # normalized schema (which has already lost its required nulls).
                 branch = next(
-                    item for item, plan in zip(variants, compiled) if not plan.null_only
+                    item
+                    for item, plan in zip(variants, compiled, strict=True)
+                    if not plan.null_only
                 )
                 combined = {**branch, **{k: v for k, v in node.items() if k != key}}
                 plan = compile_node(combined, refs)
@@ -153,6 +261,9 @@ def adapt_schema(schema: Mapping[str, Any]) -> ArgumentSchema:
                 return plan
             if not non_null and key != "allOf":
                 return ArgumentSchema({"type": "null"}, nullable=True, null_only=True)
+            scalar_plan = _scalar_union(node, key, non_null, nullable)
+            if scalar_plan is not None:
+                return scalar_plan
             # Ambiguous unions cannot safely choose where missing fields belong.
             if any(item.needs_restoration or item.nullable for item in compiled):
                 raise ValueError(

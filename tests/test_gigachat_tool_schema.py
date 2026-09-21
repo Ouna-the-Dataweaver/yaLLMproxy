@@ -3,7 +3,6 @@ from __future__ import annotations
 from copy import deepcopy
 
 import pytest
-
 from src.core.gigachat.tool_schema import ToolArguments, adapt_schema
 
 NULLABLE_FORMS = [
@@ -14,6 +13,148 @@ NULLABLE_FORMS = [
     {"oneOf": [{"type": "null"}, {"type": "string", "enum": ["Day", "Year"]}]},
     {"type": "string", "enum": ["Day", "Year"], "nullable": True},
 ]
+
+
+@pytest.mark.parametrize("keyword", ["anyOf", "oneOf"])
+@pytest.mark.parametrize("required", [False, True])
+def test_scalar_nullable_union_preserves_date_types_and_omissions(keyword, required):
+    original = {
+        "type": "object",
+        "properties": {
+            "date": {
+                keyword: [{"type": "string"}, {"type": "integer"}, {"type": "null"}],
+                "default": None,
+                "description": "Date or Unix timestamp.",
+            },
+        },
+        "required": ["date"] if required else [],
+    }
+    before = deepcopy(original)
+    plan = adapt_schema(original)
+    field = plan.schema["properties"]["date"]
+    assert field["type"] == "object"
+    assert set(field["properties"]) == {"string", "integer"}
+    assert "default" not in field
+    assert plan.schema["required"] == []
+    assert plan.needs_restoration  # Optional unions also need stream decoding.
+    assert plan.transform({}) == ({"date": None} if required else {})
+    assert plan.transform({"date": None}, upstream=True) == {}
+    for value, branch in [
+        ("2026-09-21", "string"),
+        ("12345", "string"),
+        ("", "string"),
+        (0, "integer"),
+        (12345, "integer"),
+    ]:
+        wire = {"date": {branch: value}}
+        assert plan.transform({"date": value}, upstream=True) == wire
+        assert plan.transform(wire) == {"date": value}
+    assert original == before
+    # The translator prepares schemas a second time; the wire schema is stable.
+    assert adapt_schema(plan.schema).schema == plan.schema
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        {},
+        {"string": "x", "integer": 1},
+        {"integer": True},
+        {"integer": "12"},
+        {"unknown": 1},
+    ],
+)
+def test_scalar_union_rejects_ambiguous_or_invalid_wire_values(value):
+    plan = adapt_schema(
+        {"anyOf": [{"type": "string"}, {"type": "integer"}, {"type": "null"}]}
+    )
+    with pytest.raises(ValueError, match="scalar union"):
+        plan.transform(value)
+
+
+def test_scalar_union_nested_refs_keep_constraints_and_types():
+    schema = {
+        "$defs": {"Flag": {"type": "boolean"}},
+        "type": "object",
+        "properties": {
+            "values": {
+                "type": "array",
+                "items": {
+                    "anyOf": [
+                        {"$ref": "#/$defs/Flag"},
+                        {"type": "integer", "minimum": 0},
+                    ]
+                },
+            },
+        },
+    }
+    plan = adapt_schema(schema)
+    assert (
+        plan.schema["properties"]["values"]["items"]["properties"]["integer"]["minimum"]
+        == 0
+    )
+    values = {"values": [False, 0, True, 1]}
+    wire = {
+        "values": [
+            {"boolean": False},
+            {"integer": 0},
+            {"boolean": True},
+            {"integer": 1},
+        ]
+    }
+    assert plan.transform(values, upstream=True) == wire
+    assert plan.transform(wire) == values
+
+
+def test_scalar_oneof_overlapping_numeric_branches_still_rejected():
+    with pytest.raises(ValueError):
+        adapt_schema(
+            {"oneOf": [{"type": "integer"}, {"type": "number"}, {"type": "null"}]}
+        )
+
+
+def test_scalar_union_numeric_defaults_examples_and_map_values():
+    plan = adapt_schema(
+        {
+            "type": "object",
+            "additionalProperties": {
+                "anyOf": [{"type": "number"}, {"type": "string"}, {"type": "null"}],
+                "default": 0,
+                "examples": [None, 1.5, "1.5"],
+            },
+        }
+    )
+    field = plan.schema["additionalProperties"]
+    assert field["default"] == {"number": 0}
+    assert field["examples"] == [{"number": 1.5}, {"string": "1.5"}]
+    original = {"zero": 0, "decimal": 1.5, "integer_number": 1.0, "text": "1.5"}
+    wire = {
+        "zero": {"number": 0},
+        "decimal": {"number": 1.5},
+        "integer_number": {"number": 1.0},
+        "text": {"string": "1.5"},
+    }
+    assert plan.transform(original, upstream=True) == wire
+    assert plan.transform(wire) == original
+
+
+def test_scalar_union_integral_json_numbers_preserve_value_without_coercion():
+    plan = adapt_schema({"anyOf": [{"type": "string"}, {"type": "integer"}]})
+    assert plan.transform(1.0, upstream=True) == {"integer": 1.0}
+    assert plan.transform({"integer": 1.0}) == 1.0
+    assert type(plan.transform({"integer": 1.0})) is float
+    with pytest.raises(ValueError, match="scalar union"):
+        plan.transform(1.5, upstream=True)
+
+
+def test_scalar_union_does_not_discard_outer_constraints():
+    with pytest.raises(ValueError, match="Unsupported constraints"):
+        adapt_schema(
+            {
+                "anyOf": [{"type": "string"}, {"type": "integer"}, {"type": "null"}],
+                "enum": ["a", 1, None],
+            }
+        )
 
 
 @pytest.mark.parametrize(

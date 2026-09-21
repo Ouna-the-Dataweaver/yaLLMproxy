@@ -6,7 +6,6 @@ from copy import deepcopy
 
 import httpx
 import pytest
-
 from src.config_store import CONFIG_STORE
 from src.core.gigachat.client import GigaChatHTTPClient, UpstreamError
 from src.core.gigachat.config import build_gigachat_config
@@ -569,7 +568,9 @@ async def test_native_arguments_preserve_false_zero_and_empty_values(streaming):
         "properties": {
             name: {"type": [kind, "null"]}
             for name, kind in zip(
-                expected, ["boolean", "integer", "string", "array", "object"]
+                expected,
+                ["boolean", "integer", "string", "array", "object"],
+                strict=True,
             )
         },
         "required": list(expected),
@@ -695,3 +696,137 @@ async def test_categories_type_list_roundtrip_includes_history(streaming, nullab
             response = httpx.Response(200, json=await client.chat_completions(payload))
         assert response_arguments("chat", response, streaming) == expected
         assert payload == before
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("required", [False, True])
+@pytest.mark.parametrize("value", [None, 0, "", "12345", "2026-09-21"])
+async def test_scalar_union_http_roundtrip_and_history(
+    streaming, required, value, clear_transport_registry, isolated_config
+):
+    field = {
+        "anyOf": [{"type": "string"}, {"type": "integer"}, {"type": "null"}],
+        "default": None,
+    }
+    schema = {
+        "type": "object",
+        "properties": {"date": field, "optional_date": deepcopy(field)},
+        "required": ["date"] if required else [],
+    }
+    if value is None:
+        wire_args = {}
+        expected = {"date": None} if required else {}
+    else:
+        kind = "integer" if isinstance(value, int) else "string"
+        wire_args = {name: {kind: value} for name in ("date", "optional_date")}
+        expected = {"date": value, "optional_date": value}
+    requests_seen = []
+
+    async def handler(request):
+        if request.url.path == "/oauth":
+            return httpx.Response(
+                200, json={"access_token": "mock", "expires_at": 4102444800000}
+            )
+        payload = json.loads(request.content)
+        requests_seen.append(payload)
+        upstream_schema = payload["functions"][0]["parameters"]
+        assert upstream_schema["required"] == []
+        assert upstream_schema["properties"]["date"]["type"] == "object"
+        assert set(upstream_schema["properties"]["date"]["properties"]) == {
+            "string",
+            "integer",
+        }
+        for message in payload["messages"]:
+            if "function_call" in message:
+                assert message["function_call"]["arguments"] == wire_args
+        call = {"name": "date_probe", "arguments": wire_args}
+        if not streaming:
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {"function_call": call},
+                            "finish_reason": "tool_call",
+                        }
+                    ]
+                },
+            )
+        raw = json.dumps(wire_args)
+        chunks = [
+            {
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {
+                            "function_call": {"name": "date_probe", "arguments": part}
+                        },
+                        "finish_reason": None,
+                    }
+                ]
+            }
+            for part in (raw[:8], raw[8:])
+        ]
+        chunks.append(
+            {"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_call"}]}
+        )
+        return httpx.Response(
+            200,
+            content="".join("data: " + json.dumps(chunk) + "\n\n" for chunk in chunks)
+            + "data: [DONE]\n\n",
+        )
+
+    register_upstream_transport("giga.test", httpx.MockTransport(handler))
+    config = {
+        "model_list": [
+            {
+                "model_name": "giga",
+                "model_params": {
+                    "api_type": "gigachat",
+                    "model": "GigaChat",
+                    "api_key": "mock",
+                    "api_base": "https://giga.test/api/v1",
+                    "auth_url": "https://giga.test/oauth",
+                },
+            }
+        ]
+    }
+    payload = {
+        "model": "giga",
+        "stream": streaming,
+        "tools": [
+            {
+                "type": "function",
+                "function": {"name": "date_probe", "parameters": schema},
+            }
+        ],
+        "messages": [{"role": "user", "content": "Call date_probe"}],
+    }
+    with ProxyHarness(config) as proxy:
+        async with proxy.make_async_client() as client:
+            for history in (False, True):
+                if history:
+                    historical = {"date": value, "optional_date": value}
+                    payload["messages"] += [
+                        {
+                            "role": "assistant",
+                            "tool_calls": [
+                                {
+                                    "id": "call_1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "date_probe",
+                                        "arguments": json.dumps(historical),
+                                    },
+                                }
+                            ],
+                        },
+                        {"role": "tool", "tool_call_id": "call_1", "content": "[]"},
+                        {"role": "user", "content": "Repeat"},
+                    ]
+                before = deepcopy(payload)
+                response = await client.post("/v1/chat/completions", json=payload)
+                assert response.status_code == 200, response.text
+                assert response_arguments("chat", response, streaming) == expected
+                assert payload == before
+    assert len(requests_seen) == 2
