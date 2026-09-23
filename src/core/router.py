@@ -7,6 +7,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Mapping, Optional
 
 import httpx
 from fastapi import HTTPException, Response
+from fastapi.responses import StreamingResponse
 
 from .backend import (
     Backend,
@@ -334,12 +335,13 @@ class ProxyRouter:
         adapter = GigaChatBackendAdapter(backend.gigachat_config)
         try:
             response = await adapter.request(payload=payload, is_stream=is_stream)
-        finally:
-            if not is_stream:
-                await adapter.aclose()
-
-        # For non-streaming responses, map retryable upstream HTTP errors to retries.
-        if not is_stream and isinstance(response, Response):
+        except BaseException:
+            await adapter.aclose()
+            raise
+        # Streaming startup failures still have an HTTP status and are safe to
+        # retry: the adapter has not returned any model output to the caller.
+        if not isinstance(response, StreamingResponse):
+            await adapter.aclose()
             if response.status_code in RETRYABLE_STATUSES:
                 if request_log:
                     request_log.record_error(
