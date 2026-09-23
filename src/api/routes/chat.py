@@ -60,6 +60,7 @@ def _wrap_stream_with_slot_release(
         status_code=response.status_code,
         headers=dict(response.headers),
         media_type=response.media_type,
+        background=response.background,
     )
 
 

@@ -46,7 +46,7 @@ def _gigachat_local_params(**overrides: Any) -> dict[str, Any]:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("is_stream", [False, True])
 @pytest.mark.parametrize("logging_enabled", [False, True])
-async def test_adapter_logs_upstream_error_without_changing_client_response(
+async def test_adapter_logs_upstream_error_and_preserves_http_status(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     is_stream: bool,
@@ -72,14 +72,8 @@ async def test_adapter_logs_upstream_error_without_changing_client_response(
             payload={"model": "test-model", "messages": [{"role": "user", "content": "private-prompt"}]},
             is_stream=is_stream,
         )
-        if is_stream:
-            chunks = [chunk async for chunk in response.body_iterator]
-            assert response.status_code == 200
-            assert chunks[-1] == b"data: [DONE]\n\n"
-            error = json.loads(chunks[0].decode().removeprefix("data: "))
-        else:
-            assert response.status_code == 422
-            error = json.loads(response.body)
+        assert response.status_code == 422
+        error = json.loads(response.body)
         assert error == {"error": {"message": provider_body, "type": "upstream_error", "code": 422}}
         records = [record for record in caplog.records if record.name == "yallmp-proxy"]
         assert len(records) == int(logging_enabled)
