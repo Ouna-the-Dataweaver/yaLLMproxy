@@ -2611,6 +2611,58 @@ func TestTokenQuotaCalendarRestoreUsesCurrentUTCWindow(t *testing.T) {
 	}
 }
 
+func TestTokenQuotaRollingRestoreUsesOnlyActiveWindow(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "logs.db")
+	now := time.Date(2026, time.June, 27, 12, 0, 0, 0, time.UTC)
+	enabled := true
+	cfg := &config.Config{
+		ModelList: []config.ModelEntry{{
+			ModelName: "alpha",
+			ModelParams: map[string]any{
+				"api_base": "http://upstream.test/v1",
+				"model":    "openai/upstream",
+			},
+		}},
+		AppKeys: config.AppKeysConfig{
+			Enabled: true,
+			Keys: []config.AppKeyEntry{{
+				KeyID: "k1", Secret: "secret", Enabled: &enabled, Models: []string{"alpha"},
+				Limits: config.LimitsConfig{TokenQuota: 20, TokenQuotaWindowSeconds: 3600},
+			}},
+		},
+		Database: map[string]any{
+			"backend": "sqlite",
+			"connection": map[string]any{
+				"sqlite": map[string]any{"path": dbPath},
+			},
+		},
+	}
+	store, err := logdb.NewStore(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	for _, record := range []logdb.Record{
+		{RequestTime: now.Add(-2 * time.Hour), ModelName: "alpha", Outcome: "success", AppKeyID: "k1", UsageStats: map[string]any{"total_tokens": 18}},
+		{RequestTime: now.Add(-30 * time.Minute), ModelName: "alpha", Outcome: "success", AppKeyID: "k1", UsageStats: map[string]any{"total_tokens": 6}},
+	} {
+		if _, err := store.Insert(context.Background(), record); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	manager := quota.NewManagerWithClock(func() time.Time { return now })
+	seedQuotaFromLogDBAt(context.Background(), manager, store, cfg, now)
+
+	metrics := manager.Metrics()
+	if got := metrics.UsedByScope["k1::alpha"]; got != 6 {
+		t.Fatalf("restored rolling quota usage = %d, want 6", got)
+	}
+	if got := metrics.ResetAtByScope["k1::alpha"]; !got.Equal(now.Add(time.Hour)) {
+		t.Fatalf("restored rolling reset_at = %s, want %s", got, now.Add(time.Hour))
+	}
+}
+
 func TestTokenQuotaRestoresGroupedUsageFromPersistentLogDB(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "logs.db")
 	var upstreamHits int
@@ -3303,6 +3355,52 @@ func TestAdminGetConfigMasksSensitiveKeys(t *testing.T) {
 	}
 }
 
+func TestConfiguredAdminPasswordProtectsConfigAndLogAPIs(t *testing.T) {
+	t.Setenv(config.AdminPasswordEnv, "pw")
+	app := newTestApp(t, "http://upstream.test/v1")
+	tests := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/admin/config"},
+		{http.MethodPut, "/admin/config"},
+		{http.MethodPost, "/admin/config/validate"},
+		{http.MethodPost, "/admin/config/reload"},
+		{http.MethodGet, "/admin/logs"},
+		{http.MethodGet, "/admin/logs/stop-reasons"},
+		{http.MethodGet, "/admin/logs/1"},
+		{http.MethodGet, "/admin/traces/0123456789abcdef0123456789abcdef"},
+		{http.MethodGet, "/api/logs"},
+		{http.MethodGet, "/api/logs/models"},
+		{http.MethodGet, "/api/logs/1"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+			for _, password := range []string{"", "wrong"} {
+				resp := httptest.NewRecorder()
+				req := httptest.NewRequest(tc.method, tc.path, nil)
+				if password != "" {
+					req.Header.Set("x-admin-password", password)
+				}
+				app.ServeHTTP(resp, req)
+				if resp.Code != http.StatusForbidden {
+					t.Fatalf("password %q: status = %d body=%s", password, resp.Code, resp.Body.String())
+				}
+			}
+		})
+	}
+
+	for _, path := range []string{"/admin/config", "/admin/logs", "/api/logs"} {
+		resp := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("x-admin-password", "pw")
+		app.ServeHTTP(resp, req)
+		if resp.Code != http.StatusOK {
+			t.Fatalf("authorized %s: status = %d body=%s", path, resp.Code, resp.Body.String())
+		}
+	}
+}
+
 func TestAdminValidateConfigReturnsFieldIssues(t *testing.T) {
 	app := newTestApp(t, "http://upstream.test/v1")
 	resp := httptest.NewRecorder()
@@ -3531,6 +3629,71 @@ model_list:
 	}
 }
 
+func TestApplyConfigWaitsForInFlightRequest(t *testing.T) {
+	requestStarted := make(chan struct{})
+	releaseRequest := make(chan struct{})
+	release := func() {
+		select {
+		case <-releaseRequest:
+		default:
+			close(releaseRequest)
+		}
+	}
+	defer release()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(requestStarted)
+		<-releaseRequest
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"old"}}]}`))
+	}))
+	defer upstream.Close()
+	app := newTestApp(t, upstream.URL+"/v1")
+
+	requestDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		requestDone <- postChat(app, "")
+	}()
+	select {
+	case <-requestStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("request did not reach upstream")
+	}
+
+	reloadDone := make(chan error, 1)
+	go func() {
+		reloadDone <- app.applyConfig(&config.Config{ModelList: []config.ModelEntry{{
+			ModelName: "alpha",
+			ModelParams: map[string]any{
+				"api_base": "http://new-upstream.test/v1",
+				"model":    "openai/upstream",
+			},
+		}}}, false)
+	}()
+	select {
+	case err := <-reloadDone:
+		t.Fatalf("reload completed while a request still used the old runtime: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+	release()
+
+	select {
+	case resp := <-requestDone:
+		if resp.Code != http.StatusOK {
+			t.Fatalf("request status = %d body=%s", resp.Code, resp.Body.String())
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("in-flight request did not finish")
+	}
+	select {
+	case err := <-reloadDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("reload did not finish after request completion")
+	}
+}
+
 func TestServerNewFailsOnInvalidLogDatabase(t *testing.T) {
 	blocker := filepath.Join(t.TempDir(), "not-a-dir")
 	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
@@ -3698,6 +3861,66 @@ func TestPassthroughRoute(t *testing.T) {
 	}
 }
 
+func TestPassthroughEnforcesAppKeyAndDoesNotLeakProxyCredential(t *testing.T) {
+	var gotAuthorization string
+	var gotAppKey string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuthorization = r.Header.Get("Authorization")
+		gotAppKey = r.Header.Get("x-api-key")
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer upstream.Close()
+	enabled := true
+	app, err := New(&config.Config{
+		ModelList: []config.ModelEntry{{
+			ModelName: "pass",
+			ModelParams: map[string]any{
+				"api_base": upstream.URL,
+				"api_key":  "upstream-secret",
+				"api_type": "passthrough",
+			},
+		}},
+		AppKeys: config.AppKeysConfig{
+			Enabled: true,
+			Keys: []config.AppKeyEntry{{
+				KeyID: "client", Secret: "client-secret", Enabled: &enabled, Models: []string{"pass"},
+				Limits: config.LimitsConfig{RPS: 1},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	blocked := httptest.NewRecorder()
+	app.ServeHTTP(blocked, httptest.NewRequest(http.MethodPost, "/p1/pass/v2/score", strings.NewReader(`{}`)))
+	if blocked.Code != http.StatusUnauthorized {
+		t.Fatalf("missing app key status = %d body=%s", blocked.Code, blocked.Body.String())
+	}
+
+	allowed := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/p1/pass/v2/score", strings.NewReader(`{}`))
+	req.Header.Set("x-api-key", "client-secret")
+	app.ServeHTTP(allowed, req)
+	if allowed.Code != http.StatusOK || allowed.Body.String() != "ok" {
+		t.Fatalf("authorized status = %d body=%s", allowed.Code, allowed.Body.String())
+	}
+	if gotAuthorization != "Bearer upstream-secret" {
+		t.Fatalf("upstream authorization = %q", gotAuthorization)
+	}
+	if gotAppKey != "" {
+		t.Fatalf("proxy app key leaked upstream: %q", gotAppKey)
+	}
+
+	rateLimited := httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/p1/pass/v2/score", strings.NewReader(`{}`))
+	req.Header.Set("x-api-key", "client-secret")
+	app.ServeHTTP(rateLimited, req)
+	if rateLimited.Code != http.StatusTooManyRequests {
+		t.Fatalf("second passthrough status = %d body=%s", rateLimited.Code, rateLimited.Body.String())
+	}
+}
+
 func TestUsageEndpoint(t *testing.T) {
 	app := newTestApp(t, "http://upstream.test/v1")
 	resp := httptest.NewRecorder()
@@ -3819,6 +4042,23 @@ func TestAdminFrontendServesBuiltAssetsWithoutShadowingAPIs(t *testing.T) {
 	app.ServeHTTP(resp, httptest.NewRequest(http.MethodGet, "/admin/config", nil))
 	if resp.Code != http.StatusOK || strings.Contains(resp.Body.String(), "admin ui") {
 		t.Fatalf("config status=%d body=%s", resp.Code, resp.Body.String())
+	}
+}
+
+func TestAdminFrontendFallsBackToEmbeddedProductionBundle(t *testing.T) {
+	oldDist := adminDistDir
+	adminDistDir = filepath.Join(t.TempDir(), "missing-dist")
+	defer func() { adminDistDir = oldDist }()
+
+	app := newTestApp(t, "http://upstream.test/v1")
+	for _, requestPath := range []string{"/admin", "/admin/models"} {
+		resp := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, requestPath, nil)
+		req.Header.Set("Accept", "text/html")
+		app.ServeHTTP(resp, req)
+		if resp.Code != http.StatusOK || !strings.Contains(resp.Body.String(), `id="root"`) {
+			t.Fatalf("embedded %s status=%d body=%s", requestPath, resp.Code, resp.Body.String())
+		}
 	}
 }
 
@@ -5268,7 +5508,9 @@ func TestPersistentLogDBStoresRequestMetadataAndAdminLogs(t *testing.T) {
 	}
 
 	detailResp := httptest.NewRecorder()
-	app.ServeHTTP(detailResp, httptest.NewRequest(http.MethodGet, "/admin/logs/"+record.ID, nil))
+	detailReq := httptest.NewRequest(http.MethodGet, "/admin/logs/"+record.ID, nil)
+	detailReq.Header.Set("x-admin-password", "pw")
+	app.ServeHTTP(detailResp, detailReq)
 	if detailResp.Code != http.StatusOK {
 		t.Fatalf("detail status = %d body=%s", detailResp.Code, detailResp.Body.String())
 	}
@@ -5327,7 +5569,9 @@ func TestPersistentLogDBStoresRequestMetadataAndAdminLogs(t *testing.T) {
 		t.Fatalf("failed logs = %#v", failed)
 	}
 	errorDetailResp := httptest.NewRecorder()
-	app.ServeHTTP(errorDetailResp, httptest.NewRequest(http.MethodGet, "/admin/logs/"+failed.Records[0].ID, nil))
+	errorDetailReq := httptest.NewRequest(http.MethodGet, "/admin/logs/"+failed.Records[0].ID, nil)
+	errorDetailReq.Header.Set("x-admin-password", "pw")
+	app.ServeHTTP(errorDetailResp, errorDetailReq)
 	if errorDetailResp.Code != http.StatusOK {
 		t.Fatalf("error detail status = %d body=%s", errorDetailResp.Code, errorDetailResp.Body.String())
 	}
@@ -5354,7 +5598,9 @@ func TestPersistentLogDBStoresRequestMetadataAndAdminLogs(t *testing.T) {
 		t.Fatal(err)
 	}
 	stopResp := httptest.NewRecorder()
-	app.ServeHTTP(stopResp, httptest.NewRequest(http.MethodGet, "/admin/logs/stop-reasons", nil))
+	stopReq := httptest.NewRequest(http.MethodGet, "/admin/logs/stop-reasons", nil)
+	stopReq.Header.Set("x-admin-password", "pw")
+	app.ServeHTTP(stopResp, stopReq)
 	if stopResp.Code != http.StatusOK {
 		t.Fatalf("stop reasons status = %d body=%s", stopResp.Code, stopResp.Body.String())
 	}
@@ -5367,7 +5613,9 @@ func TestPersistentLogDBStoresRequestMetadataAndAdminLogs(t *testing.T) {
 		t.Fatalf("stop reasons = %#v", stopPayload)
 	}
 	toolRateResp := httptest.NewRecorder()
-	app.ServeHTTP(toolRateResp, httptest.NewRequest(http.MethodGet, "/admin/logs/tool-call-rate", nil))
+	toolRateReq := httptest.NewRequest(http.MethodGet, "/admin/logs/tool-call-rate", nil)
+	toolRateReq.Header.Set("x-admin-password", "pw")
+	app.ServeHTTP(toolRateResp, toolRateReq)
 	if toolRateResp.Code != http.StatusOK {
 		t.Fatalf("tool rate status = %d body=%s", toolRateResp.Code, toolRateResp.Body.String())
 	}
@@ -5379,7 +5627,9 @@ func TestPersistentLogDBStoresRequestMetadataAndAdminLogs(t *testing.T) {
 		t.Fatalf("tool rate = %#v", toolRate)
 	}
 	modelsResp := httptest.NewRecorder()
-	app.ServeHTTP(modelsResp, httptest.NewRequest(http.MethodGet, "/admin/logs/models", nil))
+	modelsReq := httptest.NewRequest(http.MethodGet, "/admin/logs/models", nil)
+	modelsReq.Header.Set("x-admin-password", "pw")
+	app.ServeHTTP(modelsResp, modelsReq)
 	if modelsResp.Code != http.StatusOK {
 		t.Fatalf("models status = %d body=%s", modelsResp.Code, modelsResp.Body.String())
 	}

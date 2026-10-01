@@ -21,16 +21,25 @@ coverage.out
 *.test
 *.prof
 
+# The production admin bundle is committed for embedding in the Go binary.
+!web/admin/dist/
+!web/admin/dist/**
+
 # Local toolchains and caches
 .tools/
 .cache/
 .codex-upgrade/
 *.cache
 
-# Frontend dependencies/build output
+# Legacy Python caches/environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+
+# Frontend dependencies (the production bundle is committed for Go embedding)
 node_modules/
 web/admin/node_modules/
-web/admin/dist/
 *.tsbuildinfo
 
 # Generated certs

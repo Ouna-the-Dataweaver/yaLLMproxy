@@ -421,6 +421,9 @@ func sourcesFromConfig(cfg *config.Config, settings Settings) map[string]NodeSou
 	if cfg == nil {
 		return out
 	}
+	if expanded, err := cfg.ExpandedRouting(); err == nil {
+		cfg = expanded
+	}
 	providers := map[string]config.ProviderEntry{}
 	for _, provider := range cfg.Providers {
 		providers[provider.Name] = provider
@@ -462,7 +465,7 @@ func sourcesFromConfig(cfg *config.Config, settings Settings) map[string]NodeSou
 			BaseURL:          apiBase,
 			APIKey:           firstString(node.APIKey, provider.APIKey),
 			Timeout:          proxy.ParseTimeout(node.RequestTimeout),
-			TargetModel:      firstString(node.TargetModel, node.Model),
+			TargetModel:      firstString(node.UpstreamModel, node.TargetModel, node.Model),
 			APIType:          apiType,
 			AnthropicVersion: firstString(node.AnthropicVersion, provider.AnthropicVersion),
 			Passthrough:      apiType == "passthrough",
@@ -470,7 +473,7 @@ func sourcesFromConfig(cfg *config.Config, settings Settings) map[string]NodeSou
 		if backend.Passthrough {
 			continue
 		}
-		models := nodeModels[name]
+		models := nodeModels[node.Name]
 		if len(models) == 0 {
 			models = append(models, firstString(node.Model, node.TargetModel, name))
 		}
@@ -607,7 +610,7 @@ func sanitizeName(value string) string {
 	}
 	var b strings.Builder
 	for _, r := range value {
-		if unicode.IsLetter(r) || unicode.IsDigit(r) || strings.ContainsRune("._:/+-", r) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || strings.ContainsRune("._:/+-%", r) {
 			b.WriteRune(r)
 		}
 		if b.Len() >= 256 {

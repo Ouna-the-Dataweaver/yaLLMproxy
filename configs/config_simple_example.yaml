@@ -1,0 +1,31 @@
+# Start here for new setups. No separate client-model or fallback wiring is needed.
+# Set HOSTED_KEY in configs/.env. Replace example URLs with your actual endpoints.
+providers:
+  hosted:
+    api_base: https://inference.example/v1
+    api_key: ${HOSTED_KEY}
+    limits:
+      rpm: 60
+    models:
+      - name: qwen
+        upstream_model: vendor/qwen
+      - llama
+
+nodes:
+  - name: gpu-a
+    api_base: http://gpu-a:8000/v1
+    model: qwen
+    upstream_model: Qwen/Qwen3-32B
+  - name: gpu-b
+    api_base: http://gpu-b:8000/v1
+    model: qwen
+    upstream_model: Qwen/Qwen3-32B
+
+proxy_settings:
+  server:
+    host: 127.0.0.1
+    port: 7979
+
+# Conversation affinity, then prompt-prefix affinity, then balancing.
+# Prefix affinity is on when omitted; set enabled: false to opt out.
+# Failed attempts try eligible siblings before explicit different-model fallbacks.

@@ -47,6 +47,18 @@ func TestCatalogSeedsConfigWithoutProbeOptIn(t *testing.T) {
 	}
 }
 
+func TestCatalogGeneratedNodeKeepsIdentityAndExplicitAlias(t *testing.T) {
+	nodeName := config.ProviderNodeName("hosted", "vendor/model")
+	cfg := &config.Config{
+		Providers: []config.ProviderEntry{{Name: "hosted", APIBase: "https://example.test/v1", Models: []config.ProviderModel{{Name: "vendor/model", UpstreamModel: "real/model"}}}},
+		Models:    []config.ClientModelEntry{{Name: "alias", Nodes: []string{nodeName}}},
+	}
+	node := onlyNode(t, New(cfg).Snapshot(), "alias")
+	if node.Node != nodeName || node.TargetModel != "real/model" {
+		t.Fatalf("generated catalog node: %+v", node)
+	}
+}
+
 func TestCatalogRunOnceProbesOptedInNodeWithProviderAuth(t *testing.T) {
 	var gotAuth, gotInternal, gotClientKey string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

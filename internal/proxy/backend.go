@@ -48,6 +48,7 @@ type BackendBodyResult struct {
 }
 
 type Backend struct {
+	RateLimitScope       string
 	Name                 string
 	BaseURL              string
 	APIKey               string

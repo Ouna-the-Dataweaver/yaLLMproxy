@@ -299,7 +299,7 @@ func requestPrefixHashes(payload map[string]any) []prefixCacheRequestPrefix {
 }
 
 func (r *Router) applyPrefixCacheAffinitySettings(settings config.PrefixCacheAffinitySettings) {
-	if !config.ParseBoolStrict(settings.Enabled) {
+	if settings.Enabled != nil && !config.ParseBoolStrict(settings.Enabled) {
 		r.PrefixCacheAffinity = false
 		r.prefixCache = nil
 		return
@@ -333,6 +333,11 @@ func (r *Router) recordPrefixAffinity(node string, payload map[string]any) {
 }
 
 func NewRouter(cfg *config.Config) (*Router, error) {
+	var err error
+	cfg, err = cfg.ExpandedRouting()
+	if err != nil {
+		return nil, err
+	}
 	r := &Router{
 		Backends:            map[string]Backend{},
 		PassthroughBackends: map[string]Backend{},
@@ -435,14 +440,16 @@ func (r *Router) addNodeModels(cfg *config.Config) error {
 		}
 		apiType := firstString(node.APIType, provider.APIType, "openai")
 		params := nodeBackendParams(provider, node, apiBase, apiType)
-		if node.TargetModel != "" {
+		if node.UpstreamModel != "" {
+			params["target_model"] = node.UpstreamModel
+		} else if node.TargetModel != "" {
 			params["target_model"] = node.TargetModel
 		}
 		backend := Backend{
 			Name:                 name,
 			BaseURL:              apiBase,
 			APIKey:               firstString(node.APIKey, provider.APIKey),
-			Timeout:              ParseTimeout(node.RequestTimeout),
+			Timeout:              ParseTimeout(firstConfiguredAny(node.RequestTimeout, provider.RequestTimeout)),
 			TargetModel:          ExtractTargetModel(params, apiType),
 			APIType:              apiType,
 			AnthropicVersion:     firstString(node.AnthropicVersion, provider.AnthropicVersion),
@@ -455,6 +462,9 @@ func (r *Router) addNodeModels(cfg *config.Config) error {
 			AllowedKeys:          node.AllowedKeys,
 			Parameters:           parseParameterConfigs(mergeMaps(provider.Parameters, node.Parameters)),
 			Modules:              node.Modules,
+		}
+		if len(provider.Models) > 0 {
+			backend.RateLimitScope = fmt.Sprintf("provider:%d:%s:model:%s", len(provider.Name), provider.Name, backend.TargetModel)
 		}
 		if apiType == "gigachat" {
 			gigachatConfig, err := gigachat.BuildConfig(params)
@@ -574,6 +584,32 @@ func (r *Router) GetSingleModelBackend(modelName string) (Backend, bool) {
 	return backend, ok
 }
 
+// ModelBackendsMatch checks the entire possible route without selecting nodes.
+// Native endpoint handling must agree across replicas and explicit fallbacks.
+func (r *Router) ModelBackendsMatch(modelName string, matches func(Backend) bool) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	names := append([]string{modelName}, r.Fallbacks[modelName]...)
+	found := false
+	for _, name := range names {
+		nodes := []string{name}
+		if model, ok := r.Models[name]; ok {
+			nodes = model.Nodes
+		}
+		for _, node := range nodes {
+			backend, ok := r.Backends[node]
+			if !ok {
+				continue
+			}
+			found = true
+			if !matches(backend) {
+				return false
+			}
+		}
+	}
+	return found
+}
+
 func (r *Router) RegisterBackend(backend Backend, fallbacks []string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -638,7 +674,42 @@ func (r *Router) BuildRouteForKeyWithOptions(modelName string, path string, payl
 	}
 	addModel := func(name string) {
 		if model, ok := r.Models[name]; ok && len(model.Nodes) > 0 {
-			addNode(r.pickNodeLocked(model, payload, endpoint, keyID, opts))
+			// Hard eligibility filters must intersect before applying preferences.
+			eligible := make([]string, 0, len(model.Nodes))
+			for _, node := range model.Nodes {
+				if b, ok := r.Backends[node]; ok {
+					hadBackendCandidate = true
+					if backendSupportsEndpoint(b, endpoint) {
+						hadEndpointCandidate = true
+						if backendAllowsKey(b, keyID) {
+							eligible = append(eligible, node)
+						}
+					}
+				}
+			}
+			if len(eligible) == 0 {
+				return
+			}
+			if opts.BackendAvailable != nil {
+				available := make([]string, 0, len(eligible))
+				for _, node := range eligible {
+					if opts.BackendAvailable(r.Backends[node]) {
+						available = append(available, node)
+					}
+				}
+				if len(available) > 0 {
+					eligible = available
+				}
+			}
+			model.Nodes = eligible
+			first := r.pickNodeLocked(model, payload, endpoint, keyID, opts)
+			addNode(first)
+			// Advance balancing once per request, then retain every sibling for
+			// failover before moving to an explicitly configured fallback model.
+			start := slices.Index(eligible, first)
+			for i := 1; i < len(eligible); i++ {
+				addNode(eligible[(start+i)%len(eligible)])
+			}
 			return
 		}
 		addNode(name)
@@ -1335,6 +1406,11 @@ func (r *Router) ForwardWithOptions(ctx context.Context, modelName string, path 
 				r.recordBackendSuccess(backend.Name, resp.StatusCode)
 				if resp.StatusCode == http.StatusOK {
 					r.recordPrefixAffinity(backend.Name, routingPayload)
+					if hint := stickyHint(routingPayload); hint != "" {
+						r.mu.Lock()
+						r.sticky[hint] = backend.Name
+						r.mu.Unlock()
+					}
 				}
 				if isStream {
 					r.prepareStreamResponse(attemptCtx, resp, backend, endpointKind, modelName, path, payload, opts.ParsedStreamCapture)
@@ -2032,14 +2108,14 @@ func nodeBackendParams(provider config.ProviderEntry, node config.NodeEntry, api
 		"api_type": apiType,
 		"api_base": apiBase,
 		"api_key":  firstString(node.APIKey, provider.APIKey),
-		"model":    firstString(node.Model, node.TargetModel),
+		"model":    firstString(node.UpstreamModel, node.Model, node.TargetModel),
 	}
-	setStringParam(params, "mode", provider.Mode, node.Mode)
-	setStringParam(params, "anthropic_version", provider.AnthropicVersion, node.AnthropicVersion)
-	setStringParam(params, "scope", provider.Scope, node.Scope)
-	setStringParam(params, "auth_url", provider.AuthURL, node.AuthURL)
-	setStringParam(params, "client_cert", provider.ClientCert, node.ClientCert)
-	setStringParam(params, "client_key", provider.ClientKey, node.ClientKey)
+	setStringParam(params, "mode", node.Mode, provider.Mode)
+	setStringParam(params, "anthropic_version", node.AnthropicVersion, provider.AnthropicVersion)
+	setStringParam(params, "scope", node.Scope, provider.Scope)
+	setStringParam(params, "auth_url", node.AuthURL, provider.AuthURL)
+	setStringParam(params, "client_cert", node.ClientCert, provider.ClientCert)
+	setStringParam(params, "client_key", node.ClientKey, provider.ClientKey)
 	if value := firstConfiguredAny(node.RequestTimeout, provider.RequestTimeout); value != nil {
 		params["request_timeout"] = value
 	}

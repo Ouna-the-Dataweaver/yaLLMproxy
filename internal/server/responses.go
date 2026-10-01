@@ -170,7 +170,7 @@ func (a *App) handleResponses(w http.ResponseWriter, r *http.Request) {
 		forwardResult = cachedResult
 		translatedCacheHit = true
 	} else {
-		forwardResult, err = a.Router.ForwardWithOptions(r.Context(), modelName, forwardPath, r.URL.RawQuery, forwardBody, forwardPayload, isStream, r.Header, proxy.ForwardOptions{
+		forwardResult, err = a.Router.ForwardWithOptions(r.Context(), modelName, forwardPath, r.URL.RawQuery, forwardBody, forwardPayload, isStream, a.outboundHeaders(r), proxy.ForwardOptions{
 			EndpointKind:      endpointKind,
 			RoutePayload:      payload,
 			BeforeAttempt:     a.backendAttemptLimiter,
@@ -426,8 +426,7 @@ func (a *App) directResponsesBackendSupportsResponses(modelName string) bool {
 	if a == nil || a.Router == nil {
 		return false
 	}
-	backend, ok := a.Router.GetSingleModelBackend(modelName)
-	return ok && backend.SupportsResponsesAPI
+	return a.Router.ModelBackendsMatch(modelName, func(backend proxy.Backend) bool { return backend.SupportsResponsesAPI })
 }
 
 func writeResponsesError(w http.ResponseWriter, status int, responseID string, errorType string, code string, message string, model string) {

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -27,7 +28,7 @@ const (
 
 type Config struct {
 	ModelList             []ModelEntry       `yaml:"model_list" json:"model_list"`
-	Providers             []ProviderEntry    `yaml:"providers" json:"providers"`
+	Providers             ProviderEntries    `yaml:"providers" json:"providers"`
 	Nodes                 []NodeEntry        `yaml:"nodes" json:"nodes"`
 	Models                []ClientModelEntry `yaml:"models" json:"models"`
 	RouterSettings        RouterSettings     `yaml:"router_settings" json:"router_settings"`
@@ -39,6 +40,7 @@ type Config struct {
 	Database              map[string]any     `yaml:"database" json:"database"`
 	Raw                   map[string]any     `yaml:"-" json:"-"`
 	Path                  string             `yaml:"-" json:"-"`
+	routingExpanded       bool
 }
 
 type ModelEntry struct {
@@ -73,27 +75,30 @@ type ModelTreeNode struct {
 }
 
 type ProviderEntry struct {
-	Name                 string         `yaml:"name" json:"name"`
-	APIBase              string         `yaml:"api_base" json:"api_base"`
-	APIKey               string         `yaml:"api_key" json:"api_key"`
-	APIType              string         `yaml:"api_type" json:"api_type"`
-	AnthropicVersion     string         `yaml:"anthropic_version,omitempty" json:"anthropic_version,omitempty"`
-	Mode                 string         `yaml:"mode,omitempty" json:"mode,omitempty"`
-	Scope                string         `yaml:"scope,omitempty" json:"scope,omitempty"`
-	AuthURL              string         `yaml:"auth_url,omitempty" json:"auth_url,omitempty"`
-	ClientCert           string         `yaml:"client_cert,omitempty" json:"client_cert,omitempty"`
-	ClientKey            string         `yaml:"client_key,omitempty" json:"client_key,omitempty"`
-	RequestTimeout       any            `yaml:"request_timeout,omitempty" json:"request_timeout,omitempty"`
-	VerifySSL            any            `yaml:"verify_ssl,omitempty" json:"verify_ssl,omitempty"`
-	EmulateToolCalls     any            `yaml:"emulate_tool_calls,omitempty" json:"emulate_tool_calls,omitempty"`
-	SupportsResponsesAPI any            `yaml:"supports_responses_api,omitempty" json:"supports_responses_api,omitempty"`
-	Limits               LimitsConfig   `yaml:"limits" json:"limits"`
-	Parameters           map[string]any `yaml:"parameters" json:"parameters"`
-	Endpoints            []string       `yaml:"endpoints" json:"endpoints"`
-	Raw                  map[string]any `yaml:",inline" json:"-"`
+	Models               []ProviderModel `yaml:"models,omitempty" json:"models,omitempty"`
+	Name                 string          `yaml:"name" json:"name"`
+	APIBase              string          `yaml:"api_base" json:"api_base"`
+	APIKey               string          `yaml:"api_key" json:"api_key"`
+	APIType              string          `yaml:"api_type" json:"api_type"`
+	AnthropicVersion     string          `yaml:"anthropic_version,omitempty" json:"anthropic_version,omitempty"`
+	Mode                 string          `yaml:"mode,omitempty" json:"mode,omitempty"`
+	Scope                string          `yaml:"scope,omitempty" json:"scope,omitempty"`
+	AuthURL              string          `yaml:"auth_url,omitempty" json:"auth_url,omitempty"`
+	ClientCert           string          `yaml:"client_cert,omitempty" json:"client_cert,omitempty"`
+	ClientKey            string          `yaml:"client_key,omitempty" json:"client_key,omitempty"`
+	RequestTimeout       any             `yaml:"request_timeout,omitempty" json:"request_timeout,omitempty"`
+	VerifySSL            any             `yaml:"verify_ssl,omitempty" json:"verify_ssl,omitempty"`
+	EmulateToolCalls     any             `yaml:"emulate_tool_calls,omitempty" json:"emulate_tool_calls,omitempty"`
+	SupportsResponsesAPI any             `yaml:"supports_responses_api,omitempty" json:"supports_responses_api,omitempty"`
+	Limits               LimitsConfig    `yaml:"limits" json:"limits"`
+	Parameters           map[string]any  `yaml:"parameters" json:"parameters"`
+	Endpoints            []string        `yaml:"endpoints" json:"endpoints"`
+	Raw                  map[string]any  `yaml:",inline" json:"-"`
 }
 
 type NodeEntry struct {
+	UpstreamModel        string         `yaml:"upstream_model,omitempty" json:"upstream_model,omitempty"`
+	Generated            bool           `yaml:"-" json:"generated,omitempty"`
 	Name                 string         `yaml:"name" json:"name"`
 	Provider             string         `yaml:"provider" json:"provider"`
 	APIBase              string         `yaml:"api_base" json:"api_base"`
@@ -123,6 +128,7 @@ type NodeEntry struct {
 }
 
 type ClientModelEntry struct {
+	Generated   bool           `yaml:"-" json:"generated,omitempty"`
 	Name        string         `yaml:"name" json:"name"`
 	ModelName   string         `yaml:"model_name" json:"model_name"`
 	Nodes       []string       `yaml:"nodes" json:"nodes"`
@@ -554,7 +560,55 @@ func (cfg *Config) Save(path string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, buf, 0o600)
+	return writeFileAtomic(path, buf, 0o600)
+}
+
+func writeFileAtomic(path string, data []byte, mode os.FileMode) (retErr error) {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer func() {
+		_ = tmp.Close()
+		if retErr != nil {
+			_ = os.Remove(tmpName)
+		}
+	}()
+	if err := tmp.Chmod(mode); err != nil {
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		// Some Windows filesystems do not allow rename-over-existing. Preserve
+		// the historical Save behavior there even though this compatibility
+		// fallback cannot provide the POSIX crash-atomic replacement guarantee.
+		if runtime.GOOS == "windows" {
+			writeErr := os.WriteFile(path, data, mode)
+			_ = os.Remove(tmpName)
+			return writeErr
+		}
+		return err
+	}
+	if runtime.GOOS != "windows" {
+		// The rename has committed at this point, so directory durability is
+		// best-effort: reporting a later fsync error would make callers keep the
+		// old runtime config even though disk already contains the new config.
+		if dirFile, err := os.Open(dir); err == nil {
+			_ = dirFile.Sync()
+			_ = dirFile.Close()
+		}
+	}
+	return nil
 }
 
 func FromMap(raw map[string]any, path string) (*Config, error) {
@@ -600,6 +654,13 @@ func (cfg *Config) ToMap() map[string]any {
 	}
 	if len(cfg.Providers) > 0 {
 		raw["providers"] = cfg.Providers
+		if _, named := cfg.Raw["providers"].(map[string]any); named {
+			providers := map[string]any{}
+			for _, provider := range cfg.Providers {
+				providers[provider.Name] = providerEntryToMap(provider)
+			}
+			raw["providers"] = providers
+		}
 	}
 	if len(cfg.Nodes) > 0 {
 		raw["nodes"] = cfg.Nodes
@@ -623,6 +684,11 @@ func (cfg *Config) Validate() []ValidationIssue {
 	if cfg == nil {
 		return []ValidationIssue{{Path: "$", Severity: "error", Code: "config_nil", Message: "Config is nil"}}
 	}
+	expanded, err := cfg.ExpandedRouting()
+	if err != nil {
+		return []ValidationIssue{{Path: "routing", Severity: "error", Code: "invalid_routing", Message: err.Error()}}
+	}
+	cfg = expanded
 	collector := validationCollector{}
 	knownTargets := map[string]bool{}
 	knownNodes := map[string]bool{}
@@ -1847,6 +1913,22 @@ func rawClientModels(cfg *Config) []ClientModelEntry {
 }
 
 func rawListForUpdate(raw any, fallback []any) []any {
+	if named, ok := raw.(map[string]any); ok {
+		names := make([]string, 0, len(named))
+		for name := range named {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		out := make([]any, 0, len(names))
+		for _, name := range names {
+			if entry, ok := toStringAnyMap(named[name]); ok {
+				entry = cloneMap(entry)
+				entry["name"] = name
+				out = append(out, entry)
+			}
+		}
+		return out
+	}
 	switch typed := raw.(type) {
 	case []any:
 		out := make([]any, len(typed))
@@ -1895,6 +1977,9 @@ func clientModelEntriesAsRaw(entries []ClientModelEntry) []any {
 
 func providerEntryToMap(provider ProviderEntry) map[string]any {
 	raw := cloneMap(provider.Raw)
+	if provider.Models != nil {
+		raw["models"] = provider.Models
+	}
 	setRawString(raw, "name", provider.Name)
 	setRawString(raw, "api_base", provider.APIBase)
 	setRawString(raw, "api_key", provider.APIKey)
@@ -1923,6 +2008,7 @@ func providerEntryToMap(provider ProviderEntry) map[string]any {
 
 func nodeEntryToMap(node NodeEntry) map[string]any {
 	raw := cloneMap(node.Raw)
+	setRawString(raw, "upstream_model", node.UpstreamModel)
 	setRawString(raw, "name", node.Name)
 	setRawString(raw, "provider", node.Provider)
 	setRawString(raw, "api_base", node.APIBase)
@@ -2228,6 +2314,9 @@ func (cfg *Config) knownRouterFallbackNames() map[string]bool {
 	known := map[string]bool{}
 	if cfg == nil {
 		return known
+	}
+	if expanded, err := cfg.ExpandedRouting(); err == nil {
+		cfg = expanded
 	}
 	for _, model := range cfg.ModelList {
 		if name := strings.TrimSpace(model.ModelName); name != "" {

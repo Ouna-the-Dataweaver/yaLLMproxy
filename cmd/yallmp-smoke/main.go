@@ -440,10 +440,10 @@ func runFakeSmoke(timeout time.Duration) error {
 	if err := verifyFallback(fallbackPrimarySeen, fallbackSecondarySeen); err != nil {
 		return err
 	}
-	if err := verifyFallbackLog(client, "smoke-fallback-primary", start); err != nil {
+	if err := verifyFallbackLog(adminClient, "smoke-fallback-primary", start); err != nil {
 		return err
 	}
-	if err := verifyAdminModelReadAPIs(client); err != nil {
+	if err := verifyAdminModelReadAPIs(adminClient); err != nil {
 		return err
 	}
 	if err := verifyMetrics(client); err != nil {
@@ -452,16 +452,16 @@ func runFakeSmoke(timeout time.Duration) error {
 	if err := verifyPassthroughSmoke(client, passthroughSeen); err != nil {
 		return err
 	}
-	if err := verifyOTelSmoke(otelRecorder, client, start); err != nil {
+	if err := verifyOTelSmoke(otelRecorder, adminClient, start); err != nil {
 		return err
 	}
-	if err := verifyParsedResponseSidecar(client, start); err != nil {
+	if err := verifyParsedResponseSidecar(adminClient, start); err != nil {
 		return err
 	}
-	if err := verifyParsedStreamSidecar(client, start); err != nil {
+	if err := verifyParsedStreamSidecar(adminClient, start); err != nil {
 		return err
 	}
-	if err := verifyAdminModelWriteAPIs(client); err != nil {
+	if err := verifyAdminModelWriteAPIs(adminClient); err != nil {
 		return err
 	}
 	if err := verifyAdminRoutingCRUDAPIs(client, adminClient, upstream.URL); err != nil {
@@ -473,10 +473,10 @@ func runFakeSmoke(timeout time.Duration) error {
 	if err := verifyGuardedAdminSmoke(timeout, smokeAdminPassword, tempDir); err != nil {
 		return err
 	}
-	if err := verifyParsedResponseSidecarDisabled(timeout, tempDir); err != nil {
+	if err := verifyParsedResponseSidecarDisabled(timeout, smokeAdminPassword, tempDir); err != nil {
 		return err
 	}
-	return verifyLogs(client, "smoke-chat", start, true)
+	return verifyLogs(adminClient, "smoke-chat", start, true)
 }
 
 func runRealSmoke(configPath string, model string, timeout time.Duration) error {
@@ -545,7 +545,11 @@ func runRealSmoke(configPath string, model string, timeout time.Duration) error 
 	if !strings.Contains(string(streamBody), "data:") {
 		return fmt.Errorf("stream response did not look like SSE: %s", string(streamBody))
 	}
-	return verifyLogs(client, model, start, false)
+	adminClient := client
+	if adminPassword := strings.TrimSpace(os.Getenv(config.AdminPasswordEnv)); adminPassword != "" {
+		adminClient = client.withHeader("x-admin-password", adminPassword)
+	}
+	return verifyLogs(adminClient, model, start, false)
 }
 
 func fakeUpstream(seen *capture) http.Handler {
@@ -709,7 +713,11 @@ func readFakeRequest(w http.ResponseWriter, r *http.Request, apiKey string, seen
 		http.Error(w, "missing upstream auth", http.StatusUnauthorized)
 		return nil, false
 	}
-	body, _ := io.ReadAll(r.Body)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "read request body: "+err.Error(), http.StatusBadRequest)
+		return nil, false
+	}
 	payload := map[string]any{}
 	if len(body) > 0 {
 		if err := json.Unmarshal(body, &payload); err != nil {
@@ -723,7 +731,11 @@ func readFakeRequest(w http.ResponseWriter, r *http.Request, apiKey string, seen
 
 func passthroughEchoUpstream(seen *passthroughCapture) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, "read request body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
 		if r.Header.Get("Authorization") != "Bearer fake-passthrough-key" {
 			http.Error(w, "missing passthrough upstream auth", http.StatusUnauthorized)
 			return
@@ -1482,7 +1494,7 @@ func verifyGuardedAdminSmoke(timeout time.Duration, adminPassword string, tempDi
 		return err
 	}
 	app.Quota = quota.NewManagerWithClock(func() time.Time { return quotaNow })
-	if err := verifyRequiredHeaderPolicy(client, seen, start, quota.NextResetAt(quota.ResetModeDaily, quotaNow)); err != nil {
+	if err := verifyRequiredHeaderPolicy(client, adminClient, seen, start, quota.NextResetAt(quota.ResetModeDaily, quotaNow)); err != nil {
 		return err
 	}
 	if err := verifyAdminTemplates(client, adminClient); err != nil {
@@ -1700,7 +1712,7 @@ func verifyAdminAppKeys(client smokeClient, adminClient smokeClient, seen *captu
 	return regeneratedSecret, nil
 }
 
-func verifyRequiredHeaderPolicy(client smokeClient, seen *capture, start time.Time, expectedQuotaReset time.Time) error {
+func verifyRequiredHeaderPolicy(client smokeClient, adminClient smokeClient, seen *capture, start time.Time, expectedQuotaReset time.Time) error {
 	if err := expectRequiredHeaderMissingMetric(client, 0); err != nil {
 		return fmt.Errorf("initial required-header metric: %w", err)
 	}
@@ -1745,7 +1757,7 @@ func verifyRequiredHeaderPolicy(client smokeClient, seen *capture, start time.Ti
 	if got := len(seen.snapshot()); got != beforeAccepted+1 {
 		return fmt.Errorf("accepted required-header request did not reach upstream: before=%d after=%d", beforeAccepted, got)
 	}
-	if err := verifyRequiredHeaderLogAttribution(client, start, "acme-smoke-log"); err != nil {
+	if err := verifyRequiredHeaderLogAttribution(adminClient, start, "acme-smoke-log"); err != nil {
 		return err
 	}
 	if err := verifyCalendarQuotaResetSmoke(client, "smoke-key::guard-chat", expectedQuotaReset); err != nil {
@@ -1966,7 +1978,10 @@ func (c smokeClient) expectModels(model string) error {
 		return err
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("read /v1/models response: %w", err)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("/v1/models status=%d body=%s", resp.StatusCode, string(body))
 	}
@@ -1987,7 +2002,10 @@ func (c smokeClient) expectModelsAbsent(model string) error {
 		return err
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("read /v1/models response: %w", err)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("/v1/models status=%d body=%s", resp.StatusCode, string(body))
 	}
@@ -2000,7 +2018,10 @@ func (c smokeClient) expectModelsAbsent(model string) error {
 func (c smokeClient) postJSON(path string, payload map[string]any) ([]byte, error) {
 	var requestBody io.Reader
 	if payload != nil {
-		raw, _ := json.Marshal(payload)
+		raw, err := json.Marshal(payload)
+		if err != nil {
+			return nil, fmt.Errorf("encode %s request: %w", path, err)
+		}
 		requestBody = bytes.NewReader(raw)
 	}
 	req, err := http.NewRequest(http.MethodPost, c.base+path, requestBody)
@@ -2016,7 +2037,10 @@ func (c smokeClient) postJSON(path string, payload map[string]any) ([]byte, erro
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read %s response: %w", path, err)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("%s status=%d body=%s", path, resp.StatusCode, string(body))
 	}
@@ -2024,7 +2048,10 @@ func (c smokeClient) postJSON(path string, payload map[string]any) ([]byte, erro
 }
 
 func (c smokeClient) putJSON(path string, payload map[string]any) ([]byte, error) {
-	raw, _ := json.Marshal(payload)
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("encode %s request: %w", path, err)
+	}
 	status, body, err := c.doRequest(http.MethodPut, path, bytes.NewReader(raw), "application/json")
 	if err != nil {
 		return nil, err
@@ -2039,7 +2066,10 @@ func (c smokeClient) expectStatus(method string, path string, payload map[string
 	var requestBody io.Reader
 	contentType := ""
 	if payload != nil {
-		raw, _ := json.Marshal(payload)
+		raw, err := json.Marshal(payload)
+		if err != nil {
+			return nil, fmt.Errorf("encode %s %s request: %w", method, path, err)
+		}
 		requestBody = bytes.NewReader(raw)
 		contentType = "application/json"
 	}
@@ -2070,12 +2100,18 @@ func (c smokeClient) doRequest(method string, path string, body io.Reader, conte
 		return 0, nil, err
 	}
 	defer resp.Body.Close()
-	responseBody, _ := io.ReadAll(resp.Body)
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, nil, fmt.Errorf("read %s %s response: %w", method, path, err)
+	}
 	return resp.StatusCode, responseBody, nil
 }
 
 func (c smokeClient) expectPostJSONFailure(path string, payload map[string]any) error {
-	raw, _ := json.Marshal(payload)
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("encode %s request: %w", path, err)
+	}
 	req, err := http.NewRequest(http.MethodPost, c.base+path, bytes.NewReader(raw))
 	if err != nil {
 		return err
@@ -2087,7 +2123,10 @@ func (c smokeClient) expectPostJSONFailure(path string, payload map[string]any) 
 		return err
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("read %s response: %w", path, err)
+	}
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return fmt.Errorf("%s unexpectedly succeeded after delete: status=%d body=%s", path, resp.StatusCode, string(body))
 	}
@@ -2105,7 +2144,10 @@ func (c smokeClient) deleteOK(path string) error {
 		return err
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("read %s response: %w", path, err)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("%s status=%d body=%s", path, resp.StatusCode, string(body))
 	}
@@ -2123,7 +2165,10 @@ func (c smokeClient) deleteStatus(path string, wantStatus int) error {
 		return err
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("read %s response: %w", path, err)
+	}
 	if resp.StatusCode != wantStatus {
 		return fmt.Errorf("%s status=%d want=%d body=%s", path, resp.StatusCode, wantStatus, string(body))
 	}
@@ -2141,7 +2186,10 @@ func (c smokeClient) getJSON(path string) (map[string]any, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read %s response: %w", path, err)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("%s status=%d body=%s", path, resp.StatusCode, string(body))
 	}
@@ -2163,7 +2211,10 @@ func (c smokeClient) getText(path string) ([]byte, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read %s response: %w", path, err)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("%s status=%d body=%s", path, resp.StatusCode, string(body))
 	}
@@ -2245,7 +2296,10 @@ func verifyPassthroughSmoke(client smokeClient, seen *passthroughCapture) error 
 		return err
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("read passthrough response: %w", err)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("passthrough status=%d body=%s", resp.StatusCode, string(body))
 	}
@@ -2556,7 +2610,7 @@ func verifyParsedStreamSidecar(client smokeClient, start time.Time) error {
 	return nil
 }
 
-func verifyParsedResponseSidecarDisabled(timeout time.Duration, tempDir string) error {
+func verifyParsedResponseSidecarDisabled(timeout time.Duration, adminPassword string, tempDir string) error {
 	seen := &capture{}
 	upstream := httptest.NewServer(fakeUpstream(seen))
 	defer upstream.Close()
@@ -2598,6 +2652,7 @@ func verifyParsedResponseSidecarDisabled(timeout time.Duration, tempDir string) 
 	proxyServer := httptest.NewServer(app)
 	defer proxyServer.Close()
 	client := smokeClient{base: proxyServer.URL, client: &http.Client{Timeout: timeout}}
+	adminClient := client.withHeader("x-admin-password", adminPassword)
 	start := time.Now().UTC().Add(-time.Second)
 	body, err := client.postJSON("/v1/chat/completions", map[string]any{
 		"model":    "smoke-parsed-disabled",
@@ -2609,7 +2664,7 @@ func verifyParsedResponseSidecarDisabled(timeout time.Duration, tempDir string) 
 	if strings.Contains(string(body), "<think>") || !strings.Contains(string(body), "reasoning_content") {
 		return fmt.Errorf("disabled parsed sidecar response was not transformed: %s", string(body))
 	}
-	detail, err := findChatLogDetail(client, "smoke-parsed-disabled", start)
+	detail, err := findChatLogDetail(adminClient, "smoke-parsed-disabled", start)
 	if err != nil {
 		return err
 	}

@@ -368,7 +368,7 @@ func (a *App) applyAppKeysOrWrite(w http.ResponseWriter, appKeys config.AppKeysC
 		writeConfigValidation(w, http.StatusBadRequest, issues)
 		return false
 	}
-	if err := a.applyConfig(newCfg, true); err != nil {
+	if err := a.applyConfigLocked(newCfg, true); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error(), "config_apply_failed")
 		return false
 	}

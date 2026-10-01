@@ -718,7 +718,7 @@ func TestRouterKeepsCandidateWhenAllSiblingNodesUnavailable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(route) != 1 || route[0].Name != "n1" {
+	if len(route) != 2 || route[0].Name != "n1" {
 		t.Fatalf("route = %#v", route)
 	}
 }
@@ -751,7 +751,7 @@ func TestRouterBypassesUnavailableStickyNodeWithoutRebinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(route) != 1 || route[0].Name != "n1" {
+	if len(route) != 2 || route[0].Name != "n1" {
 		t.Fatalf("sticky route was rebound: %#v", route)
 	}
 }
@@ -2035,8 +2035,9 @@ func newConcurrencyAwareRouter(t *testing.T) *Router {
 	return router
 }
 
-func TestRouterPrefixCacheAffinityDisabledByDefault(t *testing.T) {
+func TestRouterPrefixCacheAffinityCanBeDisabled(t *testing.T) {
 	router, err := NewRouter(&config.Config{
+		RouterSettings: config.RouterSettings{PrefixCacheAffinity: config.PrefixCacheAffinitySettings{Enabled: false}},
 		Nodes: []config.NodeEntry{
 			{Name: "n1", APIBase: "http://n1.test/v1", Model: "m"},
 			{Name: "n2", APIBase: "http://n2.test/v1", Model: "m"},
@@ -2047,7 +2048,7 @@ func TestRouterPrefixCacheAffinityDisabledByDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 	if router.PrefixCacheAffinity || router.prefixCache != nil {
-		t.Fatalf("prefix cache affinity should be disabled by default: enabled=%v tracker=%v", router.PrefixCacheAffinity, router.prefixCache)
+		t.Fatalf("prefix cache affinity should honor explicit disable: enabled=%v tracker=%v", router.PrefixCacheAffinity, router.prefixCache)
 	}
 	payload := map[string]any{"messages": prefixAffinityMessages("x")}
 	router.recordPrefixAffinity("n1", payload)
@@ -2111,7 +2112,7 @@ func TestRouterCombinedGatesPreferStickyThenQuotaPrefixThenHealthFallback(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(route) != 1 || route[0].Name != "n1" {
+	if len(route) != 3 || route[0].Name != "n1" {
 		t.Fatalf("sticky route = %#v, want n1", route)
 	}
 	if got := router.weightedRoundRobin["client"]; got != 0 {
@@ -2124,7 +2125,7 @@ func TestRouterCombinedGatesPreferStickyThenQuotaPrefixThenHealthFallback(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(route) != 1 || route[0].Name != "n2" {
+	if len(route) != 2 || route[0].Name != "n2" {
 		t.Fatalf("quota-filtered prefix route = %#v, want n2", route)
 	}
 	if got := router.weightedRoundRobin["client"]; got != 0 {
@@ -2148,7 +2149,7 @@ func TestRouterCombinedGatesPreferStickyThenQuotaPrefixThenHealthFallback(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(route) != 1 || route[0].Name != "n1" {
+	if len(route) != 2 || route[0].Name != "n1" {
 		t.Fatalf("temporary quota route rebound sticky entry: %#v", route)
 	}
 }
@@ -2188,7 +2189,7 @@ func TestRouterPrefixCacheAffinityHitDoesNotAdvanceWeightedRoundRobin(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(route) != 1 || route[0].Name != "n2" {
+	if len(route) != 2 || route[0].Name != "n2" {
 		t.Fatalf("prefix route = %#v, want n2", route)
 	}
 	if got := router.weightedRoundRobin["client"]; got != 0 {

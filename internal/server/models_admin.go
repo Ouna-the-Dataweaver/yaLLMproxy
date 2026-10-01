@@ -108,7 +108,7 @@ func (a *App) handleAdminModelCopy(w http.ResponseWriter, r *http.Request) {
 		writeConfigValidation(w, http.StatusBadRequest, issues)
 		return
 	}
-	if err := a.applyConfig(newCfg, true); err != nil {
+	if err := a.applyConfigLocked(newCfg, true); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error(), "config_apply_failed")
 		return
 	}
@@ -198,7 +198,7 @@ func (a *App) handleAdminModelDelete(w http.ResponseWriter, r *http.Request, nam
 		writeConfigValidation(w, http.StatusBadRequest, issues)
 		return
 	}
-	if err := a.applyConfig(newCfg, true); err != nil {
+	if err := a.applyConfigLocked(newCfg, true); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error(), "config_apply_failed")
 		return
 	}

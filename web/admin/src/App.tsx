@@ -1,4 +1,4 @@
-import { Activity, BarChart3, CheckCircle2, Clock3, Copy, Database, FileJson, Gauge, GitBranch, HardDrive, HeartPulse, KeyRound, ListFilter, Network, Pencil, Plus, RefreshCw, Save, Search, Server, Shield, Trash2, UploadCloud, X } from "lucide-react";
+import { Activity, BarChart3, CheckCircle2, ChevronLeft, ChevronRight, Clock3, Copy, Database, Download, Eye, FileJson, Gauge, GitBranch, HardDrive, HeartPulse, KeyRound, ListFilter, Network, Pencil, Plus, RefreshCw, Save, Search, Server, Shield, Trash2, UploadCloud, X } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
@@ -27,6 +27,13 @@ type LogRecord = {
   traceID?: string;
   stop_reason?: string;
   is_stream?: boolean;
+  is_tool_call?: boolean;
+  method?: string;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  cached_tokens?: number;
+  reasoning_tokens?: number;
+  usage_stats?: JsonRecord;
 };
 
 type LogsPayload = {
@@ -36,6 +43,23 @@ type LogsPayload = {
   limit?: number;
   offset?: number;
   has_more?: boolean;
+};
+
+type LogFilters = {
+  model: string;
+  outcome: string;
+  stopReason: string;
+  toolCall: string;
+  startDate: string;
+  endDate: string;
+  search: string;
+};
+
+type LogMeta = {
+  total: number;
+  limit: number;
+  offset: number;
+  hasMore: boolean;
 };
 
 type ModelRecord = {
@@ -126,6 +150,7 @@ type RoutingPayloads = {
 };
 
 type ProviderForm = {
+  models_text: string;
   name: string;
   api_base: string;
   api_type: string;
@@ -135,6 +160,8 @@ type ProviderForm = {
 };
 
 type NodeForm = {
+  upstream_model: string;
+  api_key: string;
   name: string;
   provider: string;
   model: string;
@@ -450,6 +477,15 @@ type TraceTimelineItem = {
   tone: BadgeTone;
   time?: string;
   fields: TraceTimelineField[];
+  logID?: string;
+};
+
+type LogDetailSection = {
+  id: string;
+  title: string;
+  value: unknown;
+  defaultOpen?: boolean;
+  tone?: BadgeTone;
 };
 
 const tabs: Array<{ id: TabID; label: string; icon: typeof Activity }> = [
@@ -459,16 +495,29 @@ const tabs: Array<{ id: TabID; label: string; icon: typeof Activity }> = [
   { id: "catalog", label: "Catalog", icon: ListFilter },
   { id: "logs", label: "Logs", icon: Database },
   { id: "config", label: "Config", icon: FileJson },
-  { id: "models", label: "Models", icon: Server },
-  { id: "routing", label: "Routing", icon: Network },
+  { id: "models", label: "Legacy Models", icon: Server },
+  { id: "routing", label: "Models & Nodes", icon: Network },
   { id: "keys", label: "App Keys", icon: KeyRound }
 ];
 
 const adminPasswordStorageKey = "yallmp.adminPassword";
+const logPageSize = 50;
+const emptyLogFilters: LogFilters = {
+  model: "",
+  outcome: "",
+  stopReason: "",
+  toolCall: "",
+  startDate: "",
+  endDate: "",
+  search: ""
+};
 
 function readStoredAdminPassword() {
   try {
-    return localStorage.getItem(adminPasswordStorageKey) || "";
+    // Never keep an admin credential across browser sessions. Remove values
+    // written by older builds while retaining same-tab reload convenience.
+    localStorage.removeItem(adminPasswordStorageKey);
+    return sessionStorage.getItem(adminPasswordStorageKey) || "";
   } catch {
     return "";
   }
@@ -532,9 +581,13 @@ export function AdminApp() {
   const [stopReasons, setStopReasons] = useState<JsonRecord[]>([]);
   const [toolRate, setToolRate] = useState<JsonRecord>({});
   const [logs, setLogs] = useState<LogRecord[]>([]);
-  const [logMeta, setLogMeta] = useState({ total: 0, hasMore: false });
+  const [logMeta, setLogMeta] = useState<LogMeta>({ total: 0, limit: logPageSize, offset: 0, hasMore: false });
+  const [logsLoading, setLogsLoading] = useState(false);
+  const [logsError, setLogsError] = useState("");
   const [selectedLog, setSelectedLog] = useState<JsonRecord | null>(null);
-  const [filters, setFilters] = useState({ model: "", outcome: "", search: "" });
+  const [selectedLogLoading, setSelectedLogLoading] = useState(false);
+  const [selectedLogError, setSelectedLogError] = useState("");
+  const [filters, setFilters] = useState<LogFilters>(emptyLogFilters);
   const [traceInput, setTraceInput] = useState(() => traceIDFromLocation(window.location));
   const [traceDetail, setTraceDetail] = useState<TraceDetailPayload | null>(null);
   const [traceLoading, setTraceLoading] = useState(false);
@@ -561,6 +614,8 @@ export function AdminApp() {
     emulate_tool_calls: false
   });
   const [modelErrors, setModelErrors] = useState<Partial<Record<keyof ModelForm, string>>>({});
+  const [routingPools, setRoutingPools] = useState<JsonRecord[]>([]);
+  const [prefixAffinity, setPrefixAffinity] = useState(true);
   const [providers, setProviders] = useState<ProviderRecord[]>([]);
   const [nodes, setNodes] = useState<NodeRecord[]>([]);
   const [clientModels, setClientModels] = useState<ClientModelRecord[]>([]);
@@ -574,6 +629,7 @@ export function AdminApp() {
   const [modelDependents, setModelDependents] = useState<ModelDependentsPayload | null>(null);
   const [dependencyError, setDependencyError] = useState("");
   const [providerForm, setProviderForm] = useState<ProviderForm>({
+    models_text: "",
     name: "",
     api_base: "",
     api_type: "openai",
@@ -582,6 +638,8 @@ export function AdminApp() {
     limits_text: "{}"
   });
   const [nodeForm, setNodeForm] = useState<NodeForm>({
+    upstream_model: "",
+    api_key: "",
     name: "",
     provider: "",
     model: "",
@@ -619,10 +677,16 @@ export function AdminApp() {
   const traceErrors = useMemo(() => traceErrorsFromPayload(traceDetail), [traceDetail]);
   const traceTimeline = useMemo(() => traceTimelineItems(traceDetail), [traceDetail]);
   const logsHaveTraceIDs = useMemo(() => logs.some((row) => Boolean(traceIDFromRecord(row))), [logs]);
+  const logStopReasonOptions = useMemo(() => uniqueStrings([
+    "stop", "tool_calls", "length", "content_filter", "function_call",
+    ...stopReasons.map((row) => stringField(row, "reason")).filter(isNonEmptyString)
+  ]), [stopReasons]);
+  const selectedLogID = useMemo(() => stringField(selectedLog, "id"), [selectedLog]);
+  const selectedLogIndex = useMemo(() => logs.findIndex((row) => row.id === selectedLogID), [logs, selectedLogID]);
   const providerNames = useMemo(() => providers.map((provider) => provider.name).filter(isNonEmptyString), [providers]);
   const nodeNames = useMemo(() => nodes.map((node) => node.name).filter(isNonEmptyString), [nodes]);
   const legacyModelNames = useMemo(() => modelTreeNames(modelTree), [modelTree]);
-  const fallbackModelNames = useMemo(() => fallbackNameOptions(legacyModelNames, clientModels, nodes, routerFallbacks), [legacyModelNames, clientModels, nodes, routerFallbacks]);
+  const fallbackModelNames = useMemo(() => uniqueStrings([...fallbackNameOptions(legacyModelNames, clientModels, nodes, routerFallbacks), ...routingPools.map((pool) => String(pool.name))]), [legacyModelNames, clientModels, nodes, routerFallbacks, routingPools]);
   const appKeyGroupIDs = useMemo(() => appKeyGroups(appKeysConfig).map((group) => String(group.group_id || "")).filter(isNonEmptyString), [appKeysConfig]);
   const adminPasswordPending = adminPasswordInput !== adminPassword;
   const adminPasswordStatus = adminPasswordStatusText(adminPasswordInput, adminPassword, adminPasswordVerified, adminPasswordChecking);
@@ -633,12 +697,12 @@ export function AdminApp() {
   useEffect(() => {
     try {
       if (adminPassword) {
-        localStorage.setItem(adminPasswordStorageKey, adminPassword);
+        sessionStorage.setItem(adminPasswordStorageKey, adminPassword);
       } else {
-        localStorage.removeItem(adminPasswordStorageKey);
+        sessionStorage.removeItem(adminPasswordStorageKey);
       }
     } catch {
-      // Ignore storage errors; the in-memory password still works for this page.
+      // Ignore storage errors; the in-memory password still works for this tab.
     }
   }, [adminPassword]);
 
@@ -790,15 +854,48 @@ export function AdminApp() {
     }
   }
 
-  async function loadLogs() {
-    const params = new URLSearchParams({ limit: "25" });
-    if (filters.model) params.set("model", filters.model);
-    if (filters.outcome) params.set("outcome", filters.outcome);
-    if (filters.search) params.set("search", filters.search);
-    const payload = await requestJSON<LogsPayload>(`/admin/logs?${params.toString()}`, undefined, adminPassword);
-    const rows = payload.logs || payload.data || [];
-    setLogs(rows);
-    setLogMeta({ total: Number(payload.total || rows.length), hasMore: Boolean(payload.has_more) });
+  async function loadLogs(offset = 0, nextFilters = filters) {
+    setLogsLoading(true);
+    setLogsError("");
+    const params = new URLSearchParams({ limit: String(logPageSize), offset: String(Math.max(0, offset)) });
+    if (nextFilters.model.trim()) params.set("model", nextFilters.model.trim());
+    if (nextFilters.outcome) params.set("outcome", nextFilters.outcome);
+    if (nextFilters.stopReason) params.set("stop_reason", nextFilters.stopReason);
+    if (nextFilters.toolCall) params.set("is_tool_call", nextFilters.toolCall);
+    if (nextFilters.startDate) params.set("start_date", dateTimeFilterValue(nextFilters.startDate));
+    if (nextFilters.endDate) params.set("end_date", dateTimeFilterValue(nextFilters.endDate));
+    if (nextFilters.search.trim()) params.set("search", nextFilters.search.trim());
+    try {
+      const payload = await requestJSON<LogsPayload>(`/admin/logs?${params.toString()}`, undefined, adminPassword);
+      const rows = payload.logs || payload.data || [];
+      const nextOffset = Number(payload.offset ?? offset);
+      const nextLimit = Number(payload.limit ?? logPageSize);
+      setLogs(rows);
+      setLogMeta({
+        total: Number(payload.total ?? rows.length),
+        limit: nextLimit > 0 ? nextLimit : logPageSize,
+        offset: nextOffset > 0 ? nextOffset : 0,
+        hasMore: Boolean(payload.has_more)
+      });
+      if (selectedLogID && !rows.some((row) => row.id === selectedLogID)) {
+        setSelectedLog(null);
+      }
+    } catch (err) {
+      setLogsError(errorMessage(err));
+    } finally {
+      setLogsLoading(false);
+    }
+  }
+
+  function submitLogFilters(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    void loadLogs(0);
+  }
+
+  function clearLogFilters() {
+    const cleared = { ...emptyLogFilters };
+    setFilters(cleared);
+    void loadLogs(0, cleared);
   }
 
   async function loadTraceDashboard(rawTraceID = traceInput) {
@@ -854,13 +951,16 @@ export function AdminApp() {
   }
 
   async function loadRouting() {
-    const [providersPayload, nodesPayload, clientModelsPayload, routerSettingsPayload, treePayload] = await Promise.all([
+    const [providersPayload, nodesPayload, clientModelsPayload, routerSettingsPayload, treePayload, poolsPayload] = await Promise.all([
       requestJSON<RoutingPayloads>("/admin/providers", undefined, adminPassword),
       requestJSON<RoutingPayloads>("/admin/nodes", undefined, adminPassword),
       requestJSON<RoutingPayloads>("/admin/client-models", undefined, adminPassword),
       requestJSON<RouterSettingsPayload>("/admin/router-settings", undefined, adminPassword),
-      requestJSON<ModelTreePayload>("/admin/models/tree", undefined, adminPassword).catch((): ModelTreePayload => ({ roots: [], nodes: {} }))
+      requestJSON<ModelTreePayload>("/admin/models/tree", undefined, adminPassword).catch((): ModelTreePayload => ({ roots: [], nodes: {} })),
+      requestJSON<{pools: JsonRecord[]; prefix_cache_affinity: boolean}>("/admin/routing-pools", undefined, adminPassword)
     ]);
+    setRoutingPools(poolsPayload.pools);
+    setPrefixAffinity(poolsPayload.prefix_cache_affinity);
     setProviders(asArray<ProviderRecord>(providersPayload.providers));
     setNodes(asArray<NodeRecord>(nodesPayload.nodes));
     setClientModels(asArray<ClientModelRecord>(clientModelsPayload.client_models));
@@ -1119,13 +1219,28 @@ export function AdminApp() {
 
   async function selectLog(id?: string) {
     if (!id) return;
-    setError("");
+    setSelectedLogLoading(true);
+    setSelectedLogError("");
     try {
-      const payload = await requestJSON<JsonRecord>(`/admin/logs/${id}`, undefined, adminPassword);
+      const payload = await requestJSON<JsonRecord>(`/admin/logs/${encodeURIComponent(id)}?body_max_chars=0`, undefined, adminPassword);
       setSelectedLog(payload);
     } catch (err) {
-      setError(errorMessage(err));
+      setSelectedLog(null);
+      setSelectedLogError(errorMessage(err));
+    } finally {
+      setSelectedLogLoading(false);
     }
+  }
+
+  async function inspectTraceRequest(id: string) {
+    if (!id) return;
+    switchTab("logs");
+    await selectLog(id);
+  }
+
+  function selectAdjacentLog(direction: -1 | 1) {
+    const next = logs[selectedLogIndex + direction];
+    if (next?.id) void selectLog(next.id);
   }
 
   async function registerModel(event: FormEvent<HTMLFormElement>) {
@@ -1205,7 +1320,9 @@ export function AdminApp() {
       const payload: JsonRecord = {
         name: providerForm.name.trim(),
         api_base: providerForm.api_base.trim(),
-        api_type: providerForm.api_type.trim()
+        api_type: providerForm.api_type.trim(),
+        models: parseProviderModels(providerForm.models_text),
+        limits: JSON.parse(providerForm.limits_text || "{}")
       };
       if (endpoints.length > 0) {
         payload.endpoints = endpoints;
@@ -1215,7 +1332,7 @@ export function AdminApp() {
       }
       await requestJSON<JsonRecord>("/admin/providers", { method: "POST", body: JSON.stringify(payload) }, adminPassword);
       setNotice("Provider created");
-      setProviderForm({ name: "", api_base: "", api_type: "openai", api_key: "", endpoints_text: "", limits_text: "{}" });
+      setProviderForm({ models_text: "", name: "", api_base: "", api_type: "openai", api_key: "", endpoints_text: "", limits_text: "{}" });
       await refreshRoutingState();
     } catch (err) {
       setError(errorMessage(err));
@@ -1240,8 +1357,10 @@ export function AdminApp() {
       const payload: JsonRecord = {
         name: nodeForm.name.trim(),
         provider: nodeForm.provider.trim(),
-        model: nodeForm.model.trim()
+        model: nodeForm.model.trim(),
+        upstream_model: nodeForm.upstream_model.trim()
       };
+      if (nodeForm.api_key.trim()) payload.api_key = nodeForm.api_key;
       if (nodeForm.api_base.trim()) {
         payload.api_base = nodeForm.api_base.trim();
       }
@@ -1250,7 +1369,7 @@ export function AdminApp() {
       }
       await requestJSON<JsonRecord>("/admin/nodes", { method: "POST", body: JSON.stringify(payload) }, adminPassword);
       setNotice("Node created");
-      setNodeForm({ name: "", provider: "", model: "", api_base: "", endpoints_text: "", limits_text: "{}", modules_text: "{}", allowed_keys_text: "[]" });
+      setNodeForm({ upstream_model: "", api_key: "", name: "", provider: "", model: "", api_base: "", endpoints_text: "", limits_text: "{}", modules_text: "{}", allowed_keys_text: "[]" });
       await refreshRoutingState();
     } catch (err) {
       setError(errorMessage(err));
@@ -1367,6 +1486,7 @@ export function AdminApp() {
       kind: "provider",
       original: provider,
       form: {
+        models_text: formatProviderModels(provider.models),
         name: provider.name || "",
         api_base: provider.api_base || "",
         api_type: provider.api_type || "openai",
@@ -1385,6 +1505,8 @@ export function AdminApp() {
       kind: "node",
       original: node,
       form: {
+        upstream_model: typeof node.upstream_model === "string" ? node.upstream_model : "",
+        api_key: "",
         name: node.name || "",
         provider: node.provider || "",
         model: node.model || "",
@@ -1434,6 +1556,9 @@ export function AdminApp() {
       return;
     }
     const payload: JsonRecord = changedStringFields(routingEdit.original, routingEdit.form, ["api_base", "api_type"]);
+    if (routingEdit.form.models_text !== formatProviderModels(routingEdit.original.models)) {
+      payload.models = parseProviderModels(routingEdit.form.models_text);
+    }
     const endpoints = parseStringList(routingEdit.form.endpoints_text);
     if (!arraysEqual(asArray<string>(routingEdit.original.endpoints), endpoints)) {
       payload.endpoints = endpoints;
@@ -1468,7 +1593,8 @@ export function AdminApp() {
       setError("Fix node form errors");
       return;
     }
-    const payload: JsonRecord = changedStringFields(routingEdit.original, routingEdit.form, ["provider", "model", "api_base"]);
+    const payload: JsonRecord = changedStringFields(routingEdit.original, routingEdit.form, ["provider", "model", "api_base", "upstream_model"]);
+    if (routingEdit.form.api_key.trim()) payload.api_key = routingEdit.form.api_key;
     const endpoints = parseStringList(routingEdit.form.endpoints_text);
     if (!arraysEqual(asArray<string>(routingEdit.original.endpoints), endpoints)) {
       payload.endpoints = endpoints;
@@ -1742,11 +1868,11 @@ export function AdminApp() {
             <p>Admin</p>
           </div>
         </div>
-        <nav className="nav">
+        <nav className="nav" aria-label="Admin sections">
           {tabs.map((tab) => {
             const Icon = tab.icon;
             return (
-              <button key={tab.id} className={activeTab === tab.id ? "nav-item active" : "nav-item"} onClick={() => switchTab(tab.id)}>
+              <button key={tab.id} className={activeTab === tab.id ? "nav-item active" : "nav-item"} onClick={() => switchTab(tab.id)} aria-current={activeTab === tab.id ? "page" : undefined}>
                 <Icon size={18} aria-hidden="true" />
                 <span>{tab.label}</span>
               </button>
@@ -1972,6 +2098,11 @@ export function AdminApp() {
                 <div className="toolbar">
                   {traceLoading && <Badge tone="warn">loading</Badge>}
                   {traceDetail?.trace_id && renderTraceID(traceDetail.trace_id)}
+                  {traceDetail?.trace_id && (
+                    <Button variant="ghost" size="icon" onClick={() => void copyText(traceDetail.trace_id || "")} title="Copy trace ID" aria-label="Copy trace ID">
+                      <Copy size={16} aria-hidden="true" />
+                    </Button>
+                  )}
                   <Button variant="secondary" size="icon" onClick={() => void loadTraceDashboard()} disabled={!traceInput.trim() || traceLoading} title="Reload trace">
                     <RefreshCw size={17} aria-hidden="true" />
                   </Button>
@@ -2020,7 +2151,7 @@ export function AdminApp() {
                     <PanelTitle icon={Clock3} title="Timeline" />
                     <Badge>{traceTimeline.length} events</Badge>
                   </div>
-                  <TraceTimeline items={traceTimeline} />
+                  <TraceTimeline items={traceTimeline} onOpenLog={inspectTraceRequest} />
                 </section>
 
                 <section className="trace-grid">
@@ -2056,31 +2187,80 @@ export function AdminApp() {
         )}
 
         {activeTab === "logs" && (
-          <div className="split-view">
-            <section className="panel">
+          <div className="logs-view">
+            <section className="panel logs-list-panel">
               <div className="panel-header">
                 <PanelTitle icon={Database} title="Request Logs" />
-                <Badge>{logMeta.hasMore ? `${logMeta.total}+` : logMeta.total} rows</Badge>
+                <div className="toolbar">
+                  {logsLoading && <Badge tone="warn">loading</Badge>}
+                  <Badge>{formatLogRange(logMeta, logs.length)}</Badge>
+                  <Button variant="secondary" size="icon" onClick={() => void loadLogs(logMeta.offset)} disabled={logsLoading} title="Reload logs" aria-label="Reload logs">
+                    <RefreshCw size={17} aria-hidden="true" />
+                  </Button>
+                </div>
               </div>
-              <div className="filter-row">
-                <input placeholder="model" value={filters.model} onChange={(event) => setFilters({ ...filters, model: event.target.value })} />
-                <select value={filters.outcome} onChange={(event) => setFilters({ ...filters, outcome: event.target.value })}>
-                  <option value="">outcome</option>
-                  <option value="success">success</option>
-                  <option value="error">error</option>
-                </select>
-                <input placeholder="search" value={filters.search} onChange={(event) => setFilters({ ...filters, search: event.target.value })} />
-                <Button variant="secondary" size="icon" onClick={() => void loadLogs()} title="Apply filters">
-                  <ListFilter size={17} aria-hidden="true" />
-                </Button>
-              </div>
+              <form className="log-filter-form" onSubmit={submitLogFilters}>
+                <label className="field">
+                  <span>Model</span>
+                  <input placeholder="Any model" value={filters.model} onChange={(event) => setFilters({ ...filters, model: event.target.value })} list="log-model-options" autoComplete="off" />
+                  <datalist id="log-model-options">
+                    {models.map((model) => model.id).filter(isNonEmptyString).map((name) => <option key={name} value={name} />)}
+                  </datalist>
+                </label>
+                <label className="field">
+                  <span>Outcome</span>
+                  <select value={filters.outcome} onChange={(event) => setFilters({ ...filters, outcome: event.target.value })}>
+                    <option value="">Any outcome</option>
+                    <option value="success">Success</option>
+                    <option value="error">Error</option>
+                    <option value="cancelled">Cancelled</option>
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Stop reason</span>
+                  <select value={filters.stopReason} onChange={(event) => setFilters({ ...filters, stopReason: event.target.value })}>
+                    <option value="">Any reason</option>
+                    {logStopReasonOptions.map((reason) => <option key={reason} value={reason}>{reason}</option>)}
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Tool calls</span>
+                  <select value={filters.toolCall} onChange={(event) => setFilters({ ...filters, toolCall: event.target.value })}>
+                    <option value="">Either</option>
+                    <option value="true">Only tool calls</option>
+                    <option value="false">No tool calls</option>
+                  </select>
+                </label>
+                <label className="field">
+                  <span>From</span>
+                  <input type="datetime-local" value={filters.startDate} onChange={(event) => setFilters({ ...filters, startDate: event.target.value })} />
+                </label>
+                <label className="field">
+                  <span>To</span>
+                  <input type="datetime-local" value={filters.endDate} onChange={(event) => setFilters({ ...filters, endDate: event.target.value })} />
+                </label>
+                <label className="field log-filter-search">
+                  <span>Request content</span>
+                  <input type="search" placeholder="Search stored body" value={filters.search} onChange={(event) => setFilters({ ...filters, search: event.target.value })} />
+                </label>
+                <div className="log-filter-actions">
+                  <Button type="button" variant="ghost" size="sm" onClick={clearLogFilters} disabled={logsLoading}>Clear</Button>
+                  <Button type="submit" size="sm" disabled={logsLoading}>
+                    <ListFilter size={16} aria-hidden="true" />
+                    Apply
+                  </Button>
+                </div>
+              </form>
+              {logsError && <div className="inline-status" role="alert"><Badge tone="bad">error</Badge><span>{logsError}</span></div>}
               <div className="table-wrap">
-                <table>
+                <table className="logs-table">
+                  <caption className="sr-only">Filtered proxy request logs</caption>
                   <thead>
                     <tr>
                       <th>time</th>
                       <th>model</th>
                       <th>status</th>
+                      <th>stop</th>
                       <th>tokens</th>
                       <th>duration</th>
                       {logsHaveTraceIDs && <th>trace</th>}
@@ -2088,34 +2268,61 @@ export function AdminApp() {
                   </thead>
                   <tbody>
                     {logs.map((row, index) => (
-                      <tr key={row.id || index} onClick={() => void selectLog(row.id)} className="clickable-row">
-                        <td>{formatTime(row.request_time || row.created_at)}</td>
-                        <td>{row.model_name || "-"}</td>
+                      <tr key={row.id || index} className={row.id === selectedLogID ? "selected-row" : undefined}>
+                        <td>
+                          <button type="button" className="log-open-button" onClick={() => void selectLog(row.id)} aria-label={`Inspect request from ${formatTime(row.request_time || row.created_at)}`}>
+                            {formatTime(row.request_time || row.created_at)}
+                          </button>
+                        </td>
+                        <td><span className="resource-name">{row.model_name || "-"}</span>{row.is_tool_call && <Badge>tool</Badge>}</td>
                         <td>
                           <Badge tone={outcomeTone(row)}>{row.outcome || row.backend_status || "-"}</Badge>
                           {Number(row.warning_count || 0) > 0 && <Badge tone="warn">{row.warning_count} warn</Badge>}
                         </td>
-                        <td>{formatValue(row.total_tokens)}</td>
+                        <td>{row.stop_reason ? <Badge tone={stopReasonTone(row.stop_reason)}>{row.stop_reason}</Badge> : "-"}</td>
+                        <td title={tokenDetailTitle(row)}>{formatValue(row.total_tokens ?? row.usage_stats?.total_tokens)}</td>
                         <td>{formatDuration(row.duration_ms)}</td>
                         {logsHaveTraceIDs && <td>{renderTraceID(traceIDFromRecord(row), openTraceDashboard)}</td>}
                       </tr>
                     ))}
                     {logs.length === 0 && (
                       <tr>
-                        <td colSpan={logsHaveTraceIDs ? 6 : 5} className="empty-cell">No logs returned</td>
+                        <td colSpan={logsHaveTraceIDs ? 7 : 6} className="empty-cell">{logsLoading ? "Loading request logs" : "No logs match these filters"}</td>
                       </tr>
                     )}
                   </tbody>
                 </table>
               </div>
+              <div className="pagination-bar" aria-label="Request log pages">
+                <span>{formatLogRange(logMeta, logs.length)}</span>
+                <div className="toolbar">
+                  <Button variant="secondary" size="sm" onClick={() => void loadLogs(Math.max(0, logMeta.offset - logMeta.limit))} disabled={logsLoading || logMeta.offset <= 0}>
+                    <ChevronLeft size={16} aria-hidden="true" /> Previous
+                  </Button>
+                  <Button variant="secondary" size="sm" onClick={() => void loadLogs(logMeta.offset + logMeta.limit)} disabled={logsLoading || !logMeta.hasMore}>
+                    Next <ChevronRight size={16} aria-hidden="true" />
+                  </Button>
+                </div>
+              </div>
             </section>
 
-            <section className="panel detail-panel">
+            <section className="panel log-detail-panel">
               <div className="panel-header">
-                <PanelTitle icon={FileJson} title="Log Detail" />
-                {selectedLog && traceIDFromRecord(selectedLog) && renderTraceID(traceIDFromRecord(selectedLog), openTraceDashboard)}
+                <PanelTitle icon={Eye} title="Request Inspector" />
+                <div className="toolbar">
+                  {selectedLogLoading && <Badge tone="warn">loading</Badge>}
+                  {selectedLog && traceIDFromRecord(selectedLog) && renderTraceID(traceIDFromRecord(selectedLog), openTraceDashboard)}
+                </div>
               </div>
-              <pre>{selectedLog ? JSON.stringify(selectedLog, null, 2) : "No log selected"}</pre>
+              {selectedLogError && <div className="inline-status" role="alert"><Badge tone="bad">error</Badge><span>{selectedLogError}</span></div>}
+              <LogInspector
+                log={selectedLog}
+                loading={selectedLogLoading}
+                canPrevious={selectedLogIndex > 0}
+                canNext={selectedLogIndex >= 0 && selectedLogIndex < logs.length - 1}
+                onPrevious={() => selectAdjacentLog(-1)}
+                onNext={() => selectAdjacentLog(1)}
+              />
             </section>
           </div>
         )}
@@ -2254,6 +2461,17 @@ export function AdminApp() {
 
         {activeTab === "routing" && (
           <div className="routing-view">
+            <section className="panel">
+              <PanelTitle icon={Network} title="Models and nodes" />
+              <p>Add a provider and select its models, or add a node directly. Nodes with the same public model name share a pool.</p>
+              <p>{prefixAffinity ? "Conversation and prompt-cache affinity take priority; otherwise requests are balanced across eligible nodes." : "Prompt-cache affinity is disabled in router settings. Conversation affinity and balancing still apply."} Retryable failures try another node before any model fallback.</p>
+              <DataTable columns={["model", "nodes"]} rows={routingPools} empty="No model pools configured"
+                renderCell={(row, column) => column === "model" ? formatValue(row.name) : (
+                  <div className="choice-list">{asArray<JsonRecord>(row.nodes).map((node) => (
+                    <span key={String(node.name)}><Badge tone={node.healthy ? "good" : "bad"}>{node.healthy ? "Available" : "Unhealthy"}</Badge> {String(node.name)} → {String(node.upstream_model || row.name)}</span>
+                  ))}</div>
+                )} />
+            </section>
             {routingConflict && (
               <section className="routing-alert">
                 <Badge tone="bad">Delete blocked</Badge>
@@ -2268,7 +2486,7 @@ export function AdminApp() {
                   <Badge>{providers.length} providers</Badge>
                 </div>
                 <DataTable
-                  columns={["name", "api_base", "api_type", "endpoints", "actions"]}
+                  columns={["name", "api_base", "api_type", "models", "actions"]}
                   rows={providers as JsonRecord[]}
                   empty="No providers"
                   renderCell={(row, column) => renderProviderCell(row, column, loading, startProviderEdit, deleteProvider)}
@@ -2313,6 +2531,9 @@ export function AdminApp() {
                         onChange={(event) => setRoutingEdit({ ...routingEdit, form: { ...routingEdit.form, api_key: event.target.value } })}
                       />
                     </label>
+                    <ProviderModelPicker form={routingEdit.form} adminPassword={adminPassword} disabled={loading}
+                      onChange={(models_text) => setRoutingEdit({ ...routingEdit, form: { ...routingEdit.form, models_text } })} />
+                    <FieldError message={routingEdit.errors.models_text} />
                     <label className="field routing-nested-field">
                       <span>Endpoints</span>
                       <textarea
@@ -2370,6 +2591,14 @@ export function AdminApp() {
                     <span>API key</span>
                     <input type="password" autoComplete="off" value={providerForm.api_key} onChange={(event) => setProviderForm({ ...providerForm, api_key: event.target.value })} />
                   </label>
+                  <ProviderModelPicker form={providerForm} adminPassword={adminPassword} disabled={loading}
+                    onChange={(models_text) => setProviderForm({ ...providerForm, models_text })} />
+                  <FieldError message={providerErrors.models_text} />
+                  <label className="field">
+                    <span>Limits per upstream model (JSON, optional)</span>
+                    <textarea value={providerForm.limits_text} onChange={(event) => setProviderForm({ ...providerForm, limits_text: event.target.value })} />
+                    <FieldError message={providerErrors.limits_text} />
+                  </label>
                   <label className="field routing-nested-field">
                     <span>Endpoints</span>
                     <textarea
@@ -2416,11 +2645,10 @@ export function AdminApp() {
                     <label className="field">
                       <span>Provider</span>
                       <select
-                        required
                         value={routingEdit.form.provider}
                         onChange={(event) => setRoutingEdit({ ...routingEdit, form: { ...routingEdit.form, provider: event.target.value } })}
                       >
-                        <option value="">Select provider</option>
+                        <option value="">Direct connection</option>
                         {providerNames.map((name) => (
                           <option key={name} value={name}>{name}</option>
                         ))}
@@ -2428,7 +2656,7 @@ export function AdminApp() {
                       <FieldError message={routingEdit.errors.provider} />
                     </label>
                     <label className="field">
-                      <span>Upstream model</span>
+                      <span>Model name</span>
                       <input
                         required
                         value={routingEdit.form.model}
@@ -2443,6 +2671,14 @@ export function AdminApp() {
                         onChange={(event) => setRoutingEdit({ ...routingEdit, form: { ...routingEdit.form, api_base: event.target.value } })}
                       />
                       <FieldError message={routingEdit.errors.api_base} />
+                    </label>
+                    <label className="field">
+                      <span>Upstream model name (if different)</span>
+                      <input value={routingEdit.form.upstream_model} onChange={(event) => setRoutingEdit({ ...routingEdit, form: { ...routingEdit.form, upstream_model: event.target.value } })} />
+                    </label>
+                    <label className="field">
+                      <span>Replace API key (optional)</span>
+                      <input type="password" autoComplete="off" value={routingEdit.form.api_key} onChange={(event) => setRoutingEdit({ ...routingEdit, form: { ...routingEdit.form, api_key: event.target.value } })} />
                     </label>
                     <label className="field routing-nested-field">
                       <span>Endpoints</span>
@@ -2484,7 +2720,7 @@ export function AdminApp() {
                       <FieldError message={routingEdit.errors.allowed_keys_text} />
                     </label>
                     <div className="form-actions">
-                      <Button type="submit" disabled={loading || providerNames.length === 0}>
+                      <Button type="submit" disabled={loading}>
                         <Save size={16} aria-hidden="true" />
                         Save
                       </Button>
@@ -2503,8 +2739,8 @@ export function AdminApp() {
                   </label>
                   <label className="field">
                     <span>Provider</span>
-                    <select required value={nodeForm.provider} onChange={(event) => setNodeForm({ ...nodeForm, provider: event.target.value })}>
-                      <option value="">Select provider</option>
+                    <select value={nodeForm.provider} onChange={(event) => setNodeForm({ ...nodeForm, provider: event.target.value })}>
+                      <option value="">Direct connection</option>
                       {providerNames.map((name) => (
                         <option key={name} value={name}>{name}</option>
                       ))}
@@ -2512,9 +2748,17 @@ export function AdminApp() {
                     <FieldError message={nodeErrors.provider} />
                   </label>
                   <label className="field">
-                    <span>Upstream model</span>
+                    <span>Public model name</span>
                     <input required value={nodeForm.model} onChange={(event) => setNodeForm({ ...nodeForm, model: event.target.value })} />
                     <FieldError message={nodeErrors.model} />
+                  </label>
+                  <label className="field">
+                    <span>Upstream model name (if different)</span>
+                    <input value={nodeForm.upstream_model} onChange={(event) => setNodeForm({ ...nodeForm, upstream_model: event.target.value })} />
+                  </label>
+                  <label className="field">
+                    <span>API key (optional)</span>
+                    <input type="password" autoComplete="off" value={nodeForm.api_key} onChange={(event) => setNodeForm({ ...nodeForm, api_key: event.target.value })} />
                   </label>
                   <label className="field">
                     <span>API base</span>
@@ -2531,7 +2775,7 @@ export function AdminApp() {
                     <FieldError message={nodeErrors.endpoints_text} />
                   </label>
                   <div className="form-actions">
-                    <Button type="submit" disabled={loading || providerNames.length === 0}>
+                    <Button type="submit" disabled={loading}>
                       <Plus size={16} aria-hidden="true" />
                       Create
                     </Button>
@@ -2540,6 +2784,9 @@ export function AdminApp() {
               </section>
             </section>
 
+            <details>
+              <summary>Advanced: explicit model pools</summary>
+              <p>Existing explicit pools remain supported. New nodes and provider selections form pools automatically.</p>
             <section className="routing-block">
               <section className="panel routing-list-panel">
                 <div className="panel-header">
@@ -2657,10 +2904,14 @@ export function AdminApp() {
               </section>
             </section>
 
+            </details>
+
+            <details>
+              <summary>Optional: fallback to a different model</summary>
             <section className="routing-block">
               <section className="panel routing-list-panel">
                 <div className="panel-header">
-                  <PanelTitle icon={Network} title="Fallback Chains" />
+                  <PanelTitle icon={Network} title="Optional: fallback to a different model" />
                   <Badge>{routerFallbacks.length} chains</Badge>
                 </div>
                 <form className="fallback-editor" onSubmit={(event) => void saveRouterFallbacks(event)}>
@@ -2758,6 +3009,9 @@ export function AdminApp() {
               </section>
             </section>
 
+            </details>
+            <details>
+              <summary>Legacy model inheritance</summary>
             <section className="routing-block">
               <section className="panel routing-list-panel">
                 <div className="panel-header">
@@ -2835,6 +3089,7 @@ export function AdminApp() {
                 </div>
               </section>
             </section>
+            </details>
           </div>
         )}
 
@@ -3204,22 +3459,29 @@ function TraceSummaryValue({ label, value }: { label: string; value: string | JS
   );
 }
 
-function TraceTimeline({ items }: { items: TraceTimelineItem[] }) {
+function TraceTimeline({ items, onOpenLog }: { items: TraceTimelineItem[]; onOpenLog?: (id: string) => Promise<void> }) {
   if (items.length === 0) {
     return <div className="empty-inline trace-empty">No trace events returned</div>;
   }
   return (
-    <div className="trace-timeline">
+    <ol className="trace-timeline" aria-label="Trace event timeline">
       {items.map((item) => (
-        <div className="trace-timeline-item" key={item.id}>
-          <div className="trace-marker" aria-hidden="true" />
-          <div className="trace-event">
+        <li className="trace-timeline-item" key={item.id}>
+          <div className={`trace-marker trace-marker-${item.tone}`} aria-hidden="true" />
+          <article className="trace-event">
             <div className="trace-event-header">
               <div>
                 <Badge tone={item.tone}>{item.phase}</Badge>
                 <strong>{item.title}</strong>
               </div>
-              {item.time && <span>{formatTime(item.time)}</span>}
+              <div className="trace-event-actions">
+                {item.time && <span>{formatTime(item.time)}</span>}
+                {item.logID && onOpenLog && (
+                  <Button type="button" variant="secondary" size="sm" onClick={() => void onOpenLog(item.logID || "")}>
+                    <Eye size={15} aria-hidden="true" /> Inspect
+                  </Button>
+                )}
+              </div>
             </div>
             <div className="trace-field-grid">
               {item.fields.map((field) => (
@@ -3229,11 +3491,197 @@ function TraceTimeline({ items }: { items: TraceTimelineItem[] }) {
                 </div>
               ))}
             </div>
-          </div>
-        </div>
+          </article>
+        </li>
       ))}
+    </ol>
+  );
+}
+
+function LogInspector({
+  log,
+  loading,
+  canPrevious,
+  canNext,
+  onPrevious,
+  onNext
+}: {
+  log: JsonRecord | null;
+  loading: boolean;
+  canPrevious: boolean;
+  canNext: boolean;
+  onPrevious: () => void;
+  onNext: () => void;
+}) {
+  const [search, setSearch] = useState("");
+  const [raw, setRaw] = useState(false);
+  const logID = stringField(log, "id");
+  const sections = useMemo(() => logDetailSections(log), [log]);
+  const body = firstPresent(log?.request_body, log?.body);
+  const bodyRecord = isJsonRecord(body) ? body : null;
+  const messages = conversationMessages(bodyRecord);
+  const normalizedSearch = search.trim().toLowerCase();
+  const messagesMatch = messages.length > 0 && (!normalizedSearch || prettyJSON(messages).toLowerCase().includes(normalizedSearch));
+  const filteredSections = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    if (!query) return sections;
+    return sections.filter((section) => `${section.title}\n${prettyJSON(section.value)}`.toLowerCase().includes(query));
+  }, [search, sections]);
+
+  useEffect(() => {
+    setSearch("");
+    setRaw(false);
+  }, [logID]);
+
+  if (!log) {
+    return (
+      <div className="log-detail-empty" aria-live="polite">
+        <Eye size={26} aria-hidden="true" />
+        <strong>{loading ? "Loading request" : "Select a request to inspect"}</strong>
+        <span>Open a timestamp in the table to read prompts, messages, responses, retries, and warnings.</span>
+      </div>
+    );
+  }
+
+  const responseValue = firstPresent(log.response_body, parseJSONText(log.full_response));
+  const filenameID = logID || "request";
+
+  return (
+    <div className="log-inspector">
+      <div className="log-detail-toolbar">
+        <label className="detail-search-field">
+          <Search size={15} aria-hidden="true" />
+          <span className="sr-only">Search request detail</span>
+          <input type="search" placeholder="Find in detail" value={search} onChange={(event) => setSearch(event.target.value)} />
+        </label>
+        <div className="toolbar log-detail-actions">
+          <Button type="button" variant="ghost" size="sm" onClick={() => setRaw((value) => !value)} aria-pressed={raw}>
+            <FileJson size={15} aria-hidden="true" /> {raw ? "Readable" : "Raw JSON"}
+          </Button>
+          <Button type="button" variant="ghost" size="icon" onClick={() => void copyText(prettyJSON(log))} title="Copy full log" aria-label="Copy full log">
+            <Copy size={16} aria-hidden="true" />
+          </Button>
+          <Button type="button" variant="ghost" size="icon" onClick={() => downloadJSON(log, `yallmp-log-${filenameID}.json`)} title="Download full log" aria-label="Download full log">
+            <Download size={16} aria-hidden="true" />
+          </Button>
+          <Button type="button" variant="secondary" size="icon" onClick={onPrevious} disabled={!canPrevious || loading} title="Previous request" aria-label="Previous request">
+            <ChevronLeft size={16} aria-hidden="true" />
+          </Button>
+          <Button type="button" variant="secondary" size="icon" onClick={onNext} disabled={!canNext || loading} title="Next request" aria-label="Next request">
+            <ChevronRight size={16} aria-hidden="true" />
+          </Button>
+        </div>
+      </div>
+
+      <div className="log-overview-grid">
+        <TraceSummaryValue label="Time" value={formatTime(stringField(log, "request_time") || stringField(log, "created_at"))} />
+        <TraceSummaryValue label="Model" value={formatValue(log.model_name)} />
+        <TraceSummaryValue label="Route" value={`${formatValue(log.method)} ${formatValue(log.path || log.request_path)}`} />
+        <TraceSummaryValue label="Outcome" value={<Badge tone={outcomeTone(log as LogRecord)}>{formatValue(log.outcome || log.backend_status)}</Badge>} />
+        <TraceSummaryValue label="Backend" value={formatValue(log.backend_name)} />
+        <TraceSummaryValue label="Duration" value={formatDuration(numberField(log, "duration_ms"))} />
+        <TraceSummaryValue label="Tokens" value={formatValue(log.total_tokens || nestedNumber(log, "usage_stats", "total_tokens"))} />
+        <TraceSummaryValue label="Stop reason" value={formatValue(log.stop_reason)} />
+      </div>
+
+      {typeof log.full_request_status === "string" && log.full_request_status !== "available" && (
+        <div className="inline-status" role="status">
+          <Badge tone="warn">payload {formatValue(log.full_request_status)}</Badge>
+          <span>The metadata is available, but the stored request/response payload cannot be read.</span>
+        </div>
+      )}
+
+      {raw ? (
+        <pre className="json-block raw-log-block"><code>{prettyJSON(log)}</code></pre>
+      ) : (
+        <>
+          {messagesMatch && (
+            <section className="conversation-section">
+              <div className="section-heading">
+                <div><PanelTitle icon={Activity} title="Conversation" /><Badge>{messages.length} messages</Badge></div>
+                <Button type="button" variant="ghost" size="icon" onClick={() => downloadJSON(body, `yallmp-request-${filenameID}.json`)} title="Download request body" aria-label="Download request body">
+                  <Download size={16} aria-hidden="true" />
+                </Button>
+              </div>
+              <MessageList messages={messages} />
+            </section>
+          )}
+          {filteredSections.map((section) => (
+            <JsonDetailSection key={`${logID}-${section.id}`} section={section} />
+          ))}
+          {normalizedSearch && filteredSections.length === 0 && !messagesMatch && (
+            <div className="log-detail-empty compact"><strong>No matching detail sections</strong><span>Try a broader search.</span></div>
+          )}
+          {(hasDetailValue(body) || hasDetailValue(responseValue)) && (
+            <div className="payload-download-row">
+              {hasDetailValue(body) && (
+                <Button type="button" variant="secondary" size="sm" onClick={() => downloadJSON(body, `yallmp-request-${filenameID}.json`)}>
+                  <Download size={15} aria-hidden="true" /> Download request
+                </Button>
+              )}
+              {hasDetailValue(responseValue) && (
+                <Button type="button" variant="secondary" size="sm" onClick={() => downloadJSON(responseValue, `yallmp-response-${filenameID}.json`)}>
+                  <Download size={15} aria-hidden="true" /> Download response
+                </Button>
+              )}
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
+}
+
+function MessageList({ messages }: { messages: unknown[] }) {
+  return (
+    <div className="message-list">
+      {messages.map((message, index) => {
+        const record = isJsonRecord(message) ? message : null;
+        const role = stringField(record, "role") || stringField(record, "type") || "item";
+        const content = record && "content" in record ? record.content : message;
+        return (
+          <article className={`message-card message-${safeClassName(role)}`} key={`${role}-${index}`}>
+            <header><Badge>{role}</Badge><span>#{index + 1}</span></header>
+            <MessageContent value={content} />
+          </article>
+        );
+      })}
+    </div>
+  );
+}
+
+function MessageContent({ value }: { value: unknown }) {
+  if (typeof value === "string") return <pre className="message-text">{value || "(empty)"}</pre>;
+  if (Array.isArray(value)) {
+    return (
+      <div className="message-parts">
+        {value.map((part, index) => {
+          const record = isJsonRecord(part) ? part : null;
+          const text = record && typeof record.text === "string" ? record.text : null;
+          const type = record && typeof record.type === "string" ? record.type : `part ${index + 1}`;
+          return <div className="message-part" key={`${type}-${index}`}><Badge>{type}</Badge>{text !== null ? <pre className="message-text">{text}</pre> : <JsonBlock value={part} />}</div>;
+        })}
+      </div>
+    );
+  }
+  return <JsonBlock value={value} />;
+}
+
+function JsonDetailSection({ section }: { section: LogDetailSection }) {
+  const [open, setOpen] = useState(Boolean(section.defaultOpen));
+  return (
+    <details className="json-detail-section" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
+      <summary>
+        <span>{section.title}</span>
+        <Badge tone={section.tone}>{detailValueLabel(section.value)}</Badge>
+      </summary>
+      <JsonBlock value={section.value} />
+    </details>
+  );
+}
+
+function JsonBlock({ value }: { value: unknown }) {
+  return <pre className="json-block"><code>{prettyJSON(value)}</code></pre>;
 }
 
 function PanelTitle({ icon: Icon, title }: { icon: typeof Activity; title: string }) {
@@ -3421,8 +3869,65 @@ function validateModelForm(form: ModelForm) {
   return errors;
 }
 
+type SelectedProviderModel = { name: string; upstream_model?: string };
+
+function parseProviderModels(text: string): SelectedProviderModel[] {
+  const seen = new Set<string>();
+  return text.split("\n").map((line) => line.trim()).filter(Boolean).map((line) => {
+    const parts = line.split("=").map((part) => part.trim());
+    if (parts.length > 2 || !parts[0] || (parts.length === 2 && !parts[1])) throw new Error("Use one model per line, or public-name = upstream-name");
+    if (seen.has(parts[0])) throw new Error(`Duplicate model: ${parts[0]}`);
+    seen.add(parts[0]);
+    return parts.length === 2 ? { name: parts[0], upstream_model: parts[1] } : { name: parts[0] };
+  });
+}
+
+function formatProviderModels(models: unknown): string {
+  return asArray<string | SelectedProviderModel>(models).map((model) => typeof model === "string" ? model : model.upstream_model ? `${model.name} = ${model.upstream_model}` : model.name).join("\n");
+}
+
+function ProviderModelPicker({ form, adminPassword, disabled, onChange }: {
+  form: ProviderForm; adminPassword: string; disabled: boolean; onChange: (text: string) => void;
+}) {
+  const [discovered, setDiscovered] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [fetched, setFetched] = useState(false);
+  useEffect(() => { setDiscovered([]); setFetched(false); setError(""); }, [form.name, form.api_base, form.api_type]);
+  let selected: SelectedProviderModel[] = [];
+  try { selected = parseProviderModels(form.models_text); } catch { /* Form validation displays invalid manual selections. */ }
+  async function discover() {
+    setBusy(true); setError("");
+    try {
+      const result = await requestJSON<{models: string[]}>("/admin/providers/discover", { method: "POST", body: JSON.stringify({ name: form.name, api_base: form.api_base, api_type: form.api_type, api_key: form.api_key }) }, adminPassword);
+      setDiscovered(result.models); setFetched(true);
+    } catch (err) { setError(errorMessage(err)); } finally { setBusy(false); }
+  }
+  return <div className="field routing-nested-field">
+    <label className="field">
+      <span>Models to expose</span>
+      <textarea className="routing-list-textarea" value={form.models_text} onChange={(event) => onChange(event.target.value)} placeholder={"qwen\nllama\npublic-name = upstream-name"} />
+    </label>
+    <span>One model per line. Use public-name = upstream-name for an alias. Saving creates the model pools automatically.</span>
+    <Button type="button" variant="secondary" disabled={disabled || busy || !form.api_base} onClick={() => void discover()}>{busy ? "Fetching…" : "Fetch available models"}</Button>
+    <FieldError message={error} />
+    {fetched && <>
+      <span>Choose models to expose, then save. Discovery does not change your selection.</span>
+      <Button type="button" variant="ghost" disabled={disabled} onClick={() => onChange(formatProviderModels([...selected, ...discovered.filter((id) => !selected.some((model) => (model.upstream_model || model.name) === id || model.name === id)).map((name) => ({name}))]))}>Select all discovered</Button>
+      <div className="choice-list provider-model-options">{discovered.map((id) => <label key={id} className="choice-item">
+        <input type="checkbox" checked={selected.some((model) => (model.upstream_model || model.name) === id)} onChange={(event) => onChange(formatProviderModels(event.target.checked ? [...selected.filter((model) => model.name !== id), {name: id}] : selected.filter((model) => (model.upstream_model || model.name) !== id)))} />
+        <span>{id}</span>
+      </label>)}</div>
+      {discovered.length === 0 && <span>The provider returned no models.</span>}
+    </>}
+  </div>;
+}
+
 function validateProviderForm(form: ProviderForm) {
   const errors: Partial<Record<keyof ProviderForm, string>> = {};
+  try { parseProviderModels(form.models_text); } catch (err) { errors.models_text = errorMessage(err); }
+  const limits = parseJSONField<LimitsRecord>(form.limits_text, "Limits JSON", "object");
+  if (limits.error) errors.limits_text = limits.error;
   if (!form.name.trim()) {
     errors.name = "Name is required";
   }
@@ -3449,11 +3954,11 @@ function validateNodeForm(form: NodeForm) {
   if (!form.name.trim()) {
     errors.name = "Name is required";
   }
-  if (!form.provider.trim()) {
-    errors.provider = "Provider is required";
+  if (!form.provider.trim() && !form.api_base.trim()) {
+    errors.api_base = "Enter an API base or choose a provider";
   }
   if (!form.model.trim()) {
-    errors.model = "Upstream model is required";
+    errors.model = "Model name is required";
   }
   if (form.api_base.trim()) {
     const apiBaseError = validateHTTPURL(form.api_base);
@@ -4110,6 +4615,7 @@ function renderProviderCell(
   const name = resourceName(row);
   if (column === "name") return <span className="resource-name">{name || "-"}</span>;
   if (column === "api_type") return row.api_type ? <Badge>{formatValue(row.api_type)}</Badge> : "-";
+  if (column === "models") return formatProviderModels(row.models) || "Shared settings only";
   if (column === "endpoints") return renderStringBadges(asArray<string>(row.endpoints));
   if (column === "actions") return <RoutingActions row={row as ProviderRecord} name={name} disabled={disabled} onEdit={onEdit} onDelete={onDelete} />;
   return formatValue(row[column]);
@@ -4494,6 +5000,7 @@ function traceRequestTimelineItem(request: TraceRequestRecord, index: number): T
     title: `${method} ${endpointKind || "request"}`,
     tone: traceOutcomeTone(outcome, request.backend_status ?? request.status),
     time: request.request_time || request.created_at,
+    logID: traceRequestID(request) || undefined,
     fields: traceFields([
       ["Endpoint", endpointKind || "other"],
       ["Model", request.model_name || request.model],
@@ -4847,6 +5354,174 @@ function outcomeTone(row: LogRecord) {
   return "neutral";
 }
 
+function stopReasonTone(reason?: string): BadgeTone {
+  if (reason === "stop" || reason === "tool_calls" || reason === "function_call") return "good";
+  if (reason === "length") return "warn";
+  if (reason === "content_filter") return "bad";
+  return "neutral";
+}
+
+function tokenDetailTitle(row: LogRecord) {
+  const usage = row.usage_stats || {};
+  const parts = [
+    ["Input", row.prompt_tokens ?? usage.prompt_tokens],
+    ["Output", row.completion_tokens ?? usage.completion_tokens],
+    ["Cached", row.cached_tokens ?? usage.cached_tokens],
+    ["Reasoning", row.reasoning_tokens ?? usage.reasoning_tokens]
+  ].filter(([, value]) => typeof value === "number");
+  return parts.map(([label, value]) => `${label}: ${value}`).join(" | ");
+}
+
+function formatLogRange(meta: LogMeta, rowCount: number) {
+  if (meta.total <= 0 || rowCount <= 0) return "No logs";
+  const start = meta.offset + 1;
+  const end = meta.offset + rowCount;
+  return `${start}-${end} of ${meta.total}`;
+}
+
+function dateTimeFilterValue(value: string) {
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toISOString();
+}
+
+function logDetailSections(log: JsonRecord | null): LogDetailSection[] {
+  if (!log) return [];
+  const sections: LogDetailSection[] = [];
+  const body = firstPresent(log.request_body, log.body);
+  const bodyRecord = isJsonRecord(body) ? body : null;
+  const messages = conversationMessages(bodyRecord);
+  const response = firstPresent(log.response_body, parseJSONText(log.full_response));
+
+  const add = (id: string, title: string, value: unknown, options: Pick<LogDetailSection, "defaultOpen" | "tone"> = {}) => {
+    if (hasDetailValue(value)) sections.push({ id, title, value, ...options });
+  };
+
+  add("system", "System prompt", bodyRecord?.system, { defaultOpen: true });
+  if (messages.length === 0) add("request", "Request body", body, { defaultOpen: true });
+  add("tools", "Tools", firstPresent(bodyRecord?.tools, bodyRecord?.functions));
+  add("tool-choice", "Tool choice", bodyRecord?.tool_choice);
+  if (bodyRecord) {
+    add("request-parameters", "Other request parameters", omitFields(bodyRecord, ["messages", "input", "system", "tools", "functions", "tool_choice"]));
+  }
+  add("response", "Response", response, { defaultOpen: true });
+  add("tool-calls", "Response tool calls", log.tool_calls, { defaultOpen: true });
+  add("parsed-response", "Parsed upstream response", log.parsed_response);
+  add("parsed-stream", "Parsed stream", log.parsed_stream);
+  add("stream-chunks", "Stream chunks", log.stream_chunks);
+  add("usage", "Usage statistics", log.usage_stats);
+  add("modules", "Module events", log.modules_log);
+  add("attempts", "Backend attempts", firstPresent(log.attempt_trail, log.attempts, log.backend_attempts), { tone: "warn" });
+  add("errors", "Errors", log.errors, { defaultOpen: true, tone: "bad" });
+  add("warnings", "Warnings", log.warnings, { defaultOpen: true, tone: "warn" });
+  add("error-logs", "Linked error logs", log.error_logs, { defaultOpen: true, tone: "bad" });
+  add("request-headers", "Request headers", log.request_headers);
+  add("response-headers", "Response headers", log.response_headers);
+  add("required-headers", "Required headers", log.required_headers);
+  return sections;
+}
+
+function omitFields(record: JsonRecord, fields: string[]) {
+  const omitted = new Set(fields);
+  return Object.fromEntries(Object.entries(record).filter(([key]) => !omitted.has(key)));
+}
+
+function conversationMessages(body: JsonRecord | null) {
+  if (!body) return [];
+  if (Array.isArray(body.messages)) return body.messages;
+  if (Array.isArray(body.input) && body.input.some((item) => isJsonRecord(item) && (typeof item.role === "string" || typeof item.type === "string"))) {
+    return body.input;
+  }
+  return [];
+}
+
+function stringField(value: unknown, key: string) {
+  if (!isJsonRecord(value)) return "";
+  return typeof value[key] === "string" ? value[key] : "";
+}
+
+function numberField(value: unknown, key: string) {
+  if (!isJsonRecord(value)) return undefined;
+  return typeof value[key] === "number" ? value[key] : undefined;
+}
+
+function nestedNumber(value: unknown, parent: string, key: string) {
+  if (!isJsonRecord(value) || !isJsonRecord(value[parent])) return undefined;
+  return typeof value[parent][key] === "number" ? value[parent][key] : undefined;
+}
+
+function firstPresent(...values: unknown[]) {
+  return values.find(hasDetailValue);
+}
+
+function hasDetailValue(value: unknown) {
+  if (value === undefined || value === null || value === "") return false;
+  if (Array.isArray(value)) return value.length > 0;
+  if (isJsonRecord(value)) return Object.keys(value).length > 0;
+  return true;
+}
+
+function parseJSONText(value: unknown) {
+  if (typeof value !== "string") return value;
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  try {
+    return JSON.parse(trimmed) as unknown;
+  } catch {
+    return value;
+  }
+}
+
+function prettyJSON(value: unknown) {
+  if (typeof value === "string") return value;
+  if (value === undefined) return "-";
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function detailValueLabel(value: unknown) {
+  if (Array.isArray(value)) return `${value.length} item${value.length === 1 ? "" : "s"}`;
+  if (isJsonRecord(value)) {
+    const count = Object.keys(value).length;
+    return `${count} field${count === 1 ? "" : "s"}`;
+  }
+  if (typeof value === "string") return `${value.length} chars`;
+  return "detail";
+}
+
+function safeClassName(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "item";
+}
+
+async function copyText(value: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand("copy");
+  textarea.remove();
+}
+
+function downloadJSON(value: unknown, filename: string) {
+  const blob = new Blob([prettyJSON(value)], { type: "application/json;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 function tabFromLocation(location: Location): TabID {
   const tabParam = new URLSearchParams(location.search).get("tab");
   if (tabParam === "observability" || tabParam === "traces" || tabParam === "catalog" || tabParam === "logs" || tabParam === "config" || tabParam === "models" || tabParam === "routing" || tabParam === "keys") return tabParam;
@@ -4899,7 +5574,9 @@ function percentValue(value: unknown) {
 
 function formatDuration(value?: number) {
   if (typeof value !== "number" || !Number.isFinite(value)) return "-";
-  return `${value}ms`;
+  if (value < 1000) return `${Math.round(value)} ms`;
+  if (value < 60000) return `${(value / 1000).toFixed(value < 10000 ? 2 : 1)} s`;
+  return `${Math.floor(value / 60000)}m ${Math.round((value % 60000) / 1000)}s`;
 }
 
 function formatTime(value?: string) {

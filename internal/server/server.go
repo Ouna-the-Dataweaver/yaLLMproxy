@@ -3,14 +3,17 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -30,9 +33,11 @@ import (
 	"github.com/theio/yallmp-proxy/internal/proxy"
 	"github.com/theio/yallmp-proxy/internal/quota"
 	responsesapi "github.com/theio/yallmp-proxy/internal/responses"
+	adminui "github.com/theio/yallmp-proxy/web/admin"
 )
 
 type App struct {
+	runtimeMu                  sync.RWMutex
 	Config                     *config.Config
 	Router                     *proxy.Router
 	Catalog                    *catalog.Catalog
@@ -50,6 +55,8 @@ type App struct {
 }
 
 var adminDistDir = filepath.Join(config.ProjectRoot(), "web", "admin", "dist")
+
+var embeddedAdminAssets = adminui.Assets()
 
 var parsedStreamSidecarMaxBytes int64 = 4 << 20
 
@@ -186,6 +193,16 @@ func shutdownObservabilityBounded(provider *observability.Provider) error {
 }
 
 func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if runtimeMutationRequest(r) {
+		a.runtimeMu.Lock()
+		defer a.runtimeMu.Unlock()
+	} else {
+		a.runtimeMu.RLock()
+		defer a.runtimeMu.RUnlock()
+	}
+	if sensitiveAdminAPIRequest(r) && !a.requireConfiguredAdminPassword(w, r, "admin API access") {
+		return
+	}
 	switch {
 	case isPprofPath(r.URL.Path) && a.profilingEnabled():
 		a.handlePprof(w, r)
@@ -203,6 +220,10 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		a.handleValidateConfig(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/admin/config/reload":
 		a.handleReloadConfig(w, r)
+	case r.Method == http.MethodPost && isProviderDiscoveryPath(r.URL.Path):
+		a.handleDiscoverProvider(w, r)
+	case r.Method == http.MethodGet && r.URL.Path == "/admin/routing-pools":
+		a.handleRoutingPools(w, r)
 	case isAdminProvidersPath(r.URL.Path):
 		a.handleAdminProviders(w, r)
 	case isAdminNodesPath(r.URL.Path):
@@ -281,6 +302,27 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeError(w, http.StatusNotFound, "not found", "not_found")
 	}
+}
+
+func runtimeMutationRequest(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	path := r.URL.Path
+	if isProviderDiscoveryPath(path) {
+		return false
+	}
+	if r.Method == http.MethodPut && path == "/admin/config" || r.Method == http.MethodPost && path == "/admin/config/reload" {
+		return true
+	}
+	if isAdminProvidersPath(path) || isAdminNodesPath(path) || isAdminClientModelsPath(path) || isAdminRouterSettingsPath(path) {
+		return r.Method != http.MethodGet && r.Method != http.MethodHead
+	}
+	if isAdminKeysPath(path) {
+		return r.Method != http.MethodGet && r.Method != http.MethodHead
+	}
+	return r.Method == http.MethodPost && (path == "/admin/models" || path == "/admin/models/copy") ||
+		r.Method == http.MethodDelete && isAdminModelDeletePath(path)
 }
 
 func (a *App) messagesEndpointEnabled() bool {
@@ -512,29 +554,38 @@ func isAdminFrontendRequest(r *http.Request) bool {
 }
 
 func (a *App) handleAdminFrontend(w http.ResponseWriter, r *http.Request) {
-	indexPath := filepath.Join(adminDistDir, "index.html")
-	if _, err := os.Stat(indexPath); err != nil {
-		writeError(w, http.StatusNotFound, "admin frontend is not built; run task frontend:build", "admin_frontend_not_built")
-		return
-	}
 	relativePath := strings.TrimPrefix(r.URL.Path, "/admin")
-	if relativePath == "" || relativePath == "/" {
-		http.ServeFile(w, r, indexPath)
-		return
-	}
 	relativePath = strings.TrimPrefix(relativePath, "/")
-	cleanPath := filepath.Clean(relativePath)
-	if cleanPath == "." || strings.HasPrefix(cleanPath, "..") || filepath.IsAbs(cleanPath) {
+	cleanPath := path.Clean(relativePath)
+	if cleanPath == "." {
+		cleanPath = "index.html"
+	}
+	if cleanPath == ".." || strings.HasPrefix(cleanPath, "../") || path.IsAbs(cleanPath) {
 		writeError(w, http.StatusBadRequest, "invalid admin asset path", "invalid_request_error")
 		return
 	}
-	assetPath := filepath.Join(adminDistDir, cleanPath)
-	info, err := os.Stat(assetPath)
-	if err == nil && !info.IsDir() {
-		http.ServeFile(w, r, assetPath)
+
+	indexPath := filepath.Join(adminDistDir, "index.html")
+	if _, err := os.Stat(indexPath); err == nil {
+		assetPath := filepath.Join(adminDistDir, filepath.FromSlash(cleanPath))
+		if info, assetErr := os.Stat(assetPath); assetErr == nil && !info.IsDir() {
+			http.ServeFile(w, r, assetPath)
+			return
+		}
+		http.ServeFile(w, r, indexPath)
 		return
 	}
-	http.ServeFile(w, r, indexPath)
+
+	if info, err := fs.Stat(embeddedAdminAssets, cleanPath); err != nil || info.IsDir() {
+		cleanPath = "index.html"
+	}
+	contents, err := fs.ReadFile(embeddedAdminAssets, cleanPath)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "admin frontend asset not found", "not_found")
+		return
+	}
+	info, _ := fs.Stat(embeddedAdminAssets, cleanPath)
+	http.ServeContent(w, r, path.Base(cleanPath), info.ModTime(), bytes.NewReader(contents))
 }
 
 func (a *App) handleLegacyStaticAdmin(w http.ResponseWriter, r *http.Request, filename string) {
@@ -617,7 +668,7 @@ func (a *App) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		writeConfigValidation(w, http.StatusBadRequest, issues)
 		return
 	}
-	if err := a.applyConfig(newCfg, true); err != nil {
+	if err := a.applyConfigLocked(newCfg, true); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error(), "config_apply_failed")
 		return
 	}
@@ -716,7 +767,7 @@ func writeConfigValidation(w http.ResponseWriter, status int, issues []config.Va
 
 func (a *App) handleReloadConfig(w http.ResponseWriter, _ *http.Request) {
 	if a.Config.Path == "" {
-		if err := a.applyConfig(a.Config, false); err != nil {
+		if err := a.applyConfigLocked(a.Config, false); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error(), "config_reload_failed")
 			return
 		}
@@ -728,7 +779,7 @@ func (a *App) handleReloadConfig(w http.ResponseWriter, _ *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error(), "config_reload_failed")
 		return
 	}
-	if err := a.applyConfig(newCfg, false); err != nil {
+	if err := a.applyConfigLocked(newCfg, false); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error(), "config_apply_failed")
 		return
 	}
@@ -736,6 +787,12 @@ func (a *App) handleReloadConfig(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (a *App) applyConfig(newCfg *config.Config, persist bool) error {
+	a.runtimeMu.Lock()
+	defer a.runtimeMu.Unlock()
+	return a.applyConfigLocked(newCfg, persist)
+}
+
+func (a *App) applyConfigLocked(newCfg *config.Config, persist bool) error {
 	newRouter, err := proxy.NewRouter(newCfg)
 	if err != nil {
 		return err
@@ -845,14 +902,21 @@ func (a *App) handleAdminModels(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "admin password required for protected model", "permission_error")
 		return
 	}
-	replaced, err := a.RouterRegister(entry, fallbacks)
+	_, replaced := a.Config.FindLegacyModel(name)
+	raw := configMutationRaw(a.Config)
+	candidate, err := config.FromMap(raw, a.Config.Path)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error(), "invalid_request_error")
+		writeError(w, http.StatusBadRequest, err.Error(), "invalid_config")
 		return
 	}
-	a.Config.UpsertLegacyModel(entry, fallbacks)
-	if err := a.Config.Save(""); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error(), "config_save_failed")
+	candidate.UpsertLegacyModel(entry, fallbacks)
+	newCfg, issues := a.validateConfig(candidate.Raw)
+	if hasValidationErrors(issues) {
+		writeConfigValidation(w, http.StatusBadRequest, issues)
+		return
+	}
+	if err := a.applyConfigLocked(newCfg, true); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error(), "config_apply_failed")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "model": name, "replaced": replaced})
@@ -911,14 +975,36 @@ func (a *App) RouterRegister(entry config.ModelEntry, fallbacks []string) (bool,
 
 func (a *App) hasAdminPassword(r *http.Request) bool {
 	expected := a.expectedAdminPassword()
-	if expected == "" {
+	if expected == "" || r == nil {
 		return false
 	}
 	provided := r.Header.Get("x-admin-password")
 	if provided == "" {
 		provided = r.URL.Query().Get("admin_password")
 	}
-	return provided == expected
+	return subtle.ConstantTimeCompare([]byte(provided), []byte(expected)) == 1
+}
+
+func sensitiveAdminAPIRequest(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	path := r.URL.Path
+	return path == "/admin/config" ||
+		path == "/admin/config/validate" ||
+		path == "/admin/config/reload" ||
+		path == "/admin/logs" ||
+		strings.HasPrefix(path, "/admin/logs/") ||
+		strings.HasPrefix(path, "/admin/traces/") ||
+		path == "/api/logs" ||
+		strings.HasPrefix(path, "/api/logs/")
+}
+
+func (a *App) requireConfiguredAdminPassword(w http.ResponseWriter, r *http.Request, subject string) bool {
+	if a.expectedAdminPassword() == "" {
+		return true
+	}
+	return a.requireAdminPassword(w, r, subject)
 }
 
 func (a *App) expectedAdminPassword() string {
@@ -1165,7 +1251,12 @@ func (a *App) handleHealth(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (a *App) ActiveHealthCheckOnce(ctx context.Context) []proxy.BackendHealth {
-	if a == nil || a.Router == nil {
+	if a == nil {
+		return nil
+	}
+	a.runtimeMu.RLock()
+	defer a.runtimeMu.RUnlock()
+	if a.Router == nil {
 		return nil
 	}
 	return a.Router.ActiveHealthCheckOnce(ctx)
@@ -1176,6 +1267,7 @@ func (a *App) StartHealthChecks(ctx context.Context) <-chan struct{} {
 	go func() {
 		defer close(done)
 		for {
+			a.runtimeMu.RLock()
 			router := a.Router
 			interval := time.Second
 			if router != nil && router.ActiveHealthChecks {
@@ -1185,6 +1277,7 @@ func (a *App) StartHealthChecks(ctx context.Context) <-chan struct{} {
 					interval = 15 * time.Second
 				}
 			}
+			a.runtimeMu.RUnlock()
 			timer := time.NewTimer(interval)
 			select {
 			case <-ctx.Done():
@@ -1359,7 +1452,7 @@ func (a *App) handleJSONProxy(w http.ResponseWriter, r *http.Request, validate v
 		CaptureParsedResponse: a.captureParsedResponseSidecars(),
 		ParsedStreamCapture:   parsedStreamCapture,
 	}
-	forwardResult, err := a.Router.ForwardWithOptions(r.Context(), modelName, r.URL.Path, r.URL.RawQuery, body, payload, isStream, r.Header, forwardOpts)
+	forwardResult, err := a.Router.ForwardWithOptions(r.Context(), modelName, r.URL.Path, r.URL.RawQuery, body, payload, isStream, a.outboundHeaders(r), forwardOpts)
 	a.recordBackendAttemptMetrics(endpointKind, modelName, isStream, forwardResult)
 	if err != nil {
 		if parsedStreamSidecars != nil {
@@ -1541,7 +1634,7 @@ func (a *App) backendAttemptLimiter(ctx context.Context, backend proxy.Backend) 
 	if limits.RPS <= 0 && limits.RPM <= 0 && limits.Concurrency <= 0 {
 		return nil, nil
 	}
-	scope := "backend:" + backend.Name
+	scope := backendAdmissionScope(backend)
 	if err := a.Admission.CheckRateLimit(scope, "", admission.RateLimits{RPS: limits.RPS, RPM: limits.RPM}); err != nil {
 		return nil, err
 	}
@@ -1569,7 +1662,14 @@ func (a *App) backendRateLimitAvailable(backend proxy.Backend) bool {
 	if limits.RPS <= 0 && limits.RPM <= 0 {
 		return true
 	}
-	return a.Admission.RateLimitAvailable("backend:"+backend.Name, "", admission.RateLimits{RPS: limits.RPS, RPM: limits.RPM})
+	return a.Admission.RateLimitAvailable(backendAdmissionScope(backend), "", admission.RateLimits{RPS: limits.RPS, RPM: limits.RPM})
+}
+
+func backendAdmissionScope(backend proxy.Backend) string {
+	if backend.RateLimitScope != "" {
+		return backend.RateLimitScope
+	}
+	return "backend:" + backend.Name
 }
 
 func (a *App) backendQuotaAvailability(estimatedTokens int) proxy.BackendAvailability {
@@ -1623,6 +1723,10 @@ func (a *App) writeBackendForwardError(w http.ResponseWriter, err error) (int, b
 	if errors.Is(err, admission.ErrQueueTimeout) {
 		writeError(w, http.StatusTooManyRequests, "Backend concurrency queue timed out", "concurrency_limit_exceeded")
 		return http.StatusTooManyRequests, true
+	}
+	if errors.Is(err, admission.ErrClientDisconnected) || errors.Is(err, context.Canceled) {
+		w.WriteHeader(499)
+		return 499, true
 	}
 	return 0, false
 }
@@ -1678,6 +1782,23 @@ func (a *App) handlePassthrough(w http.ResponseWriter, r *http.Request) {
 			})
 		}()
 	}
+	var pctx policy.Context
+	if a != nil && a.Config != nil && a.Config.AppKeys.Enabled {
+		policyCtx, policySpan := a.startProxyPhase(r.Context(), observability.PhasePolicy, endpointKind, model, false)
+		var err error
+		pctx, err = a.Policy.ValidateRequest(r.WithContext(policyCtx), model)
+		if err != nil {
+			status, _, code := a.policyErrorDetails(err)
+			policySpan.End(observability.SpanResult{Outcome: observability.OutcomeError, StatusCode: status, Error: err})
+			requestStatus = status
+			requestErr = err
+			writeError(w, status, err.Error(), code)
+			return
+		}
+		policySpan.End(observability.SpanResult{Outcome: observability.OutcomeSuccess})
+		requestSpan.SetKeyScope(observability.KeyScope(pctx.Authenticated, pctx.KeyID, pctx.GroupID))
+		r = requestWithRequiredHeaderAttribution(r, pctx.RequiredHeaders)
+	}
 	backend, ok := a.Router.GetPassthroughBackend(model)
 	if !ok {
 		requestStatus = http.StatusNotFound
@@ -1691,7 +1812,50 @@ func (a *App) handlePassthrough(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "failed to read request body", "invalid_request_error")
 		return
 	}
+	limits := a.effectiveLimits(model, pctx)
+	var clientSlot *admission.Slot
+	if limits.RPS > 0 || limits.RPM > 0 || limits.Concurrency > 0 {
+		_, admissionSpan := a.startProxyPhase(r.Context(), observability.PhaseAdmission, endpointKind, model, false)
+		if err := a.Admission.CheckRateLimit(pctx.LimitKeyID(), model, admission.RateLimits{RPS: limits.RPS, RPM: limits.RPM}); err != nil {
+			admissionSpan.End(observability.SpanResult{Outcome: observability.OutcomeError, StatusCode: http.StatusTooManyRequests, Error: err})
+			requestStatus = http.StatusTooManyRequests
+			requestErr = err
+			writeError(w, http.StatusTooManyRequests, "Rate limit exceeded", "rate_limit_exceeded")
+			return
+		}
+		clientSlot, err = a.acquireSlot(r.Context(), model, pctx, limits)
+		if err != nil {
+			requestErr = err
+			if errors.Is(err, admission.ErrQueueTimeout) {
+				admissionSpan.End(observability.SpanResult{Outcome: observability.OutcomeError, StatusCode: http.StatusTooManyRequests, Error: err})
+				requestStatus = http.StatusTooManyRequests
+				writeError(w, http.StatusTooManyRequests, "Request queued too long - concurrency limit reached", "concurrency_limit_exceeded")
+			} else {
+				admissionSpan.End(observability.SpanResult{Outcome: observability.OutcomeError, StatusCode: 499, Error: err})
+				requestStatus = 499
+				w.WriteHeader(499)
+			}
+			return
+		}
+		defer clientSlot.Release()
+		admissionSpan.End(observability.SpanResult{Outcome: observability.OutcomeSuccess})
+	}
 	attemptCtx, attemptSpan := a.startProxyAttemptPhase(r.Context(), endpointKind, model, backend.Name, 1, 0, false)
+	releaseBackend, err := a.backendAttemptLimiter(attemptCtx, backend)
+	if err != nil {
+		attemptSpan.End(observability.SpanResult{Outcome: observability.OutcomeBlocked, BackendName: backend.Name, Error: err})
+		requestErr = err
+		if status, ok := a.writeBackendForwardError(w, err); ok {
+			requestStatus = status
+		} else {
+			requestStatus = http.StatusBadGateway
+			writeError(w, http.StatusBadGateway, err.Error(), "backend_error")
+		}
+		return
+	}
+	if releaseBackend != nil {
+		defer releaseBackend()
+	}
 	req, err := http.NewRequestWithContext(attemptCtx, r.Method, backend.BuildURL("/"+suffix, r.URL.RawQuery), bytes.NewReader(body))
 	if err != nil {
 		attemptSpan.End(observability.SpanResult{Outcome: observability.OutcomeError, BackendName: backend.Name, StatusCode: http.StatusBadGateway, Error: err})
@@ -1700,10 +1864,10 @@ func (a *App) handlePassthrough(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, err.Error(), "backend_error")
 		return
 	}
-	req.Header = proxy.BuildOutboundHeaders(r.Header, backend.APIKey, false, backend.APIType, backend.AnthropicVersion)
+	req.Header = proxy.BuildOutboundHeaders(a.outboundHeaders(r), backend.APIKey, false, backend.APIType, backend.AnthropicVersion)
 	client := a.Router.Client
 	if client == nil {
-		client = http.DefaultClient
+		client = &http.Client{Timeout: backend.TimeoutOrDefault()}
 	}
 	releaseAttempt := a.Router.TrackBackendAttempt(backend.Name)
 	attemptStarted := time.Now()
@@ -1738,6 +1902,26 @@ func (a *App) handlePassthrough(w http.ResponseWriter, r *http.Request) {
 	requestStatus = resp.StatusCode
 	requestOutcome = responseOutcome
 	requestErr = copyErr
+}
+
+// outboundHeaders removes the proxy's own credential header after policy has
+// consumed it. Authorization is always replaced by proxy.BuildOutboundHeaders;
+// a configurable app-key header needs the same treatment to avoid disclosing
+// client credentials to an upstream service.
+func (a *App) outboundHeaders(r *http.Request) http.Header {
+	if r == nil {
+		return nil
+	}
+	if a == nil || a.Config == nil || !a.Config.AppKeys.Enabled {
+		return r.Header
+	}
+	headerName := strings.TrimSpace(a.Config.AppKeys.HeaderName)
+	if headerName == "" {
+		headerName = config.DefaultAppKeyHeader
+	}
+	headers := r.Header.Clone()
+	headers.Del(headerName)
+	return headers
 }
 
 func (a *App) storePayload(entry LogEntry, r *http.Request, requestBody []byte, responseHeaders http.Header, responseBody []byte) string {
@@ -1983,13 +2167,8 @@ func seedQuotaFromLogDBAt(ctx context.Context, manager *quota.Manager, store *lo
 	for _, item := range usage {
 		tokens := item.TotalTokens
 		limits := effectiveLimitsForStoredQuotaUsage(cfg, item.AppKeyID, item.ModelName)
-		resetMode := quota.NormalizeResetMode(limits.TokenQuotaResetMode)
-		spec := quota.WindowSpec{}
-		if isCalendarResetMode(resetMode) {
-			since := quota.WindowStartAt(resetMode, now)
-			if since.IsZero() {
-				continue
-			}
+		spec := quotaWindowSpec(limits)
+		if since := quotaWindowStartAt(spec, now); !since.IsZero() {
 			totals, ok := usageSince[since]
 			if !ok {
 				windowUsage, err := store.TokenUsageByQuotaScopeSince(ctx, since)
@@ -2003,7 +2182,6 @@ func seedQuotaFromLogDBAt(ctx context.Context, manager *quota.Manager, store *lo
 			if tokens <= 0 {
 				continue
 			}
-			spec = quota.WindowSpec{ResetMode: resetMode}
 		}
 		keyID := item.AppKeyID
 		if cfg != nil {
@@ -2012,13 +2190,13 @@ func seedQuotaFromLogDBAt(ctx context.Context, manager *quota.Manager, store *lo
 		scope := quotaSeedScope{keyID: keyID, modelName: item.ModelName}
 		current := seedUsage[scope]
 		current.tokens += tokens
-		if spec.ResetMode != "" {
+		if quotaWindowActive(spec) {
 			current.spec = spec
 		}
 		seedUsage[scope] = current
 	}
 	for scope, item := range seedUsage {
-		if item.spec.ResetMode != "" {
+		if quotaWindowActive(item.spec) {
 			manager.SeedWithWindowSpecAt(scope.keyID, scope.modelName, item.tokens, item.spec, now)
 			continue
 		}
@@ -2067,6 +2245,9 @@ func configuredBackendQuotaLimits(cfg *config.Config) map[string]config.LimitsCo
 	out := map[string]config.LimitsConfig{}
 	if cfg == nil {
 		return out
+	}
+	if expanded, err := cfg.ExpandedRouting(); err == nil {
+		cfg = expanded
 	}
 	providers := map[string]config.ProviderEntry{}
 	for _, provider := range cfg.Providers {
