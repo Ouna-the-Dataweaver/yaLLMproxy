@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -40,9 +41,10 @@ func main() {
 	}
 	if envPort := os.Getenv("YALLMP_PORT"); envPort != "" {
 		parsed, err := strconv.Atoi(envPort)
-		if err == nil {
-			port = parsed
+		if err != nil || parsed < 1 || parsed > 65535 {
+			log.Fatalf("invalid YALLMP_PORT %q: expected an integer from 1 to 65535", envPort)
 		}
+		port = parsed
 	}
 	if host == "" {
 		host = config.DefaultServerHost
@@ -52,7 +54,7 @@ func main() {
 	}
 
 	srv := &http.Server{
-		Addr:              fmt.Sprintf("%s:%d", host, port),
+		Addr:              net.JoinHostPort(host, strconv.Itoa(port)),
 		Handler:           app,
 		ReadHeaderTimeout: 15 * time.Second,
 	}
@@ -92,25 +94,34 @@ func main() {
 		}()
 	}
 
+	var runErr error
 	select {
 	case <-ctx.Done():
 		log.Printf("shutdown requested")
 	case err := <-errCh:
 		if !errors.Is(err, http.ErrServerClosed) {
-			log.Fatalf("server failed: %v", err)
+			runErr = fmt.Errorf("server failed: %w", err)
 		}
-		return
 	}
+	stop()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
-		log.Fatalf("shutdown failed: %v", err)
+		runErr = errors.Join(runErr, fmt.Errorf("shutdown failed: %w", err))
 	}
 	if err := app.CloseInferenceCache(); err != nil {
 		log.Printf("inference cache shutdown failed: %v", err)
 	}
+	if app.LogDB != nil {
+		if err := app.LogDB.Close(); err != nil {
+			log.Printf("log database shutdown failed: %v", err)
+		}
+	}
 	if err := app.ShutdownObservability(shutdownCtx); err != nil {
 		log.Printf("observability shutdown failed: %v", err)
+	}
+	if runErr != nil {
+		log.Fatal(runErr)
 	}
 }

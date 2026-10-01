@@ -1437,7 +1437,56 @@ func ExtractUsageAndOutcome(body []byte) (map[string]any, string, bool) {
 			}
 		}
 	}
+	if content, ok := payload["content"].([]any); ok {
+		for _, raw := range content {
+			if block, ok := toMap(raw); ok && cleanString(block["type"]) == "tool_use" {
+				isToolCall = true
+				break
+			}
+		}
+	}
+	if output, ok := payload["output"].([]any); ok {
+		for _, raw := range output {
+			if item, ok := toMap(raw); ok && cleanString(item["type"]) == "function_call" {
+				isToolCall = true
+				break
+			}
+		}
+	}
+	if stopReason == "" {
+		stopReason = cleanString(payload["stop_reason"])
+	}
+	stopReason = canonicalStopReason(stopReason)
+	if isToolCall {
+		stopReason = "tool_calls"
+	} else if stopReason == "" {
+		switch cleanString(payload["status"]) {
+		case "completed":
+			stopReason = "stop"
+		case "incomplete":
+			if details, ok := toMap(payload["incomplete_details"]); ok {
+				stopReason = canonicalStopReason(cleanString(details["reason"]))
+			}
+		case "failed":
+			if failure, ok := toMap(payload["error"]); ok {
+				stopReason = canonicalStopReason(cleanString(failure["code"]))
+			}
+		}
+	}
 	return usage, stopReason, isToolCall
+}
+
+func canonicalStopReason(reason string) string {
+	switch strings.TrimSpace(reason) {
+	case "tool_use", "function_call", "tool_call", "tool_calls":
+		return "tool_calls"
+	case "end_turn", "stop_sequence", "completed", "stop":
+		return "stop"
+	case "max_tokens", "max_output_tokens", "length":
+		return "length"
+	default:
+		return strings.TrimSpace(reason)
+	}
 }
 
 func toMap(value any) (map[string]any, bool) {

@@ -3,13 +3,32 @@ package gigachat
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
+
+type dataErrorReadCloser struct {
+	data []byte
+	err  error
+}
+
+func (r *dataErrorReadCloser) Read(p []byte) (int, error) {
+	if len(r.data) == 0 {
+		return 0, io.EOF
+	}
+	n := copy(p, r.data)
+	r.data = r.data[n:]
+	return n, r.err
+}
+
+func (*dataErrorReadCloser) Close() error { return nil }
 
 func TestBuildCloudAndLocalConfig(t *testing.T) {
 	cloud, err := BuildConfig(map[string]any{
@@ -169,6 +188,105 @@ func TestClientGetsCloudTokenAndConvertsChatResponse(t *testing.T) {
 	}
 }
 
+func TestClientCoalescesConcurrentCloudTokenRefresh(t *testing.T) {
+	var authHits atomic.Int32
+	var chatHits atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/oauth":
+			authHits.Add(1)
+			time.Sleep(25 * time.Millisecond)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"access_token":"shared-token","expires_at":4102444800000}`))
+		case "/api/v1/chat/completions":
+			chatHits.Add(1)
+			if r.Header.Get("Authorization") != "Bearer shared-token" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer upstream.Close()
+	cfg, err := BuildConfig(map[string]any{
+		"api_base": upstream.URL + "/api/v1",
+		"api_key":  "encoded-key",
+		"scope":    DefaultScope,
+		"auth_url": upstream.URL + "/oauth",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := NewBackend(cfg)
+	const requests = 12
+	start := make(chan struct{})
+	errCh := make(chan error, requests)
+	var wg sync.WaitGroup
+	for i := 0; i < requests; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			resp, err := backend.Execute(context.Background(), map[string]any{
+				"messages": []any{map[string]any{"role": "user", "content": "Hello"}},
+			}, false, nil)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			defer resp.Body.Close()
+			if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+				errCh <- err
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		t.Fatal(err)
+	}
+	if got := authHits.Load(); got != 1 {
+		t.Fatalf("auth requests = %d, want 1", got)
+	}
+	if got := chatHits.Load(); got != requests {
+		t.Fatalf("chat requests = %d, want %d", got, requests)
+	}
+}
+
+func TestPrepareGigaChatJSONSchemaBoundsRecursiveRefs(t *testing.T) {
+	schema := map[string]any{
+		"$defs": map[string]any{
+			"node": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"children": map[string]any{
+						"type":  "array",
+						"items": map[string]any{"$ref": "#/$defs/node"},
+					},
+				},
+			},
+		},
+		"$ref": "#/$defs/node",
+	}
+	prepared := PrepareGigaChatJSONSchema(schema)
+	raw, err := json.Marshal(prepared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), `"$ref"`) {
+		t.Fatalf("recursive ref was not bounded: %s", raw)
+	}
+	properties := prepared["properties"].(map[string]any)
+	children := properties["children"].(map[string]any)
+	items := children["items"].(map[string]any)
+	if items["type"] != "object" {
+		t.Fatalf("recursive fallback = %#v", items)
+	}
+}
+
 func TestClientEmulatesToolCallsWhenEnabled(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -275,6 +393,25 @@ func TestClientConvertsStreamingChunks(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	if !strings.Contains(string(body), `"object":"chat.completion.chunk"`) || !strings.Contains(string(body), `"content":"Hi"`) || !strings.Contains(string(body), "data: [DONE]") {
 		t.Fatalf("stream body = %s", body)
+	}
+}
+
+func TestStreamReadCloserDeliversDataBeforeSourceError(t *testing.T) {
+	sentinel := errors.New("source failed")
+	reader := newStreamReadCloser(&dataErrorReadCloser{
+		data: []byte(`data: {"choices":[{"delta":{"content":"Hello"},"index":0}]}` + "\n\n"),
+		err:  sentinel,
+	}, "GigaChat-Max")
+	buf := make([]byte, 4096)
+	n, err := reader.Read(buf)
+	if err != nil {
+		t.Fatalf("first read error = %v", err)
+	}
+	if !strings.Contains(string(buf[:n]), "Hello") {
+		t.Fatalf("first read = %q", buf[:n])
+	}
+	if _, err := reader.Read(buf); !errors.Is(err, sentinel) {
+		t.Fatalf("second read error = %v, want %v", err, sentinel)
 	}
 }
 

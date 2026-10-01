@@ -1,6 +1,7 @@
 package forwarder
 
 import (
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -88,6 +89,38 @@ func TestNonStreamResponseStripsEncodingAndLength(t *testing.T) {
 	}
 }
 
+func TestNonStreamResponsePreservesEncodingWhenClientRequestedIt(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var buf bytes.Buffer
+		gz := gzip.NewWriter(&buf)
+		_, _ = gz.Write([]byte("hello"))
+		_ = gz.Close()
+		w.Header().Set("Content-Encoding", "gzip")
+		w.Header().Set("Content-Length", fmt.Sprint(buf.Len()))
+		_, _ = w.Write(buf.Bytes())
+	}))
+	defer upstream.Close()
+	forwarder := testForwarder(t, upstream.URL, true)
+	req := httptest.NewRequest(http.MethodGet, "http://forwarder.local/payload", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	resp := httptest.NewRecorder()
+	forwarder.ServeHTTP(resp, req)
+	if got := resp.Header().Get("Content-Encoding"); got != "gzip" {
+		t.Fatalf("content-encoding = %q", got)
+	}
+	reader, err := gzip.NewReader(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(decoded) != "hello" {
+		t.Fatalf("decoded body = %q", decoded)
+	}
+}
+
 func TestEventStreamIsForwardedWithoutBuffering(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -107,6 +140,56 @@ func TestEventStreamIsForwardedWithoutBuffering(t *testing.T) {
 	if body := resp.Body.String(); !strings.Contains(body, "data: one") || !strings.Contains(body, "data: two") {
 		t.Fatalf("body = %q", body)
 	}
+}
+
+func TestEventStreamFlushesEachUpstreamChunk(t *testing.T) {
+	release := make(chan struct{}, 1)
+	defer func() {
+		select {
+		case release <- struct{}{}:
+		default:
+		}
+	}()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: one\n\n"))
+		w.(http.Flusher).Flush()
+		<-release
+		_, _ = w.Write([]byte("data: two\n\n"))
+	}))
+	defer upstream.Close()
+	forwarderServer := httptest.NewServer(testForwarder(t, upstream.URL, true))
+	defer forwarderServer.Close()
+
+	type responseResult struct {
+		resp *http.Response
+		err  error
+	}
+	responseCh := make(chan responseResult, 1)
+	go func() {
+		resp, err := http.Get(forwarderServer.URL + "/events")
+		responseCh <- responseResult{resp: resp, err: err}
+	}()
+	var resp *http.Response
+	select {
+	case result := <-responseCh:
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		resp = result.resp
+	case <-time.After(time.Second):
+		t.Fatal("client did not receive the first flushed event")
+	}
+	defer resp.Body.Close()
+	reader := bufio.NewReader(resp.Body)
+	first, err := reader.ReadString('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != "data: one\n" {
+		t.Fatalf("first event line = %q", first)
+	}
+	release <- struct{}{}
 }
 
 func TestSettingsFromConfigAndEnv(t *testing.T) {
@@ -132,6 +215,20 @@ func TestStartServerShutsDownWithContext(t *testing.T) {
 	_ = server.Shutdown(context.Background())
 	if err := <-errCh; err != nil {
 		t.Fatalf("server error = %v", err)
+	}
+}
+
+func TestStartServerWithCanceledContextDoesNotStartLate(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, errCh := StartServer(ctx, Settings{ListenHost: "127.0.0.1", ListenPort: 0, TargetScheme: "http", TargetHost: "127.0.0.1", TargetPort: 1})
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("server error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("server started after its context was already canceled")
 	}
 }
 
@@ -186,6 +283,61 @@ func TestTCPForwarderProxiesBytesAndShutsDownWithContext(t *testing.T) {
 	_ = conn.Close()
 	<-targetDone
 
+	cancel()
+	if err := <-errCh; err != nil {
+		t.Fatalf("tcp server error = %v", err)
+	}
+}
+
+func TestTCPForwarderPreservesHalfCloseForResponse(t *testing.T) {
+	target, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer target.Close()
+	targetDone := make(chan struct{})
+	go func() {
+		defer close(targetDone)
+		conn, err := target.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		request, err := io.ReadAll(conn)
+		if err == nil && string(request) == "ping" {
+			_, _ = conn.Write([]byte("pong"))
+		}
+	}()
+	targetHost, targetPort := splitAddr(t, target.Addr().String())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	server, errCh := StartTCPServer(ctx, TCPSettings{
+		ListenHost:  "127.0.0.1",
+		ListenPort:  0,
+		TargetHost:  targetHost,
+		TargetPort:  targetPort,
+		DialTimeout: time.Second,
+	})
+	conn, err := net.Dial("tcp", server.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := conn.Write([]byte("ping")); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.(*net.TCPConn).CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+	response, err := io.ReadAll(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(response) != "pong" {
+		t.Fatalf("response after half-close = %q", response)
+	}
+	<-targetDone
 	cancel()
 	if err := <-errCh; err != nil {
 		t.Fatalf("tcp server error = %v", err)

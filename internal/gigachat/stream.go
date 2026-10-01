@@ -13,6 +13,8 @@ type streamReadCloser struct {
 	decoder      sseDecoder
 	buffer       []byte
 	doneSent     bool
+	terminal     bool
+	pending      error
 }
 
 func newStreamReadCloser(src io.ReadCloser, requestModel string) io.ReadCloser {
@@ -20,7 +22,10 @@ func newStreamReadCloser(src io.ReadCloser, requestModel string) io.ReadCloser {
 }
 
 func (s *streamReadCloser) Read(p []byte) (int, error) {
-	for len(s.buffer) == 0 {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	for len(s.buffer) == 0 && !s.terminal {
 		chunk := make([]byte, 4096)
 		n, err := s.src.Read(chunk)
 		if n > 0 {
@@ -33,16 +38,26 @@ func (s *streamReadCloser) Read(p []byte) (int, error) {
 					s.doneSent = true
 					s.buffer = append(s.buffer, []byte("data: [DONE]\n\n")...)
 				}
+			} else {
+				s.pending = err
 			}
-			if len(s.buffer) == 0 {
-				return 0, err
-			}
-			break
+			s.terminal = true
+		}
+		if n == 0 && err == nil {
+			return 0, nil
 		}
 	}
-	n := copy(p, s.buffer)
-	s.buffer = s.buffer[n:]
-	return n, nil
+	if len(s.buffer) > 0 {
+		n := copy(p, s.buffer)
+		s.buffer = s.buffer[n:]
+		return n, nil
+	}
+	if s.pending != nil {
+		err := s.pending
+		s.pending = nil
+		return 0, err
+	}
+	return 0, io.EOF
 }
 
 func (s *streamReadCloser) Close() error {

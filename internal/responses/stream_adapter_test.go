@@ -2,10 +2,28 @@ package responses
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"reflect"
 	"strings"
 	"testing"
 )
+
+type dataErrorReadCloser struct {
+	data []byte
+	err  error
+}
+
+func (r *dataErrorReadCloser) Read(p []byte) (int, error) {
+	if len(r.data) == 0 {
+		return 0, io.EOF
+	}
+	n := copy(p, r.data)
+	r.data = r.data[n:]
+	return n, r.err
+}
+
+func (*dataErrorReadCloser) Close() error { return nil }
 
 func TestStreamAdapterTextUsageAndLifecycle(t *testing.T) {
 	adapter := NewStreamAdapter("resp_test", "alpha", map[string]any{
@@ -255,6 +273,25 @@ func TestStreamAdapterIgnoresMalformedAndUnknownEvents(t *testing.T) {
 	final := events[len(events)-1]["data"].(map[string]any)["response"].(map[string]any)
 	if final["status"] != "completed" || final["output_text"] != "ok" {
 		t.Fatalf("final = %#v", final)
+	}
+}
+
+func TestStreamReadCloserDeliversDataBeforeSourceError(t *testing.T) {
+	sentinel := errors.New("source failed")
+	reader := NewStreamReadCloser(&dataErrorReadCloser{
+		data: []byte(`data: {"choices":[{"delta":{"content":"Hello"},"index":0}]}` + "\n\n"),
+		err:  sentinel,
+	}, "resp_error", "alpha", nil)
+	buf := make([]byte, 8192)
+	n, err := reader.Read(buf)
+	if err != nil {
+		t.Fatalf("first read error = %v", err)
+	}
+	if !strings.Contains(string(buf[:n]), "Hello") {
+		t.Fatalf("first read = %q", buf[:n])
+	}
+	if _, err := reader.Read(buf); !errors.Is(err, sentinel) {
+		t.Fatalf("second read error = %v, want %v", err, sentinel)
 	}
 }
 

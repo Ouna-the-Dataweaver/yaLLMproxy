@@ -1,8 +1,8 @@
 package forwarder
 
 import (
-	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -179,17 +179,13 @@ func NewHandler(settings Settings) *Handler {
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, "Failed to read request body", http.StatusBadGateway)
-		return
-	}
 	targetURL := h.targetURL(r)
-	req, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, r.Body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
+	req.ContentLength = r.ContentLength
 	req.Header = FilterHeaders(r.Header, h.Settings.PreserveHost)
 	if h.Settings.PreserveHost {
 		req.Host = r.Host
@@ -206,25 +202,28 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer resp.Body.Close()
 
 	responseHeaders := FilterHeaders(resp.Header, true)
-	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
-	if strings.Contains(contentType, "text/event-stream") {
-		copyHeaders(w.Header(), responseHeaders)
-		w.Header().Set("Connection", "close")
-		w.WriteHeader(resp.StatusCode)
-		_, _ = io.Copy(w, resp.Body)
-		return
-	}
-
-	content, err := io.ReadAll(resp.Body)
-	if err != nil {
-		http.Error(w, "Failed to read upstream response", http.StatusBadGateway)
-		return
-	}
-	responseHeaders.Del("Content-Length")
-	responseHeaders.Del("Content-Encoding")
 	copyHeaders(w.Header(), responseHeaders)
 	w.WriteHeader(resp.StatusCode)
-	_, _ = w.Write(content)
+	if strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
+		if flusher, ok := w.(http.Flusher); ok {
+			_, _ = io.Copy(flushingWriter{Writer: w, Flusher: flusher}, resp.Body)
+			return
+		}
+	}
+	_, _ = io.Copy(w, resp.Body)
+}
+
+type flushingWriter struct {
+	io.Writer
+	http.Flusher
+}
+
+func (w flushingWriter) Write(p []byte) (int, error) {
+	n, err := w.Writer.Write(p)
+	if n > 0 {
+		w.Flusher.Flush()
+	}
+	return n, err
 }
 
 func (h *Handler) targetURL(r *http.Request) string {
@@ -247,9 +246,15 @@ func StartServer(ctx context.Context, settings Settings) (*http.Server, <-chan e
 		ReadHeaderTimeout: 15 * time.Second,
 	}
 	errCh := make(chan error, 1)
+	listener, err := net.Listen("tcp", settings.ListenAddr())
+	if err != nil {
+		errCh <- err
+		close(errCh)
+		return server, errCh
+	}
 	go func() {
-		err := server.ListenAndServe()
-		if err == http.ErrServerClosed {
+		err := server.Serve(listener)
+		if err == http.ErrServerClosed || (ctx.Err() != nil && errors.Is(err, net.ErrClosed)) {
 			err = nil
 		}
 		errCh <- err
@@ -260,6 +265,7 @@ func StartServer(ctx context.Context, settings Settings) (*http.Server, <-chan e
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = server.Shutdown(shutdownCtx)
+		_ = listener.Close()
 	}()
 	return server, errCh
 }
@@ -329,19 +335,28 @@ func handleTCPClient(ctx context.Context, settings TCPSettings, client net.Conn,
 	done := make(chan struct{}, 2)
 	go func() {
 		pipeTCP(client, target, settings.BufferSize)
+		closeWrite(target)
 		done <- struct{}{}
 	}()
 	go func() {
 		pipeTCP(target, client, settings.BufferSize)
+		closeWrite(client)
 		done <- struct{}{}
 	}()
-	select {
-	case <-ctx.Done():
-	case <-done:
+	completed := 0
+	for completed < 2 {
+		select {
+		case <-ctx.Done():
+			_ = client.Close()
+			_ = target.Close()
+			for completed < 2 {
+				<-done
+				completed++
+			}
+		case <-done:
+			completed++
+		}
 	}
-	_ = client.Close()
-	_ = target.Close()
-	<-done
 }
 
 func pipeTCP(src net.Conn, dst net.Conn, bufsize int) int64 {
@@ -355,6 +370,12 @@ func pipeTCP(src net.Conn, dst net.Conn, bufsize int) int64 {
 func setNoDelay(conn net.Conn) {
 	if tcp, ok := conn.(*net.TCPConn); ok {
 		_ = tcp.SetNoDelay(true)
+	}
+}
+
+func closeWrite(conn net.Conn) {
+	if tcp, ok := conn.(interface{ CloseWrite() error }); ok {
+		_ = tcp.CloseWrite()
 	}
 }
 

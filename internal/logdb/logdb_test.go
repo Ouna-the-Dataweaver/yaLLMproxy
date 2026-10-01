@@ -237,6 +237,43 @@ func TestExtractUsageAndOutcome(t *testing.T) {
 	if usage["prompt_tokens"] != float64(5) || usage["total_tokens"] != float64(12) {
 		t.Fatalf("usage = %#v", usage)
 	}
+
+	for _, tc := range []struct {
+		name       string
+		body       string
+		wantReason string
+		wantTool   bool
+	}{
+		{
+			name:       "messages tool use",
+			body:       `{"stop_reason":"tool_use","content":[{"type":"tool_use","id":"toolu_1"}],"usage":{"input_tokens":2,"output_tokens":3}}`,
+			wantReason: "tool_calls",
+			wantTool:   true,
+		},
+		{
+			name:       "messages max tokens",
+			body:       `{"stop_reason":"max_tokens","content":[{"type":"text","text":"partial"}]}`,
+			wantReason: "length",
+		},
+		{
+			name:       "responses function call",
+			body:       `{"status":"completed","output":[{"type":"function_call","call_id":"call_1"}]}`,
+			wantReason: "tool_calls",
+			wantTool:   true,
+		},
+		{
+			name:       "responses incomplete",
+			body:       `{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[]}`,
+			wantReason: "length",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, reason, tool := ExtractUsageAndOutcome([]byte(tc.body))
+			if reason != tc.wantReason || tool != tc.wantTool {
+				t.Fatalf("reason=%q tool=%v, want %q/%v", reason, tool, tc.wantReason, tc.wantTool)
+			}
+		})
+	}
 }
 
 func TestStoreMapsResponsesUsageColumns(t *testing.T) {

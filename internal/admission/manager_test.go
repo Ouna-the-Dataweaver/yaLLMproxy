@@ -1,6 +1,7 @@
 package admission
 
 import (
+	"container/heap"
 	"context"
 	"errors"
 	"sync"
@@ -188,5 +189,39 @@ func TestRateLimitAvailableDoesNotConsumeBudget(t *testing.T) {
 	}
 	if err := m.CheckRateLimit("key", "model", limits); err != nil {
 		t.Fatalf("check after peek: %v", err)
+	}
+}
+
+func TestCancelReclaimsRequestPromotedDuringCancellation(t *testing.T) {
+	m := NewManager()
+	st := m.getState("key", 1, 100)
+	promoted := &queuedRequest{
+		priority: 100,
+		seq:      1,
+		scope:    "key",
+		ready:    make(chan struct{}),
+		index:    -1,
+	}
+	st.active[promoted.seq] = struct{}{}
+	next := &queuedRequest{
+		priority: 100,
+		seq:      2,
+		scope:    "key",
+		ready:    make(chan struct{}),
+	}
+	heap.Push(&m.waiting, next)
+
+	m.cancel(promoted)
+
+	select {
+	case <-next.ready:
+	default:
+		t.Fatal("next queued request was not promoted after cancelled slot was reclaimed")
+	}
+	if _, ok := st.active[promoted.seq]; ok {
+		t.Fatal("cancelled promoted request still owns a concurrency slot")
+	}
+	if _, ok := st.active[next.seq]; !ok {
+		t.Fatal("next request does not own the reclaimed slot")
 	}
 }

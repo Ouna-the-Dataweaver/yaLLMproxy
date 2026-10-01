@@ -517,6 +517,7 @@ type StreamReadCloser struct {
 	Adapter *StreamAdapter
 	buffer  []byte
 	eof     bool
+	pending error
 }
 
 func NewStreamReadCloser(inner io.ReadCloser, responseID string, model string, original map[string]any) *StreamReadCloser {
@@ -524,7 +525,10 @@ func NewStreamReadCloser(inner io.ReadCloser, responseID string, model string, o
 }
 
 func (r *StreamReadCloser) Read(p []byte) (int, error) {
-	for len(r.buffer) == 0 && !r.eof {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	for len(r.buffer) == 0 && !r.eof && r.pending == nil {
 		tmp := make([]byte, 32*1024)
 		n, err := r.ReadCloser.Read(tmp)
 		if n > 0 {
@@ -536,13 +540,22 @@ func (r *StreamReadCloser) Read(p []byte) (int, error) {
 				r.eof = true
 				break
 			}
-			return 0, err
+			r.pending = err
+			r.eof = true
+		}
+		if n == 0 && err == nil {
+			return 0, nil
 		}
 	}
-	if len(r.buffer) == 0 && r.eof {
-		return 0, io.EOF
+	if len(r.buffer) > 0 {
+		n := copy(p, r.buffer)
+		r.buffer = r.buffer[n:]
+		return n, nil
 	}
-	n := copy(p, r.buffer)
-	r.buffer = r.buffer[n:]
-	return n, nil
+	if r.pending != nil {
+		err := r.pending
+		r.pending = nil
+		return 0, err
+	}
+	return 0, io.EOF
 }

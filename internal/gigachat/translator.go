@@ -624,6 +624,7 @@ func inlineJSONSchemaRefs(schema map[string]any) map[string]any {
 	} else if rawDefs, ok := root["definitions"].(map[string]any); ok {
 		defs = rawDefs
 	}
+	resolving := map[string]bool{}
 	var resolve func(any) any
 	resolve = func(node any) any {
 		switch typed := node.(type) {
@@ -637,13 +638,25 @@ func inlineJSONSchemaRefs(schema map[string]any) map[string]any {
 			if ref := stringOrEmpty(typed["$ref"]); strings.HasPrefix(ref, "#/$defs/") || strings.HasPrefix(ref, "#/definitions/") {
 				name := strings.TrimPrefix(strings.TrimPrefix(ref, "#/$defs/"), "#/definitions/")
 				if target, ok := defs[name].(map[string]any); ok {
+					if resolving[name] {
+						fallback := map[string]any{"type": "object"}
+						for key, value := range typed {
+							if key != "$ref" {
+								fallback[key] = resolve(value)
+							}
+						}
+						return fallback
+					}
 					merged := cloneMap(target)
 					for key, value := range typed {
 						if key != "$ref" {
 							merged[key] = value
 						}
 					}
-					return resolve(merged)
+					resolving[name] = true
+					resolved := resolve(merged)
+					delete(resolving, name)
+					return resolved
 				}
 			}
 			out := map[string]any{}

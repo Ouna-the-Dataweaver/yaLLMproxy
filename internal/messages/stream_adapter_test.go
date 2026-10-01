@@ -2,9 +2,27 @@ package messages
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"strings"
 	"testing"
 )
+
+type dataErrorReadCloser struct {
+	data []byte
+	err  error
+}
+
+func (r *dataErrorReadCloser) Read(p []byte) (int, error) {
+	if len(r.data) == 0 {
+		return 0, io.EOF
+	}
+	n := copy(p, r.data)
+	r.data = r.data[n:]
+	return n, r.err
+}
+
+func (*dataErrorReadCloser) Close() error { return nil }
 
 func TestStreamAdapterTextUsageAndStop(t *testing.T) {
 	adapter := NewStreamAdapter("msg_test", "alpha")
@@ -230,6 +248,25 @@ func TestStreamAdapterMalformedUnknownAndLengthStop(t *testing.T) {
 	stats := adapter.UsageStats()
 	if stats["input_tokens"] != 6 || stats["output_tokens"] != 7 || stats["total_tokens"] != 13 {
 		t.Fatalf("stats = %#v", stats)
+	}
+}
+
+func TestStreamReadCloserDeliversDataBeforeSourceError(t *testing.T) {
+	sentinel := errors.New("source failed")
+	reader := NewStreamReadCloser(&dataErrorReadCloser{
+		data: []byte(`data: {"choices":[{"delta":{"content":"Hello"},"index":0}]}` + "\n\n"),
+		err:  sentinel,
+	}, "msg_error", "alpha")
+	buf := make([]byte, 4096)
+	n, err := reader.Read(buf)
+	if err != nil {
+		t.Fatalf("first read error = %v", err)
+	}
+	if !strings.Contains(string(buf[:n]), "Hello") {
+		t.Fatalf("first read = %q", buf[:n])
+	}
+	if _, err := reader.Read(buf); !errors.Is(err, sentinel) {
+		t.Fatalf("second read error = %v, want %v", err, sentinel)
 	}
 }
 

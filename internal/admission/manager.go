@@ -310,6 +310,17 @@ func (m *Manager) cancel(q *queuedRequest) {
 	q.cancelled = true
 	if q.index >= 0 && q.index < len(m.waiting) && m.waiting[q.index] == q {
 		heap.Remove(&m.waiting, q.index)
+		return
+	}
+	// The scheduler may have promoted the request and closed ready at the same
+	// instant that its context was cancelled. If the context arm wins the
+	// select in Acquire, the caller never receives a Slot to release. Reclaim
+	// the promoted slot here so that the scope cannot remain blocked forever.
+	if st := m.states[q.scope]; st != nil {
+		if _, active := st.active[q.seq]; active {
+			delete(st.active, q.seq)
+			m.signalNextLocked(q.scope, st)
+		}
 	}
 }
 

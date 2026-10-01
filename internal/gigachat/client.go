@@ -34,6 +34,7 @@ type Backend struct {
 	mu                   sync.Mutex
 	accessToken          string
 	accessTokenExpiresAt time.Time
+	tokenRefresh         chan struct{}
 	defaultClient        *http.Client
 	defaultClientErr     error
 }
@@ -220,22 +221,47 @@ func (b *Backend) headers(ctx context.Context, overrideClient *http.Client) (htt
 }
 
 func (b *Backend) accessTokenForCloud(ctx context.Context, overrideClient *http.Client) (string, error) {
-	b.mu.Lock()
-	if b.accessToken != "" && time.Now().Before(b.accessTokenExpiresAt.Add(-30*time.Second)) {
-		token := b.accessToken
+	for {
+		b.mu.Lock()
+		if b.accessToken != "" && time.Now().Before(b.accessTokenExpiresAt.Add(-30*time.Second)) {
+			token := b.accessToken
+			b.mu.Unlock()
+			return token, nil
+		}
+		if refresh := b.tokenRefresh; refresh != nil {
+			b.mu.Unlock()
+			select {
+			case <-refresh:
+				continue
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		}
+		b.tokenRefresh = make(chan struct{})
 		b.mu.Unlock()
-		return token, nil
-	}
-	b.mu.Unlock()
 
+		token, expiresAt, err := b.fetchCloudAccessToken(ctx, overrideClient)
+		b.mu.Lock()
+		if err == nil {
+			b.accessToken = token
+			b.accessTokenExpiresAt = expiresAt
+		}
+		close(b.tokenRefresh)
+		b.tokenRefresh = nil
+		b.mu.Unlock()
+		return token, err
+	}
+}
+
+func (b *Backend) fetchCloudAccessToken(ctx context.Context, overrideClient *http.Client) (string, time.Time, error) {
 	if b.Config.APIKey == "" {
-		return "", fmt.Errorf("api_key is required for GigaChat cloud mode")
+		return "", time.Time{}, fmt.Errorf("api_key is required for GigaChat cloud mode")
 	}
 	form := url.Values{}
 	form.Set("scope", b.Config.Scope)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, b.Config.AuthURL, strings.NewReader(form.Encode()))
 	if err != nil {
-		return "", err
+		return "", time.Time{}, err
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -243,34 +269,30 @@ func (b *Backend) accessTokenForCloud(ctx context.Context, overrideClient *http.
 	req.Header.Set("Authorization", "Basic "+b.Config.APIKey)
 	client, err := b.client(overrideClient)
 	if err != nil {
-		return "", err
+		return "", time.Time{}, err
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", err
+		return "", time.Time{}, err
 	}
 	defer resp.Body.Close()
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", err
+		return "", time.Time{}, err
 	}
 	if resp.StatusCode >= 400 {
-		return "", UpstreamError{StatusCode: resp.StatusCode, Body: string(respBody)}
+		return "", time.Time{}, UpstreamError{StatusCode: resp.StatusCode, Body: string(respBody)}
 	}
 	var data map[string]any
 	if err := json.Unmarshal(respBody, &data); err != nil {
-		return "", err
+		return "", time.Time{}, err
 	}
 	token := stringOrEmpty(data["access_token"])
 	if token == "" {
-		return "", fmt.Errorf("GigaChat auth response does not contain access_token")
+		return "", time.Time{}, fmt.Errorf("GigaChat auth response does not contain access_token")
 	}
 	expiresAt := normalizeExpiresAt(data["expires_at"])
-	b.mu.Lock()
-	b.accessToken = token
-	b.accessTokenExpiresAt = expiresAt
-	b.mu.Unlock()
-	return token, nil
+	return token, expiresAt, nil
 }
 
 func (b *Backend) client(override *http.Client) (*http.Client, error) {
