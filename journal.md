@@ -3667,3 +3667,56 @@
 - Verification:
   - `git diff --check` passed.
   - `task test` passed.
+
+### 2026-07-09 - Repository status and Markdown audit
+
+- Audited the 15 tracked project Markdown files, 57 ignored `.codex-upgrade/` planning/review artifacts, current code/config/routes, recent commits, branches, worktrees, and local reference checkouts.
+- Confirmed Batch 28 remains the last completed feature pass. Its concurrency-aware routing, Prometheus timing, routing hardening, and GigaChat error-normalization work is present in the Go refactor; the per-feature worktrees are archival and still point at the old pre-integration base.
+- Confirmed the most recent integrated Go work is `50ad609` (admin-password handling and React admin workflow). The chronologically newer GigaChat custom-CA work is on `codex/gigachat-ca-cert-followup`, which is based on the historical Python line; Go does not currently implement `ca_cert`.
+- Refreshed `README.md`, `state.md`, `feature_list_go.md`, `docs/configuration.md`, and `docs/go_feature_gaps.md` to describe that branch boundary and active gap, and corrected feature-list wording that incorrectly called the Python baseline `HEAD`.
+- Verified all four external reference repositories still exist at the revisions recorded in `references.md`.
+- Workspace cleanup findings:
+  - 132 untracked files under top-level `src/`, `tests/`, `scripts/`, and `__pycache__/` were compiled Python bytecode only, not source; they were removed and conventional Python cache rules were added to `.gitignore`.
+  - `.codex-upgrade/` is a small ignored artifact archive and remains useful with the journal; no archive files were changed.
+  - 65 archived upgrade worktrees plus the active worktree remain registered. They were not pruned because worktree removal is destructive and optional.
+  - A Go proxy process was already running from this repository during the audit. It was not started or stopped by the audit.
+- Verification:
+  - `git diff --check` passed.
+  - `task test` passed.
+
+### 2026-07-10 - Go release-readiness and admin UX audit
+
+- Split the rewrite across focused frontend, runtime/core, and harness/provider/forwarder audits, then integrated and reviewed the combined changes.
+- Fixed confirmed correctness and security defects in admission cancellation, runtime config replacement/persistence, rolling quota restore, upstream client-credential filtering, passthrough policy/admission, HTTP/TCP forwarding, GigaChat OAuth/schema handling, Messages/Responses/GigaChat stream read ordering, and canonical non-stream log outcomes.
+- Rebuilt the React Logs workflow around a structured request inspector, complete filters/pagination, readable messages/tools/responses/attempts, raw/copy/download modes, and Trace-to-Request navigation. Admin credentials now use session storage only.
+- Committed and embedded the production frontend bundle so `/admin` is available from the Go binary without a source-tree working directory or runtime Node install.
+- Raised the minimum Go patch toolchain to 1.26.5 after `govulncheck` identified the Go 1.26.4 TLS issue `GO-2026-5856`; npm audit reported no frontend dependency vulnerabilities.
+- Added `task audit`, `task audit:vuln`, `task test:race`, `task vet`, deterministic frontend CI build checks, and `docs/release-readiness.md` with rollout gates and residual risks.
+- Final verification passed: `task audit`, `task audit:vuln` (no vulnerabilities), real `glm_local` smoke, Windows amd64 config/main compilation, npm audit, and `git diff --check`. Live PostgreSQL remained skipped because no disposable DSN was configured.
+
+
+## 2026-09-16 — Simplify providers, nodes, and routing
+
+- Added provider model selections (string IDs or explicit upstream aliases) and
+  named-provider YAML maps, with derived nodes and automatic public model pools.
+  Generated resources never become additional persisted configuration.
+- Preserved legacy model definitions and explicit pool wiring. Added collision
+  checks and kept explicit pool upstream names out of automatic exposure.
+- Added admin provider discovery and bulk selection, standalone node creation,
+  and an effective model/node overview. Advanced wiring/fallback/legacy panels
+  are collapsed. Rebuilt the embedded admin frontend.
+- Changed default selection to use existing conversation and prompt-prefix
+  affinity before balancing, retained explicit affinity opt-out, and added
+  sibling failover. Successful failover rebinds conversation affinity; active
+  streams are never replayed to another node.
+- Corrected provider timeout/adapter overrides and shared selected-provider alias
+  rate/concurrency accounting. Native Messages/Responses pools retain native
+  forwarding when their possible targets are compatible.
+- Added `docs/simple-routing.md` and `configs/config_simple_example.yaml`; the
+  existing local config and pre-existing work were preserved.
+- Headless Chrome exercised read-only discovery, bulk save, automatic pool
+  creation, direct-node addition, and inference with an upstream alias using
+  temporary fake services. Those services were shut down afterward.
+- Final verification passed: `task test`, `task test:race`, `task vet` plus a
+  final static-analysis pass on changed Go packages, `task frontend:build`,
+  `task smoke:fake`, headless Chrome workflow checks, and `git diff --check`.

@@ -108,7 +108,7 @@ Supported features include text/tool output translation, reasoning output items 
 ANY /p1/{model_name}/{path...}
 ```
 
-Routes to models configured with `api_type: passthrough`. The proxy performs minimal HTTP proxying and upstream auth header injection.
+Routes to models configured with `api_type: passthrough`. The proxy preserves the arbitrary method/path/query/body and injects upstream auth. When app keys are enabled it also enforces model access and required-header policy, strips the client credential before forwarding, and applies configured client/backend RPS, RPM, concurrency, queue, and timeout controls. Passthrough does not parse arbitrary response bodies for token-quota accounting.
 
 ## Health
 
@@ -131,6 +131,8 @@ POST /admin/config/reload
 - `PUT /admin/config` validates, preserves missing sensitive fields, persists YAML when a config path is known, and rebuilds runtime router state.
 - `POST /admin/config/validate` returns structured validation issues.
 - `POST /admin/config/reload` reloads config from disk.
+
+When `YALLMP_ADMIN_PASSWORD` is configured, all four config endpoints require `x-admin-password` (or the legacy `admin_password` query parameter). Leaving the password unset preserves the historical open behavior for these endpoints; do that only on a trusted loopback development listener.
 
 ## Admin Cache Stats
 
@@ -470,7 +472,9 @@ GET /admin/traces/{trace_id}
 
 `GET /admin/logs` uses persistent request metadata when configured and falls back to in-memory request logs otherwise.
 
-Compatibility aliases are also available at `/api/logs`, `/api/logs/{id}`, `/api/logs/stop-reasons`, `/api/logs/tool-call-rate`, and `/api/logs/models`. Trace filtering with `trace_id` is admin-gated only on `/admin/logs`.
+Compatibility aliases are also available at `/api/logs`, `/api/logs/{id}`, `/api/logs/stop-reasons`, `/api/logs/tool-call-rate`, and `/api/logs/models`.
+
+When `YALLMP_ADMIN_PASSWORD` is configured, every listed `/admin/logs`, `/admin/traces`, and `/api/logs` request requires it. Leaving the password unset preserves open legacy log access except for endpoints such as trace aggregation that always require an admin password. Because log detail can include prompts and response bodies, configure the password for every shared or non-loopback deployment.
 
 When OTel tracing is enabled, request log rows may include `trace_id` and `span_id` from the proxy-owned `proxy.request` span. These fields are empty or omitted when OTel is disabled/noop.
 
@@ -485,7 +489,7 @@ Supported SQLite query parameters:
 - `start_time` or `start_date`
 - `end_time` or `end_date`
 - `search`
-- `trace_id` exact-match filter; this trace-navigation filter is only honored on `/admin/logs` and requires `x-admin-password` or `admin_password` matching `YALLMP_ADMIN_PASSWORD`
+- `trace_id` exact-match filter; this trace-navigation filter is honored on `/admin/logs`
 
 `GET /admin/logs/{id}` returns decoded full request/response sidecar data when available. The metadata portion can include the same optional `trace_id` and `span_id` fields as the list response. Shared proxy routes also include metadata-only upstream attempts as `attempt_trail` and `attempts`; attempt entries include attempt index, backend name, retry index, status, retryable flag, outcome, duration in milliseconds, and sanitized error text when present.
 
@@ -507,7 +511,7 @@ GET /metrics
 
 The Prometheus snapshot uses only in-memory admission, quota, backend-health, backend in-flight, and opt-in timing state. It does not read logs, request payloads, prompts, request paths, query strings, secrets, raw app-key IDs, raw group IDs, or backend error strings. Admission and quota metrics are aggregated without scope labels. Backend metrics, including `yallmp_backend_inflight_requests`, use only a bounded `backend` label, and backend quota samples are emitted only for configured backends with positive token quotas. Timing histograms are independent from OTel and include only bounded labels such as endpoint kind, sanitized configured model/backend label, stream flag, outcome, status class, and error bucket.
 
-OpenTelemetry tracing, metrics, and span-event logs are configured through `proxy_settings.otel` and are disabled by default. When enabled, the generic JSON proxy endpoints (`/v1/chat/completions`, `/v1/embeddings`, and `/v1/rerank`) plus `/v1/messages` and `/v1/responses` emit request, policy, admission, routing, upstream-attempt, response, parser, and logging spans through OTLP gRPC where those phases run. Direct `/p1` passthrough emits request, upstream-attempt, and response spans while preserving its policy/admission-free forwarding path. OTel metrics include `yallmp.proxy.requests`, `yallmp.proxy.request.duration`, `gen_ai.client.token.usage`, `gen_ai.client.operation.time_to_first_token`, and `gen_ai.client.operation.time_per_output_token`; token usage is emitted only after usage reconciliation, TTFT is emitted after the first successful client-visible stream write, and TPOT is emitted once at stream EOF as an aggregate average between streamed chunks. `proxy_settings.otel.logs.enabled` is a second disabled-by-default gate that requires `proxy_settings.otel.enabled: true`; when enabled it emits one sanitized `proxy.log` span event at span end instead of adding a separate OTLP logs exporter. Attributes are intentionally bounded: phase, endpoint kind (`chat`, `embeddings`, `rerank`, `messages`, `responses`, `passthrough`, or `other`), sanitized configured model label, backend name, outcome, attempt/retry indexes, stream flag, HTTP status, error bucket, key-scope bucket, token type/count fields when present, trace/span IDs, and GenAI-style `gen_ai.system`, `gen_ai.operation.name`, and `gen_ai.request.model` attributes. Response-phase spans also set `gen_ai.response.model` when it is the same sanitized configured model label. Telemetry does not include prompts, request/response bodies, raw headers, query strings, bearer tokens, raw app-key IDs, raw group IDs, required-header values, provider API keys, raw backend URLs, or raw error strings.
+OpenTelemetry tracing, metrics, and span-event logs are configured through `proxy_settings.otel` and are disabled by default. When enabled, the generic JSON proxy endpoints (`/v1/chat/completions`, `/v1/embeddings`, and `/v1/rerank`) plus `/v1/messages` and `/v1/responses` emit request, policy, admission, routing, upstream-attempt, response, parser, and logging spans through OTLP gRPC where those phases run. Direct `/p1` passthrough emits request, optional policy/admission, upstream-attempt, and response spans while preserving arbitrary payload forwarding. OTel metrics include `yallmp.proxy.requests`, `yallmp.proxy.request.duration`, `gen_ai.client.token.usage`, `gen_ai.client.operation.time_to_first_token`, and `gen_ai.client.operation.time_per_output_token`; token usage is emitted only after usage reconciliation, TTFT is emitted after the first successful client-visible stream write, and TPOT is emitted once at stream EOF as an aggregate average between streamed chunks. `proxy_settings.otel.logs.enabled` is a second disabled-by-default gate that requires `proxy_settings.otel.enabled: true`; when enabled it emits one sanitized `proxy.log` span event at span end instead of adding a separate OTLP logs exporter. Attributes are intentionally bounded: phase, endpoint kind (`chat`, `embeddings`, `rerank`, `messages`, `responses`, `passthrough`, or `other`), sanitized configured model label, backend name, outcome, attempt/retry indexes, stream flag, HTTP status, error bucket, key-scope bucket, token type/count fields when present, trace/span IDs, and GenAI-style `gen_ai.system`, `gen_ai.operation.name`, and `gen_ai.request.model` attributes. Response-phase spans also set `gen_ai.response.model` when it is the same sanitized configured model label. Telemetry does not include prompts, request/response bodies, raw headers, query strings, bearer tokens, raw app-key IDs, raw group IDs, required-header values, provider API keys, raw backend URLs, or raw error strings.
 
 Metric families currently exposed:
 
@@ -528,13 +532,13 @@ GET /logs
 GET /usage
 ```
 
-Serves the built React admin frontend when `web/admin/dist` exists. Build it with:
+Serves the React admin frontend embedded in the Go binary. Refresh the committed production bundle with:
 
 ```bash
 task frontend:build
 ```
 
-The admin frontend includes an Observability tab that summarizes `GET /admin/cache`, `GET /v1/health`, and `GET /v1/usage` without rendering raw request or response payloads. `/admin/cache` uses the existing admin-password request behavior; the health and usage panels consume the public runtime metrics endpoints. The read-only Traces tab consumes admin-password-gated `GET /admin/traces/{trace_id}` responses, deep-links from trace IDs shown in admin logs, and renders only sanitized trace metadata, attempts, linked categorical errors, token counts, outcomes, backend names, endpoint kinds, and timing fields.
+The admin frontend includes a Logs workspace with complete filters/pagination and a structured inspector for request messages, tools, responses, usage, upstream attempts, warnings/errors, headers, raw JSON, copy/download, and adjacent-request navigation. Its read-only Traces tab consumes admin-password-gated `GET /admin/traces/{trace_id}` responses and can open a trace event's full request inspector. The Observability tab summarizes `GET /admin/cache`, `GET /v1/health`, and `GET /v1/usage`; `/admin/cache` uses the admin-password request behavior while health and usage consume public runtime metrics endpoints.
 
 The legacy static `/logs` and `/usage` pages are still served from `static/admin` when those files are present. They are compatibility pages; the maintained admin UI is `/admin`, and usage JSON is exposed at `/v1/usage` rather than the old `/api/usage` alias.
 
@@ -553,3 +557,24 @@ OpenAI-compatible endpoints return:
 ```
 
 Messages and Responses endpoints return their API-specific error shapes where applicable.
+
+
+## Simple routing administration
+
+- `GET /admin/routing-pools` returns effective public model pools, node names,
+  upstream model names, provider attribution, health, and whether prompt-prefix
+  affinity is enabled. It does not change routing state or include credentials.
+- `POST /admin/providers/discover` accepts `api_base`, optional `api_key` and
+  `api_type` (OpenAI-compatible only), and optional `name` to reuse a saved
+  provider's credentials. It returns `{ "models": ["model-id", ...] }` without
+  saving anything. Requires the configured admin password. Redirects are not
+  followed; discovery has a ten-second timeout and a two-MiB response limit.
+- Existing provider POST/PUT APIs accept `models`: an array of strings or
+  `{ "name": "public-name", "upstream_model": "upstream-id" }` objects.
+  The selection derives runtime nodes and public pools atomically. Replacing
+  the selection removes deselected generated nodes.
+- Node POST/PUT accepts optional `upstream_model`. Nodes no longer require a
+  provider if they specify their own `api_base`. Unwired nodes with a model name
+  automatically form pools.
+
+See [the simple routing guide](simple-routing.md) for examples and migration.

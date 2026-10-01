@@ -161,7 +161,7 @@ Sidecars are linked from `request_metadata.full_request_path` and surfaced by `G
 
 `GET /admin/logs/{id}` returns a decoded sidecar detail when available, plus `attempt_trail` and `attempts` when upstream attempts were recorded.
 
-Compatibility `/api/logs` aliases are also available for the list, detail, and aggregate log endpoints. Admin-gated trace filtering remains on `/admin/logs`.
+Compatibility `/api/logs` aliases are also available for the list, detail, and aggregate log endpoints. When `YALLMP_ADMIN_PASSWORD` is configured, every `/admin/logs`, `/admin/traces`, and `/api/logs` request requires it. Log APIs retain legacy open access when the password is unset, so shared deployments must configure one because decoded sidecars can contain prompts and responses.
 
 Analytics endpoints:
 

@@ -13,7 +13,7 @@ yaLLMproxy is a Go LLM proxy for OpenAI-compatible traffic, local model fleets, 
 - Optional OpenAI Responses API at `/v1/responses`, with Chat Completions translation, reasoning output/stream mapping, `store`, `previous_response_id`, sticky follow-up routing, and selected terminal-status mapping.
 - Native GigaChat backend support with cloud OAuth, local mTLS, streaming conversion, and OpenAI tool-call translation.
 - Legacy `model_list` config support plus provider/node/client-model config shapes.
-- Backend fallback, retryable-status failover, health snapshots, active health probes, score-aware routing, opt-in prefix-cache affinity, opt-in least-in-flight routing, and admin-managed fallback chains.
+- Backend fallback, retryable-status failover, health snapshots, active health probes, score-aware routing, default prompt-prefix affinity, opt-in least-in-flight routing, and admin-managed fallback chains.
 - Read-only admin model catalog with disabled-by-default provider `/v1/models` availability probes.
 - Round-robin, weighted round-robin, node access control, and sticky routing for conversation/follow-up identifiers.
 - App-key policy with flat/grouped keys, model access, unauthenticated limits, per-key/group limits, token quotas with rolling or UTC calendar resets, opt-in backend quota-aware routing, and admin UI controls.
@@ -29,24 +29,40 @@ Known Go-vs-Python gaps are tracked in [docs/go_feature_gaps.md](docs/go_feature
 ## Documentation Map
 
 - [docs/api.md](docs/api.md), [docs/configuration.md](docs/configuration.md), [docs/database.md](docs/database.md), [docs/testing.md](docs/testing.md), and [docs/project-structure.md](docs/project-structure.md) are the maintained user/operator docs.
-- [state.md](state.md) is the current Go refactor status snapshot.
-- [feature_list_go.md](feature_list_go.md) is the feature backlog and batch status tracker; as of 2026-07-05 the last completed feature pass is Batch 28.
+- [docs/release-readiness.md](docs/release-readiness.md) records the 2026-07-10 audit, required deployment gates, and remaining risks for the Go rollout.
+- [state.md](state.md) is the current Go refactor status snapshot, including post-pass branch notes.
+- [feature_list_go.md](feature_list_go.md) is the feature backlog and batch status tracker; as of 2026-07-09 the last completed feature pass is Batch 28.
 - [journal.md](journal.md) is the chronological work log. It is useful for resuming context but is not a concise product doc.
 - [go_refactor.md](go_refactor.md) and [shared_core.md](shared_core.md) are historical/planning notes. Treat maintained docs and code as authoritative before following those plans.
 - `.codex-upgrade/` is an ignored local archive of feature-batch planning and review artifacts; it is intentionally not tracked.
 
+## Development Status
+
+The Go-only `codex/go_refactor` line contains the completed Batch 28 feature pass and the later admin-password/UI follow-up. The newer `codex/gigachat-ca-cert-followup` branch is based on the old Python line, not the Go refactor; its custom GigaChat CA-bundle change has not been ported to Go. See [state.md](state.md) for the concise done/remaining snapshot and [journal.md](journal.md) for the chronological integration record.
+
 ## Prerequisites
 
-- Go compatible with `go.mod` (`go 1.26` in this branch). The repo also supports a bundled `.tools/go/bin/go` fallback used by `Taskfile.yml`.
+- Go 1.26.5 or newer in the 1.26 line, as required by `go.mod`. The repo also supports the bundled `.tools/go/bin/go` fallback and Go's automatic patch-toolchain selection used by `Taskfile.yml`.
 - [go-task](https://taskfile.dev/) for common commands.
 - Optional: Node.js/npm for building the React admin frontend.
 - Optional: mkcert for local forwarder certificates.
+
+## Simple model routing
+
+For new setups, use [the simple routing guide](docs/simple-routing.md) and
+[configs/config_simple_example.yaml](configs/config_simple_example.yaml). Add nodes
+with the same public model name to form a pool automatically, or select several
+models on a provider to share its credentials. The admin **Models & Nodes** page
+supports provider discovery, selection, and a view of the resulting pools.
+Conversation and prompt-cache affinity precede balancing; retryable failures try
+other eligible nodes in the pool. Existing configurations remain supported.
 
 ## Quick Start
 
 ```bash
 task install
-cp configs/config_example.yaml configs/config.yaml
+cp -n configs/config_simple_example.yaml configs/config.yaml
+# Edit the endpoint URLs and model IDs for your setup.
 # Add secrets to configs/.env if your config references ${...} values.
 task run
 ```
@@ -58,7 +74,7 @@ curl http://localhost:7979/v1/models
 
 curl http://localhost:7979/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model":"glm_local","messages":[{"role":"user","content":"Hello"}]}'
+  -d '{"model":"qwen","messages":[{"role":"user","content":"Hello"}]}'
 ```
 
 ## Commands
@@ -68,8 +84,11 @@ curl http://localhost:7979/v1/chat/completions \
 | `task run` | Run the Go proxy server |
 | `task run:reload` | Run the Go proxy server; autoreload is not implemented yet |
 | `task test` | Run all Go tests |
+| `task test:race` | Run all Go tests with the race detector |
 | `task smoke:fake` | Run fake client/upstream smoke tests and verify logging |
 | `task smoke:real` | Run real local-model smoke test; defaults to `glm_local` and external config path |
+| `task audit` | Run vet, normal/race tests, fake smoke, and a locked frontend build |
+| `task audit:vuln` | Scan called Go code against the Go vulnerability database |
 | `task forwarder` | Run the Go TCP forwarder |
 | `task forwarder:http` | Run the Go HTTP reverse forwarder |
 | `task frontend:install` | Install React admin frontend dependencies |
@@ -147,6 +166,8 @@ When exact inference caching is enabled, callers can send `x-yallmp-cache-bypass
 
 ## Admin And Logs
 
+Set `YALLMP_ADMIN_PASSWORD` for every shared or non-loopback deployment. When it is configured, config and log APIs—including compatibility `/api/logs` aliases—require `x-admin-password`; the React UI keeps the credential in session storage only. Leaving it unset preserves legacy open access to masked config and log APIs for local compatibility.
+
 - `GET /admin/config` returns masked config.
 - `PUT /admin/config` validates, preserves missing secrets, persists YAML, and rebuilds runtime state.
 - `POST /admin/config/validate` returns structured validation issues.
@@ -162,7 +183,7 @@ When exact inference caching is enabled, callers can send `x-yallmp-cache-bypass
 - `GET /v1/health` exposes backend health snapshots.
 - `GET /metrics` exposes disabled-by-default Prometheus metrics when enabled.
 
-Build `web/admin` with `task frontend:build` to serve the React admin UI from `/admin`.
+The committed production bundle is embedded into the Go binary and served from `/admin`; `task frontend:build` refreshes it after frontend source changes.
 
 Compatibility log aliases are available under `/api/logs`. Legacy static `/logs` and `/usage` pages are still served from `static/admin`, but the maintained UI is `/admin` and usage JSON is `/v1/usage`.
 

@@ -251,7 +251,7 @@ router_settings:
     enabled: false
     persist_backend_quota: false  # Requires enabled: true; restores backend::<name> quota state from log DB.
   prefix_cache_affinity:
-    enabled: false  # Opt-in: prefer nodes that recently served the same shallow message prefix (0, 0-1, 0-2)
+    enabled: true   # Default: prefer nodes that recently served the same shallow message prefix (0, 0-1, 0-2)
     max_entries: 4096  # Bounded in-memory (node, prefix-hash) binding count
   concurrency_aware_selection:
     enabled: false  # Opt-in: for fresh requests, prefer the eligible node with the fewest live upstream attempts

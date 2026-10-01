@@ -103,7 +103,7 @@ router_settings:
     enabled: false                         # Opt-in: prefer backends with token-quota capacity
     persist_backend_quota: false           # Requires enabled: true; restore backend::<name> quota state from log DB
   prefix_cache_affinity:
-    enabled: false                         # Opt-in: prefer nodes that recently served the same shallow message prefix
+    enabled: true                          # Default: prefer nodes that recently served the same shallow message prefix
     max_entries: 4096                      # Bounded in-memory (node, prefix-hash) binding count
   concurrency_aware_selection:
     enabled: false                         # Opt-in: fresh requests prefer the least in-flight eligible node
@@ -285,9 +285,15 @@ model_list:
 | `model_params.verify_ssl` | boolean | true | Verify upstream TLS certificates |
 | `model_params.emulate_tool_calls` | boolean | false | Ask GigaChat to return JSON tool-call decisions instead of using native function calls |
 
+The Go client uses the host system trust store when `verify_ssl` is true. It does not currently load a custom `ca_cert` bundle; that option exists only on the separate Python follow-up branch. Install the CA into the host trust store or port the option before relying on a private CA. Disabling `verify_ssl` is available for controlled development environments but removes server-certificate verification.
+
 The admin model form also accepts `client_id` and `client_secret` for GigaChat cloud mode and persists the generated `api_key`.
 
 ## Provider/Node Models
+
+For the simpler workflow with automatic pools and provider model selections, start
+with [Models, nodes, and providers](simple-routing.md). The explicit wiring below
+is still supported for advanced and existing configurations.
 
 For node-backed models, define shared provider settings, individual nodes, and client-facing models:
 
@@ -612,13 +618,15 @@ If `enabled` is omitted, per-model modules default to enabled. Set `enabled: fal
 | `YALLMP_HOST` | Server bind address (overrides config) |
 | `YALLMP_PORT` | Server bind port (overrides config) |
 | `YALLMP_CONFIG` | Path to config file |
-| `YALLMP_ADMIN_PASSWORD` | Admin password for protected model changes, app-key management, and profiling endpoints |
+| `YALLMP_ADMIN_PASSWORD` | Admin password for config, logs/traces, routing, keys, cache/catalog, quota, and profiling APIs; strongly recommended outside loopback development |
+
+When an admin password is configured, the server also protects masked config reads/writes and every `/admin/logs`, `/admin/traces`, and compatibility `/api/logs` route. Without one, config and log APIs retain legacy open access while stricter admin surfaces remain unavailable. Treat an unset password as loopback-only development mode because decoded log sidecars may contain prompts and responses.
 
 `proxy_settings.profiling.enabled`, `proxy_settings.metrics.enabled`, `proxy_settings.metrics.timings.enabled`, `proxy_settings.otel.enabled`, and `proxy_settings.otel.logs.enabled` use strict bool parsing. Boolean values and common bool-like strings such as `true`, `false`, `yes`, `no`, `on`, and `off` validate; other types are rejected by config validation and do not enable the guarded endpoint. `proxy_settings.otel.insecure` uses the same strict bool parsing. `otel.logs.enabled: true` is invalid unless `otel.enabled: true`.
 
 `proxy_settings.metrics.enabled` exposes the guarded Prometheus text snapshot at `/metrics`. `proxy_settings.metrics.timings.enabled` is a separate disabled-by-default opt-in that adds in-memory Prometheus histograms for `yallmp_request_duration_seconds`, `yallmp_backend_request_duration_seconds`, `yallmp_stream_ttft_seconds`, and `yallmp_stream_tpot_seconds` when the `/metrics` endpoint is enabled. These histograms are independent from OTel exporters and use only bounded labels such as endpoint kind, sanitized configured model/backend label, stream flag, outcome, status class, and error bucket. They do not include prompts, raw headers, raw URLs, query strings, API keys, app-key IDs, group IDs, backend URLs, or raw error strings.
 
-`proxy_settings.otel` is disabled by default. When enabled, the only supported exporter is `otlp_grpc` and `endpoint` is required. Bare endpoints must be `host:port`; absolute `http` and `https` OTLP URLs are also accepted. Header names must be valid HTTP field names, and header values must be strings so `${...}` env references can be used without exposing secrets in the repository. The generic JSON proxy endpoints (`/v1/chat/completions`, `/v1/embeddings`, and `/v1/rerank`) plus translator-specific `/v1/messages` and `/v1/responses` emit request, policy, admission, routing, upstream-attempt, response, parser, and logging spans where those phases run. Direct `/p1` passthrough emits request, upstream-attempt, and response spans without adding policy, admission, or routing behavior to that direct forwarding path. The same OTel provider also emits request count, request duration, reconciled GenAI token usage, stream TTFT (`gen_ai.client.operation.time_to_first_token`), and stream aggregate TPOT/ITL (`gen_ai.client.operation.time_per_output_token`) metrics. TTFT is observed after the first successful client-visible stream write, and TPOT is recorded once at stream EOF as an average between observed chunks. `proxy_settings.otel.logs.enabled` remains off unless explicitly enabled and emits sanitized `proxy.log` span events through the existing trace exporter rather than a separate OTLP logs exporter. Span, metric, and log-event attributes use bounded operational values for phase, endpoint kind, sanitized configured model name, backend name, outcome, attempt/retry indexes, stream flag, HTTP status, error bucket, key-scope bucket, token type/count fields, trace/span IDs when available, and GenAI-style `gen_ai.system`, `gen_ai.operation.name`, and `gen_ai.request.model` attributes. Response-phase spans also set `gen_ai.response.model` when it is the same sanitized configured model label. They do not record prompts, bodies, raw headers, query strings, bearer tokens, raw app-key IDs, raw group IDs, raw provider keys, raw backend URLs, required-header values, or raw error strings.
+`proxy_settings.otel` is disabled by default. When enabled, the only supported exporter is `otlp_grpc` and `endpoint` is required. Bare endpoints must be `host:port`; absolute `http` and `https` OTLP URLs are also accepted. Header names must be valid HTTP field names, and header values must be strings so `${...}` env references can be used without exposing secrets in the repository. The generic JSON proxy endpoints (`/v1/chat/completions`, `/v1/embeddings`, and `/v1/rerank`) plus translator-specific `/v1/messages` and `/v1/responses` emit request, policy, admission, routing, upstream-attempt, response, parser, and logging spans where those phases run. Direct `/p1` passthrough emits request, optional app-key policy/admission, upstream-attempt, and response spans while keeping arbitrary payload forwarding. The same OTel provider also emits request count, request duration, reconciled GenAI token usage, stream TTFT (`gen_ai.client.operation.time_to_first_token`), and stream aggregate TPOT/ITL (`gen_ai.client.operation.time_per_output_token`) metrics. TTFT is observed after the first successful client-visible stream write, and TPOT is recorded once at stream EOF as an average between observed chunks. `proxy_settings.otel.logs.enabled` remains off unless explicitly enabled and emits sanitized `proxy.log` span events through the existing trace exporter rather than a separate OTLP logs exporter. Span, metric, and log-event attributes use bounded operational values for phase, endpoint kind, sanitized configured model name, backend name, outcome, attempt/retry indexes, stream flag, HTTP status, error bucket, key-scope bucket, token type/count fields, trace/span IDs when available, and GenAI-style `gen_ai.system`, `gen_ai.operation.name`, and `gen_ai.request.model` attributes. Response-phase spans also set `gen_ai.response.model` when it is the same sanitized configured model label. They do not record prompts, bodies, raw headers, query strings, bearer tokens, raw app-key IDs, raw group IDs, raw provider keys, raw backend URLs, required-header values, or raw error strings.
 
 ### Forwarder Override
 
@@ -721,7 +729,7 @@ router_settings:
     max_entries: 4096
 ```
 
-Prefix-cache affinity is disabled by default and never mutates requests, headers, or upstream bodies. When enabled, the router hashes shallow message prefixes (message 0, messages 0-1, and messages 0-2 of the routed payload's `messages`) and records a bounded in-memory binding between each served prefix hash and the node that served it after a successful `200` upstream response.
+Prefix-cache affinity is enabled by default (explicit `enabled: false` opts out) and never mutates requests, headers, or upstream bodies. When enabled, the router hashes shallow message prefixes (message 0, messages 0-1, and messages 0-2 of the routed payload's `messages`) and records a bounded in-memory binding between each served prefix hash and the node that served it after a successful `200` upstream response.
 
 During node-pool selection, among the nodes that already passed endpoint support, node/app-key `allowed_keys`, health and half-open state, backend-availability, and quota-aware predicates, the router prefers the node bound to the longest matching prefix. Sticky routing from `conversation_id`, `thread_id`, or `previous_response_id` always takes precedence over prefix affinity. When affinity is disabled, no prefix matches, or every matching node is otherwise ineligible, routing is byte-for-byte identical to the existing weighted/round-robin behavior.
 

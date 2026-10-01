@@ -16,6 +16,15 @@ This executes:
 go test ./...
 ```
 
+For a local release-readiness pass, run:
+
+```bash
+task audit
+task audit:vuln
+```
+
+`task audit` performs a clean locked frontend build first, verifies the committed bundle is current, then runs Go vet, the normal and race-enabled Go suites, and deterministic fake smoke. `task audit:vuln` is separate because it requires network access to query the Go vulnerability database.
+
 The Go tests cover:
 
 - Config loading, env substitution, inheritance, validation, masking, app-key config, structured routing admin update preservation, and strict router fallback replacement.
@@ -100,13 +109,13 @@ No persistent server is left running.
 
 ## Frontend
 
-The React admin frontend is separate from the Go test suite:
+Frontend source typechecking and bundling are separate from `task test`; `task audit` includes them and then exercises the embedded bundle from Go tests:
 
 ```bash
 task frontend:install
 task frontend:build
 ```
 
-Build output in `web/admin/dist` is served by the Go app at `/admin`.
+Build output in `web/admin/dist` is committed and embedded in the Go binary, so `/admin` is available in a fresh build even when the process is started outside the source tree. Refresh the bundle whenever frontend source changes.
 
-The frontend build typechecks the admin Observability tab, including the exact-cache, backend-health, usage/quota, and optional trace ID rendering paths.
+The frontend build typechecks the complete admin console, including the structured log inspector, filters/pagination, Trace-to-Request navigation, routing/key workflows, and observability views.

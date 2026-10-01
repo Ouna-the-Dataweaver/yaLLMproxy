@@ -25,7 +25,7 @@ yaLLMproxy/
 │   ├── quota/                 # Token quota accounting
 │   ├── responses/             # Responses API translation/state/streaming
 │   └── server/                # HTTP app and route handlers
-├── web/admin/                 # React admin frontend source
+├── web/admin/                 # React source plus committed/embedded production bundle
 ├── static/                    # Logo and legacy static assets
 ├── configs/                   # Config examples and Jinja templates
 ├── docs/                      # Go branch documentation
