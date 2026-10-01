@@ -61,6 +61,16 @@ tasks:
     cmds:
       - bash -c 'GO_BIN="${GO:-$(command -v go || printf .tools/go/bin/go)}"; "$GO_BIN" test ./...'
 
+  vet:
+    desc: Run Go static analysis
+    cmds:
+      - bash -c 'GO_BIN="${GO:-$(command -v go || printf .tools/go/bin/go)}"; "$GO_BIN" vet ./...'
+
+  test:race:
+    desc: Run Go tests with the race detector
+    cmds:
+      - bash -c 'GO_BIN="${GO:-$(command -v go || printf .tools/go/bin/go)}"; "$GO_BIN" test -race ./...'
+
   test:postgres:
     desc: Run gated PostgreSQL logdb integration tests when YALLMP_TEST_POSTGRES_DSN is set
     cmds:
@@ -93,6 +103,28 @@ tasks:
     dir: web/admin
     cmds:
       - npm run build
+
+  frontend:ci:
+    desc: Install locked frontend dependencies, build, and verify the committed bundle is current
+    dir: web/admin
+    cmds:
+      - npm ci
+      - npm run build
+      - git diff --exit-code -- dist
+
+  audit:
+    desc: Run the local release-readiness audit
+    cmds:
+      - task: frontend:ci
+      - task: vet
+      - task: test
+      - task: test:race
+      - task: smoke:fake
+
+  audit:vuln:
+    desc: Scan called Go code for known vulnerabilities (requires network access)
+    cmds:
+      - bash -c 'GO_BIN="${GO:-$(command -v go || printf .tools/go/bin/go)}"; "$GO_BIN" run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...'
 
   clean:
     desc: Clear all logs (deletes all files in logs directory except database)
