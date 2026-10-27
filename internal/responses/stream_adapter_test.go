@@ -348,3 +348,78 @@ func contains(items []string, needle string) bool {
 	}
 	return false
 }
+
+func runResponsesStream(t *testing.T, chunks ...string) (*StreamAdapter, []map[string]any) {
+	t.Helper()
+	adapter := NewStreamAdapter("resp_err", "alpha", map[string]any{"model": "alpha"})
+	var out []byte
+	for _, chunk := range chunks {
+		out = append(out, adapter.Feed([]byte(chunk))...)
+	}
+	out = append(out, adapter.Flush()...)
+	return adapter, parseResponsesSSEEvents(t, string(out))
+}
+
+func TestStreamAdapterUpstreamErrorFailsResponse(t *testing.T) {
+	cases := map[string][]string{
+		"before content": {
+			`data: {"error":{"message":"backend overloaded","type":"server_error","code":"overloaded"}}` + "\n\n",
+		},
+		"after content": {
+			`data: {"choices":[{"delta":{"role":"assistant","content":"partial"},"index":0}]}` + "\n\n",
+			`data: {"error":{"message":"backend overloaded","type":"server_error","code":"overloaded"}}` + "\n\n",
+			`data: {"choices":[{"delta":{"content":" ignored"},"index":0}]}` + "\n\n",
+		},
+	}
+	for name, chunks := range cases {
+		t.Run(name, func(t *testing.T) {
+			adapter, events := runResponsesStream(t, chunks...)
+			names := eventNames(events)
+			if contains(names, "response.completed") || len(filterEvents(events, "response.failed")) != 1 {
+				t.Fatalf("events = %v", names)
+			}
+			if names[len(names)-1] != "response.failed" {
+				t.Fatalf("response.failed is not terminal: %v", names)
+			}
+			for _, event := range filterEvents(events, "response.output_text.delta") {
+				if event["data"].(map[string]any)["delta"] == " ignored" {
+					t.Fatal("content after the upstream error was forwarded")
+				}
+			}
+			final := events[len(events)-1]["data"].(map[string]any)["response"].(map[string]any)
+			errObj, _ := final["error"].(map[string]any)
+			if final["status"] != "failed" || errObj["message"] != "backend overloaded" || errObj["code"] != "overloaded" {
+				t.Fatalf("final = %#v", final)
+			}
+			if adapter.StreamError() != "backend overloaded" {
+				t.Fatalf("stream error = %q", adapter.StreamError())
+			}
+		})
+	}
+}
+
+func TestStreamAdapterPrematureEOFFailsResponse(t *testing.T) {
+	adapter, events := runResponsesStream(t,
+		`data: {"choices":[{"delta":{"role":"assistant","content":"cut"},"index":0}]}`+"\n\n",
+	)
+	names := eventNames(events)
+	if contains(names, "response.completed") || names[len(names)-1] != "response.failed" {
+		t.Fatalf("events = %v", names)
+	}
+	if adapter.StreamError() == "" {
+		t.Fatal("truncated stream reported no error")
+	}
+}
+
+func TestStreamAdapterDoneWithoutFinishReasonCompletes(t *testing.T) {
+	adapter, events := runResponsesStream(t,
+		`data: {"choices":[{"delta":{"role":"assistant","content":"ok"},"index":0}]}`+"\n\n",
+		"data: [DONE]\n\n",
+	)
+	if names := eventNames(events); names[len(names)-1] != "response.completed" {
+		t.Fatalf("events = %v", names)
+	}
+	if adapter.StreamError() != "" {
+		t.Fatalf("stream error = %q", adapter.StreamError())
+	}
+}

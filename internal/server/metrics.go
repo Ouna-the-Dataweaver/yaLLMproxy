@@ -338,14 +338,14 @@ func (a *App) recordRequiredHeaderMissing() {
 	if a == nil {
 		return
 	}
-	a.requiredHeaderMissingTotal.Add(1)
+	a.runtimeRoot().requiredHeaderMissingTotal.Add(1)
 }
 
 func (a *App) requiredHeaderMissingMetric() uint64 {
 	if a == nil {
 		return 0
 	}
-	return a.requiredHeaderMissingTotal.Load()
+	return a.runtimeRoot().requiredHeaderMissingTotal.Load()
 }
 
 func writeAdmissionMetrics(b *strings.Builder, metrics admission.Metrics) {

@@ -52,6 +52,9 @@ type App struct {
 	Observability              *observability.Provider
 	PrometheusTimings          *prometheusTimingRecorder
 	requiredHeaderMissingTotal atomic.Uint64
+	generation                 atomic.Pointer[runtimeGeneration]
+	// root is set on request-scoped runtime views and points at the owning App.
+	root *App
 }
 
 var adminDistDir = filepath.Join(config.ProjectRoot(), "web", "admin", "dist")
@@ -196,10 +199,15 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if runtimeMutationRequest(r) {
 		a.runtimeMu.Lock()
 		defer a.runtimeMu.Unlock()
-	} else {
-		a.runtimeMu.RLock()
-		defer a.runtimeMu.RUnlock()
+		a.serve(w, r)
+		return
 	}
+	view, release := a.acquireRuntime()
+	defer release()
+	view.serve(w, r)
+}
+
+func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 	if sensitiveAdminAPIRequest(r) && !a.requireConfiguredAdminPassword(w, r, "admin API access") {
 		return
 	}
@@ -793,6 +801,9 @@ func (a *App) applyConfig(newCfg *config.Config, persist bool) error {
 }
 
 func (a *App) applyConfigLocked(newCfg *config.Config, persist bool) error {
+	if a.root != nil {
+		return errors.New("runtime config can only be applied to the root app under runtimeMu")
+	}
 	newRouter, err := proxy.NewRouter(newCfg)
 	if err != nil {
 		return err
@@ -838,7 +849,7 @@ func (a *App) applyConfigLocked(newCfg *config.Config, persist bool) error {
 	a.Config = newCfg
 	a.Router = newRouter
 	a.replaceCatalog(catalog.New(newCfg))
-	a.Policy.Config = newCfg
+	a.Policy = policy.NewManager(newCfg)
 	a.LogDB = newLogDB
 	a.Observability = newObservability
 	a.Payloads = logstore.NewFullRequestStore(newCfg)
@@ -850,11 +861,15 @@ func (a *App) applyConfigLocked(newCfg *config.Config, persist bool) error {
 	seedQuotaFromLogDB(context.Background(), a.Quota, newLogDB, newCfg)
 	seedBackendQuotaFromLogDB(context.Background(), a.Quota, newLogDB, newCfg)
 	a.PrometheusTimings = newAppPrometheusTimingRecorder(newCfg.ProxySettings.Metrics)
-	if oldInferenceCache != nil {
-		_ = oldInferenceCache.Close()
-	}
-	_ = oldLogDB.Close()
-	_ = shutdownObservabilityBounded(oldObservability)
+	retired := a.currentGeneration()
+	a.generation.Store(&runtimeGeneration{})
+	retired.retire(func() {
+		if oldInferenceCache != nil {
+			_ = oldInferenceCache.Close()
+		}
+		_ = oldLogDB.Close()
+		_ = shutdownObservabilityBounded(oldObservability)
+	})
 	return nil
 }
 
@@ -862,6 +877,7 @@ func (a *App) currentCatalog() *catalog.Catalog {
 	if a == nil {
 		return nil
 	}
+	a = a.runtimeRoot()
 	a.catalogMu.RLock()
 	defer a.catalogMu.RUnlock()
 	return a.Catalog
@@ -871,6 +887,7 @@ func (a *App) replaceCatalog(c *catalog.Catalog) {
 	if a == nil {
 		return
 	}
+	a = a.runtimeRoot()
 	a.catalogMu.Lock()
 	defer a.catalogMu.Unlock()
 	a.Catalog = c
@@ -1254,12 +1271,12 @@ func (a *App) ActiveHealthCheckOnce(ctx context.Context) []proxy.BackendHealth {
 	if a == nil {
 		return nil
 	}
-	a.runtimeMu.RLock()
-	defer a.runtimeMu.RUnlock()
-	if a.Router == nil {
+	view, release := a.acquireRuntime()
+	defer release()
+	if view.Router == nil {
 		return nil
 	}
-	return a.Router.ActiveHealthCheckOnce(ctx)
+	return view.Router.ActiveHealthCheckOnce(ctx)
 }
 
 func (a *App) StartHealthChecks(ctx context.Context) <-chan struct{} {
@@ -1267,8 +1284,8 @@ func (a *App) StartHealthChecks(ctx context.Context) <-chan struct{} {
 	go func() {
 		defer close(done)
 		for {
-			a.runtimeMu.RLock()
-			router := a.Router
+			view, release := a.acquireRuntime()
+			router := view.Router
 			interval := time.Second
 			if router != nil && router.ActiveHealthChecks {
 				router.ActiveHealthCheckOnce(ctx)
@@ -1277,7 +1294,7 @@ func (a *App) StartHealthChecks(ctx context.Context) <-chan struct{} {
 					interval = 15 * time.Second
 				}
 			}
-			a.runtimeMu.RUnlock()
+			release()
 			timer := time.NewTimer(interval)
 			select {
 			case <-ctx.Done():
@@ -1873,6 +1890,15 @@ func (a *App) handlePassthrough(w http.ResponseWriter, r *http.Request) {
 	attemptStarted := time.Now()
 	resp, err := client.Do(req)
 	if err != nil {
+		releaseAttempt()
+		a.recordPassthroughBackendAttemptMetric(endpointKind, model, backend.Name, 0, err, time.Since(attemptStarted))
+		attemptSpan.End(observability.SpanResult{Outcome: observability.OutcomeError, BackendName: backend.Name, StatusCode: http.StatusBadGateway, Error: err})
+		requestStatus = http.StatusBadGateway
+		requestErr = err
+		writeError(w, http.StatusBadGateway, err.Error(), "backend_error")
+		return
+	}
+	if err := proxy.DecodeResponseBody(resp); err != nil {
 		releaseAttempt()
 		a.recordPassthroughBackendAttemptMetric(endpointKind, model, backend.Name, 0, err, time.Since(attemptStarted))
 		attemptSpan.End(observability.SpanResult{Outcome: observability.OutcomeError, BackendName: backend.Name, StatusCode: http.StatusBadGateway, Error: err})

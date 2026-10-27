@@ -35,7 +35,8 @@ type StreamAdapter struct {
 	sequence       int
 	createdAt      float64
 	createdEmitted bool
-	sawDone        bool
+	terminated     bool
+	upstreamError  map[string]any
 	finishReasons  map[string]bool
 	usage          map[string]any
 	serviceTier    any
@@ -105,6 +106,14 @@ func (a *StreamAdapter) Flush() []byte {
 	for _, payload := range a.decoder.Flush() {
 		out.Write(a.processPayload(payload))
 	}
+	if a.terminated {
+		return out.Bytes()
+	}
+	if len(a.finishReasons) == 0 && !a.decoder.SawDone() {
+		// Upstream closed without finish_reason or [DONE]: the answer may be
+		// truncated, so it must not be reported as completed.
+		a.upstreamError = responseErrorObject("server_error", "stream_incomplete", "Upstream stream ended before the response completed.", nil)
+	}
 	out.Write(a.terminalEvents())
 	return out.Bytes()
 }
@@ -151,9 +160,23 @@ func (a *StreamAdapter) FinalResponse() map[string]any {
 		response["incomplete_details"] = map[string]any{"reason": "max_output_tokens"}
 	}
 	if status == "failed" {
-		response["error"] = responseErrorObject("model_error", "content_filter", "Response filtered by content policy.", nil)
+		if a.upstreamError != nil {
+			response["error"] = a.upstreamError
+		} else {
+			response["error"] = responseErrorObject("model_error", "content_filter", "Response filtered by content policy.", nil)
+		}
 	}
 	return response
+}
+
+// StreamError returns the upstream failure that ended the stream, or "" when
+// the stream completed (content-filter refusals are model outcomes, not errors).
+func (a *StreamAdapter) StreamError() string {
+	if a == nil || a.upstreamError == nil {
+		return ""
+	}
+	message, _ := a.upstreamError["message"].(string)
+	return message
 }
 
 func (a *StreamAdapter) emitInitial(out *bytes.Buffer) {
@@ -166,6 +189,13 @@ func (a *StreamAdapter) emitInitial(out *bytes.Buffer) {
 }
 
 func (a *StreamAdapter) processPayload(payload map[string]any) []byte {
+	if a.terminated {
+		return nil
+	}
+	if errObj, ok := proxy.SSEPayloadError(payload); ok {
+		a.upstreamError = upstreamResponseError(errObj)
+		return a.terminalEvents()
+	}
 	out := bytes.Buffer{}
 	if usage, ok := payload["usage"].(map[string]any); ok {
 		a.usage = convertUsage(usage)
@@ -393,6 +423,10 @@ func (a *StreamAdapter) finalizeOpenItems(finishReason string) []byte {
 }
 
 func (a *StreamAdapter) terminalEvents() []byte {
+	if a.terminated {
+		return nil
+	}
+	a.terminated = true
 	out := bytes.Buffer{}
 	out.Write(a.finalizeOpenItems(""))
 	status := a.terminalStatus()
@@ -408,6 +442,9 @@ func (a *StreamAdapter) terminalEvents() []byte {
 }
 
 func (a *StreamAdapter) terminalStatus() string {
+	if a.upstreamError != nil {
+		return "failed"
+	}
 	if a.finishReasons["length"] {
 		return "incomplete"
 	}
@@ -415,6 +452,22 @@ func (a *StreamAdapter) terminalStatus() string {
 		return "failed"
 	}
 	return "completed"
+}
+
+func upstreamResponseError(errObj map[string]any) map[string]any {
+	errType, _ := errObj["type"].(string)
+	if errType == "" {
+		errType = "server_error"
+	}
+	code, _ := errObj["code"].(string)
+	if code == "" {
+		code = errType
+	}
+	message, _ := errObj["message"].(string)
+	if message == "" {
+		message = "Upstream stream error."
+	}
+	return responseErrorObject(errType, code, message, errObj["param"])
 }
 
 func (a *StreamAdapter) responseObject(status string) map[string]any {

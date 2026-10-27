@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -3629,7 +3630,7 @@ model_list:
 	}
 }
 
-func TestApplyConfigWaitsForInFlightRequest(t *testing.T) {
+func TestApplyConfigDoesNotWaitForInFlightRequest(t *testing.T) {
 	requestStarted := make(chan struct{})
 	releaseRequest := make(chan struct{})
 	release := func() {
@@ -3640,14 +3641,19 @@ func TestApplyConfigWaitsForInFlightRequest(t *testing.T) {
 		}
 	}
 	defer release()
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	oldUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		close(requestStarted)
 		<-releaseRequest
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"old"}}]}`))
 	}))
-	defer upstream.Close()
-	app := newTestApp(t, upstream.URL+"/v1")
+	defer oldUpstream.Close()
+	newUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"new"}}]}`))
+	}))
+	defer newUpstream.Close()
+	app := newTestApp(t, oldUpstream.URL+"/v1")
 
 	requestDone := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
@@ -3664,33 +3670,73 @@ func TestApplyConfigWaitsForInFlightRequest(t *testing.T) {
 		reloadDone <- app.applyConfig(&config.Config{ModelList: []config.ModelEntry{{
 			ModelName: "alpha",
 			ModelParams: map[string]any{
-				"api_base": "http://new-upstream.test/v1",
+				"api_base": newUpstream.URL + "/v1",
 				"model":    "openai/upstream",
 			},
 		}}}, false)
 	}()
 	select {
 	case err := <-reloadDone:
-		t.Fatalf("reload completed while a request still used the old runtime: %v", err)
-	case <-time.After(25 * time.Millisecond):
-	}
-	release()
-
-	select {
-	case resp := <-requestDone:
-		if resp.Code != http.StatusOK {
-			t.Fatalf("request status = %d body=%s", resp.Code, resp.Body.String())
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("in-flight request did not finish")
-	}
-	select {
-	case err := <-reloadDone:
 		if err != nil {
 			t.Fatal(err)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("reload did not finish after request completion")
+		t.Fatal("reload blocked behind an in-flight request")
+	}
+
+	// A request arriving after the swap must not queue behind the old one.
+	newResp := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		newResp <- postChat(app, "")
+	}()
+	select {
+	case resp := <-newResp:
+		if resp.Code != http.StatusOK || !strings.Contains(resp.Body.String(), "new") {
+			t.Fatalf("new request status = %d body=%s", resp.Code, resp.Body.String())
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("new request stalled behind the in-flight request")
+	}
+
+	release()
+	select {
+	case resp := <-requestDone:
+		if resp.Code != http.StatusOK || !strings.Contains(resp.Body.String(), "old") {
+			t.Fatalf("in-flight request status = %d body=%s", resp.Code, resp.Body.String())
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("in-flight request did not finish")
+	}
+}
+
+func TestRuntimeGenerationRetiresAfterLastRelease(t *testing.T) {
+	var cleaned atomic.Int32
+	g := &runtimeGeneration{}
+	g.acquire()
+	g.acquire()
+	g.retire(func() { cleaned.Add(1) })
+	g.release()
+	if cleaned.Load() != 0 {
+		t.Fatal("retired generation cleaned up while a request still held it")
+	}
+	g.release()
+	if cleaned.Load() != 1 {
+		t.Fatalf("cleanup count = %d after last release, want 1", cleaned.Load())
+	}
+
+	idle := &runtimeGeneration{}
+	idle.retire(func() { cleaned.Add(1) })
+	if cleaned.Load() != 2 {
+		t.Fatal("idle generation did not clean up immediately")
+	}
+}
+
+func TestApplyConfigRejectsRuntimeView(t *testing.T) {
+	app := newTestApp(t, "http://upstream.test/v1")
+	view, release := app.acquireRuntime()
+	defer release()
+	if err := view.applyConfigLocked(app.Config, false); err == nil {
+		t.Fatal("expected applying config to a runtime view to fail")
 	}
 }
 

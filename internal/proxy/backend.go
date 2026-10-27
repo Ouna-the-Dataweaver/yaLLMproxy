@@ -2,8 +2,11 @@ package proxy
 
 import (
 	"bytes"
+	"compress/flate"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -122,7 +125,10 @@ func BuildOutboundHeaders(incoming http.Header, backendAPIKey string, isStream b
 	}
 	for key, values := range incoming {
 		lower := strings.ToLower(key)
-		if hopByHopHeaders[lower] || lower == "authorization" || lower == "host" || lower == "content-length" || strings.HasPrefix(lower, "x-yallmp-") {
+		// Accept-Encoding is not forwarded: the proxy reads, logs, caches, and
+		// translates bodies, and response filtering drops Content-Encoding. The
+		// Go transport negotiates gzip itself and decodes it transparently.
+		if hopByHopHeaders[lower] || lower == "authorization" || lower == "host" || lower == "content-length" || lower == "accept-encoding" || strings.HasPrefix(lower, "x-yallmp-") {
 			continue
 		}
 		if normalizedAPIType == "anthropic" && lower == "x-api-key" {
@@ -404,6 +410,53 @@ func clonePayloadValue(value any) any {
 	default:
 		return typed
 	}
+}
+
+// DecodeResponseBody replaces a gzip or deflate encoded upstream body with its
+// decoded stream. The transport already decodes gzip it negotiated itself; this
+// covers upstreams that compress without being asked, so downstream parsing and
+// the Content-Encoding-free response headers always see identity bytes.
+func DecodeResponseBody(resp *http.Response) error {
+	if resp == nil || resp.Body == nil {
+		return nil
+	}
+	encoding := strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Encoding")))
+	var decoded io.ReadCloser
+	switch encoding {
+	case "gzip", "x-gzip":
+		reader, err := gzip.NewReader(resp.Body)
+		if err != nil {
+			if err == io.EOF {
+				// An empty body has nothing to decode.
+				resp.Header.Del("Content-Encoding")
+				return nil
+			}
+			_ = resp.Body.Close()
+			return fmt.Errorf("decode gzip response: %w", err)
+		}
+		decoded = reader
+	case "deflate":
+		decoded = flate.NewReader(resp.Body)
+	default:
+		return nil
+	}
+	resp.Body = &decodedBody{Reader: decoded, decoder: decoded, raw: resp.Body}
+	resp.Header.Del("Content-Encoding")
+	resp.Header.Del("Content-Length")
+	resp.ContentLength = -1
+	resp.Uncompressed = true
+	return nil
+}
+
+type decodedBody struct {
+	io.Reader
+	decoder io.Closer
+	raw     io.Closer
+}
+
+func (b *decodedBody) Close() error {
+	_ = b.decoder.Close()
+	return b.raw.Close()
 }
 
 func FilterResponseHeaders(headers http.Header) http.Header {

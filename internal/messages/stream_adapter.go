@@ -16,6 +16,8 @@ type StreamAdapter struct {
 	decoder   proxy.SSEJSONDecoder
 
 	messageStarted  bool
+	terminated      bool
+	streamError     string
 	currentText     int
 	currentThinking int
 	text            string
@@ -76,8 +78,48 @@ func (a *StreamAdapter) Flush() []byte {
 	for _, payload := range a.decoder.Flush() {
 		out.Write(a.processPayload(payload))
 	}
+	if a.terminated {
+		return out.Bytes()
+	}
+	if a.finishReason == "" && !a.decoder.SawDone() {
+		// Upstream closed without finish_reason or [DONE]: the answer may be
+		// truncated, so end with an error instead of a clean message_stop.
+		out.Write(a.errorEvent("api_error", "Upstream stream ended before the message completed."))
+		return out.Bytes()
+	}
 	out.Write(a.terminalEvents())
 	return out.Bytes()
+}
+
+// StreamError returns the failure that ended the stream with an error event,
+// or "" when the stream completed.
+func (a *StreamAdapter) StreamError() string {
+	if a == nil {
+		return ""
+	}
+	return a.streamError
+}
+
+// errorEvent ends the stream the way Anthropic does on a mid-stream failure:
+// an "error" event and no message_stop.
+func (a *StreamAdapter) errorEvent(errType string, message string) []byte {
+	a.terminated = true
+	a.streamError = message
+	return sseEvent("error", map[string]any{
+		"type":  "error",
+		"error": map[string]any{"type": errType, "message": message},
+	})
+}
+
+var anthropicErrorTypes = map[string]bool{
+	"invalid_request_error": true,
+	"authentication_error":  true,
+	"permission_error":      true,
+	"not_found_error":       true,
+	"request_too_large":     true,
+	"rate_limit_error":      true,
+	"api_error":             true,
+	"overloaded_error":      true,
 }
 
 func (a *StreamAdapter) TotalTokens() int {
@@ -108,6 +150,20 @@ func (a *StreamAdapter) UsageStats() map[string]any {
 }
 
 func (a *StreamAdapter) processPayload(payload map[string]any) []byte {
+	if a.terminated {
+		return nil
+	}
+	if errObj, ok := proxy.SSEPayloadError(payload); ok {
+		errType, _ := errObj["type"].(string)
+		if !anthropicErrorTypes[errType] {
+			errType = "api_error"
+		}
+		message, _ := errObj["message"].(string)
+		if message == "" {
+			message = "Upstream stream error."
+		}
+		return a.errorEvent(errType, message)
+	}
 	out := bytes.Buffer{}
 	if usage, ok := payload["usage"].(map[string]any); ok {
 		a.observeUsage(usage)
@@ -277,6 +333,7 @@ func (a *StreamAdapter) processToolCall(call map[string]any) []byte {
 }
 
 func (a *StreamAdapter) terminalEvents() []byte {
+	a.terminated = true
 	out := bytes.Buffer{}
 	if !a.messageStarted {
 		out.Write(a.messageStart())

@@ -108,11 +108,12 @@ func parseSSEEvent(raw string) SSEEvent {
 
 type SSEJSONDecoder struct {
 	decoder SSEDecoder
+	sawDone bool
 }
 
 func (d *SSEJSONDecoder) Feed(chunk []byte) []map[string]any {
 	events := d.decoder.Feed(chunk)
-	return decodeJSONEvents(events)
+	return d.decodeJSONEvents(events)
 }
 
 func (d *SSEJSONDecoder) Flush() []map[string]any {
@@ -121,14 +122,23 @@ func (d *SSEJSONDecoder) Flush() []map[string]any {
 		return nil
 	}
 	event := parseSSEEvent(string(remaining))
-	return decodeJSONEvents([]SSEEvent{event})
+	return d.decodeJSONEvents([]SSEEvent{event})
 }
 
-func decodeJSONEvents(events []SSEEvent) []map[string]any {
+// SawDone reports whether the stream carried the OpenAI "[DONE]" sentinel.
+func (d *SSEJSONDecoder) SawDone() bool {
+	return d.sawDone
+}
+
+func (d *SSEJSONDecoder) decodeJSONEvents(events []SSEEvent) []map[string]any {
 	var out []map[string]any
 	for _, event := range events {
 		data := strings.TrimSpace(event.Data)
-		if data == "" || data == "[DONE]" {
+		if data == "[DONE]" {
+			d.sawDone = true
+			continue
+		}
+		if data == "" {
 			continue
 		}
 		var payload map[string]any
@@ -137,4 +147,22 @@ func decodeJSONEvents(events []SSEEvent) []map[string]any {
 		}
 	}
 	return out
+}
+
+// SSEPayloadError returns the error object carried by an upstream SSE payload,
+// either an OpenAI-style {"error": {...}} chunk or a {"type": "error"} event.
+func SSEPayloadError(payload map[string]any) (map[string]any, bool) {
+	if errObj, ok := payload["error"].(map[string]any); ok {
+		return errObj, true
+	}
+	if payload["type"] == "error" {
+		if errObj, ok := payload["error"].(map[string]any); ok {
+			return errObj, true
+		}
+		if message, ok := payload["error"].(string); ok && message != "" {
+			return map[string]any{"message": message}, true
+		}
+		return map[string]any{"message": "upstream stream error"}, true
+	}
+	return nil, false
 }

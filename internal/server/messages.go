@@ -383,7 +383,7 @@ func (a *App) handleMessagesStream(w http.ResponseWriter, r *http.Request, start
 	if resp.StatusCode < 400 && streamErr == nil {
 		a.recordTokenUsageMetric(r.Context(), observability.EndpointKind(r.URL.Path), modelName, true, stream.Adapter.UsageStats())
 	}
-	entry := a.addLog(r, withForwardWarnings(LogEntry{Time: start, Method: r.Method, Path: r.URL.Path, Model: modelName, Status: resp.StatusCode, Backend: backendName, DurationMS: time.Since(start).Milliseconds()}, forwardResult))
+	entry := a.addLog(r, withForwardWarnings(LogEntry{Time: start, Method: r.Method, Path: r.URL.Path, Model: modelName, Status: resp.StatusCode, Backend: backendName, Error: stream.Adapter.StreamError(), DurationMS: time.Since(start).Milliseconds()}, forwardResult))
 	payloadPath := a.storePayload(entry, r, requestBody, resp.Header, nil)
 	a.persistLogWithUsage(r.Context(), entry, r, true, pctx, payloadPath, nil, stream.Adapter.UsageStats())
 	return streamErr

@@ -314,3 +314,77 @@ func filterEvents(events []map[string]any, name string) []map[string]any {
 	}
 	return out
 }
+
+func runMessagesStream(t *testing.T, chunks ...string) (*StreamAdapter, []map[string]any) {
+	t.Helper()
+	adapter := NewStreamAdapter("msg_err", "alpha")
+	var out []byte
+	for _, chunk := range chunks {
+		out = append(out, adapter.Feed([]byte(chunk))...)
+	}
+	out = append(out, adapter.Flush()...)
+	return adapter, parseMessagesSSEEvents(t, string(out))
+}
+
+func TestStreamAdapterUpstreamErrorEmitsErrorEvent(t *testing.T) {
+	cases := map[string][]string{
+		"before content": {
+			`data: {"error":{"message":"slow down","type":"rate_limit_error"}}` + "\n\n",
+		},
+		"after content": {
+			`data: {"choices":[{"delta":{"role":"assistant","content":"partial"},"index":0}]}` + "\n\n",
+			`data: {"error":{"message":"slow down","type":"rate_limit_error"}}` + "\n\n",
+			`data: {"choices":[{"delta":{"content":" ignored"},"index":0}]}` + "\n\n",
+		},
+	}
+	for name, chunks := range cases {
+		t.Run(name, func(t *testing.T) {
+			adapter, events := runMessagesStream(t, chunks...)
+			names := eventNames(events)
+			if names[len(names)-1] != "error" || strings.Contains(strings.Join(names, ","), "message_stop") {
+				t.Fatalf("events = %v", names)
+			}
+			errObj := events[len(events)-1]["data"].(map[string]any)["error"].(map[string]any)
+			if errObj["type"] != "rate_limit_error" || errObj["message"] != "slow down" {
+				t.Fatalf("error = %#v", errObj)
+			}
+			if adapter.StreamError() != "slow down" {
+				t.Fatalf("stream error = %q", adapter.StreamError())
+			}
+		})
+	}
+}
+
+func TestStreamAdapterMapsUnknownErrorTypeToAPIError(t *testing.T) {
+	_, events := runMessagesStream(t, `data: {"error":{"message":"boom","type":"server_error"}}`+"\n\n")
+	errObj := events[len(events)-1]["data"].(map[string]any)["error"].(map[string]any)
+	if errObj["type"] != "api_error" {
+		t.Fatalf("error = %#v", errObj)
+	}
+}
+
+func TestStreamAdapterPrematureEOFEmitsErrorEvent(t *testing.T) {
+	adapter, events := runMessagesStream(t,
+		`data: {"choices":[{"delta":{"role":"assistant","content":"cut"},"index":0}]}`+"\n\n",
+	)
+	names := eventNames(events)
+	if names[len(names)-1] != "error" || strings.Contains(strings.Join(names, ","), "message_stop") {
+		t.Fatalf("events = %v", names)
+	}
+	if adapter.StreamError() == "" {
+		t.Fatal("truncated stream reported no error")
+	}
+}
+
+func TestStreamAdapterDoneWithoutFinishReasonStops(t *testing.T) {
+	adapter, events := runMessagesStream(t,
+		`data: {"choices":[{"delta":{"role":"assistant","content":"ok"},"index":0}]}`+"\n\n",
+		"data: [DONE]\n\n",
+	)
+	if names := eventNames(events); names[len(names)-1] != "message_stop" {
+		t.Fatalf("events = %v", names)
+	}
+	if adapter.StreamError() != "" {
+		t.Fatalf("stream error = %q", adapter.StreamError())
+	}
+}

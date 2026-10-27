@@ -1720,6 +1720,9 @@ func (r *Router) execute(ctx context.Context, backend Backend, endpointKind stri
 	if err != nil {
 		return nil, bodyResult.Warnings, nil, err
 	}
+	if err := DecodeResponseBody(resp); err != nil {
+		return nil, bodyResult.Warnings, nil, err
+	}
 	if isStream {
 		return resp, bodyResult.Warnings, nil, nil
 	}
