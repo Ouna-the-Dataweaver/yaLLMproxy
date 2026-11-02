@@ -37,8 +37,8 @@ class ConcurrencySlot:
     async def release(self) -> None:
         """Explicitly release the slot (idempotent)."""
         if not self._released:
-            self._released = True
             await self.manager.release(self.key_identifier, self.request_id)
+            self._released = True
 
     @property
     def is_released(self) -> bool:

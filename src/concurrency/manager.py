@@ -236,6 +236,8 @@ class ConcurrencyManager:
             wait_time_ms = (time.monotonic() - enqueue_time) * 1000
 
             async with self._lock:
+                # Keep ownership discoverable until the waiter receives its slot.
+                self._pending_requests.pop(request_id, None)
                 state = self._key_states.get(scope_identifier)
                 if state:
                     state.total_wait_time_ms += wait_time_ms
@@ -253,8 +255,9 @@ class ConcurrencyManager:
                 request_id=request_id,
                 wait_time_ms=wait_time_ms,
             )
-        except Exception:
-            # Clean up on any failure
+        except (Exception, asyncio.CancelledError):
+            # A cancelled waiter must not later consume a slot. This also
+            # returns capacity granted just before cancellation was delivered.
             await self._cancel_queued_request(request_id)
             raise
 
@@ -363,32 +366,20 @@ class ConcurrencyManager:
         if not self._has_available_slot(state):
             return
 
-        # Scan heap for first non-cancelled request matching this scope
-        # Note: We don't remove from heap here to maintain heap invariant
-        # Cancelled requests are cleaned up lazily
-        for queued in self._wait_queue:
-            if queued.cancelled:
-                continue
-            if queued.scope_identifier != key_identifier:
-                continue
-            if queued.ready_event.is_set():
-                continue
-
-            # Found a waiting request - activate it
-            state.active_count += 1
-            state.active_request_ids.add(queued.request_id)
-            queued.ready_event.set()
-            self._pending_requests.pop(queued.request_id, None)
-
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(
-                    "Signaled queued request: key=%s, request_id=%s, active=%d/%d",
-                    key_identifier,
-                    queued.request_id,
-                    state.active_count,
-                    state.concurrency_limit,
-                )
+        eligible = [
+            queued for queued in self._wait_queue
+            if queued.scope_identifier == key_identifier and not queued.cancelled
+        ]
+        if not eligible:
             return
+        queued = min(eligible)
+        # Granted requests are no longer queued. Retain the pending ownership
+        # record until acquire returns, so cancellation can release the grant.
+        self._wait_queue.remove(queued)
+        heapq.heapify(self._wait_queue)
+        state.active_request_ids.add(queued.request_id)
+        state.active_count = len(state.active_request_ids)
+        queued.ready_event.set()
 
     async def _cancel_queued_request(self, request_id: str) -> None:
         """Mark a queued request as cancelled."""
@@ -396,6 +387,12 @@ class ConcurrencyManager:
             queued = self._pending_requests.pop(request_id, None)
             if queued:
                 queued.cancelled = True
+                state = self._key_states.get(queued.scope_identifier)
+                if state and request_id in state.active_request_ids:
+                    state.active_request_ids.discard(request_id)
+                    state.active_count = len(state.active_request_ids)
+                    self._signal_next_queued_request(queued.scope_identifier, state)
+                self._cleanup_cancelled_requests()
                 if logger.isEnabledFor(logging.DEBUG):
                     logger.debug("Cancelled queued request: %s", request_id)
 

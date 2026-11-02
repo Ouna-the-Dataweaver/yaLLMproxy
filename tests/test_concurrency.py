@@ -250,3 +250,77 @@ class TestSingleton:
         reset_concurrency_manager()
         manager2 = get_concurrency_manager()
         assert manager1 is not manager2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("grant_before_cancel", [False, True])
+async def test_cancelled_waiter_does_not_consume_future_capacity(manager, grant_before_cancel):
+    holder = await manager.acquire("key", 1, 100)
+    waiter = asyncio.create_task(manager.acquire("key", 1, 100))
+    await asyncio.sleep(0)
+    if grant_before_cancel:
+        await holder.release()
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+    if not grant_before_cancel:
+        await holder.release()
+    metrics = await manager.get_metrics()
+    assert metrics.active_requests_by_key["key"] == 0
+    assert metrics.global_queue_depth == 0
+    replacement = await manager.acquire("key", 1, 100, timeout=0.1)
+    await replacement.release()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_release_can_be_retried(manager):
+    slot = await manager.acquire("key", 1, 100)
+    async with manager._lock:
+        release = asyncio.create_task(slot.release())
+        await asyncio.sleep(0)
+        release.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await release
+    assert not slot.is_released
+    await slot.release()
+    assert (await manager.get_metrics()).active_requests_by_key["key"] == 0
+
+
+@pytest.mark.asyncio
+async def test_disconnect_during_slot_handoff_returns_capacity(manager):
+    holder = await manager.acquire("key", 1, 100)
+    checking = asyncio.Event()
+    disconnected = asyncio.Event()
+
+    async def check_disconnect():
+        checking.set()
+        await disconnected.wait()
+        return True
+
+    waiter = asyncio.create_task(manager.acquire("key", 1, 100, disconnect_checker=check_disconnect))
+    await checking.wait()
+    await holder.release()
+    disconnected.set()
+    with pytest.raises(ConcurrencyClientDisconnected):
+        await waiter
+    metrics = await manager.get_metrics()
+    assert metrics.active_requests_by_key["key"] == 0
+    assert metrics.global_queue_depth == 0
+    replacement = await manager.acquire("key", 1, 100, timeout=0.1)
+    await replacement.release()
+
+
+@pytest.mark.asyncio
+async def test_repeated_cancelled_bursts_leave_full_capacity(manager):
+    for _ in range(10):
+        holders = [await manager.acquire("key", 5, 100, timeout=0.1) for _ in range(5)]
+        waiters = [asyncio.create_task(manager.acquire("key", 5, 100)) for _ in range(25)]
+        await asyncio.sleep(0)
+        for waiter in waiters:
+            waiter.cancel()
+        await asyncio.gather(*waiters, return_exceptions=True)
+        for holder in holders:
+            await holder.release()
+        metrics = await manager.get_metrics()
+        assert metrics.active_requests_by_key["key"] == 0
+        assert metrics.global_queue_depth == 0
