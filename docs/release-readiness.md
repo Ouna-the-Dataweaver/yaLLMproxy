@@ -3,9 +3,64 @@
 Last audited: 2026-11-06. The July audit below is retained as historical evidence;
 its live-provider and dependency results must not be treated as current checks.
 
-The Go rewrite is suitable for a controlled team rollout after the deployment gates below are met. This pass reviewed the request/runtime core, config mutation lifecycle, translators and provider adapters, forwarders, smoke harness, logging/trace UI, packaging, and dependency posture. It fixed confirmed defects rather than treating existing test volume as proof of readiness.
+The Go rewrite is a candidate for a controlled team rollout after local verification and the deployment gates below are met. The follow-up review found additional defects after the earlier readiness assessment; its verification is recorded separately below.
 
-## November Review
+## November Follow-up Review
+
+This follow-up started from a clean working tree at `c34a373`. Remote main
+remained at `e728ab2`, already an ancestor of the Go branch. The review did not
+push, merge into main, or deploy a service.
+
+Confirmed fixes include:
+
+- Admission rejects already canceled requests and reclaims slots when cancellation
+  coincides with queued promotion. Routing checks configured concurrency as well
+  as rate availability, using the same shared provider scope as admission.
+- Reservations crossing quota-window resets no longer subtract another request's
+  usage; policy changes distinguish actual resets from scheduling changes.
+  Completion usage is charged in the current window. Payload sidecars redact
+  credentials even when they also appear in required-header attribution.
+- Malformed SSE JSON produces a stream failure instead of apparent success;
+  named ping events remain accepted. Translation stops at `[DONE]` and discards
+  later payloads. Startup error handling accepts CR framing and multiline data.
+- HTTP deflate decoding accepts standard zlib framing and retains compatibility
+  with raw deflate streams. Gzip and deflate are supported; unknown upstream
+  content encodings return a clear error instead of forwarding corrupted output.
+- Config reload retains the live quota manager and imports persisted usage only
+  for previously unseen scopes. Quota changes distinguish a real reset epoch
+  from changes to the window policy, preserving in-flight accounting.
+
+For known replica concurrency of 4 and 2, a saturated two-slot node is skipped
+while the four-slot node has space. When all nodes are saturated, normal queue
+and timeout behavior remains. Availability checks are advisory snapshots, so
+concurrent arrivals can still queue. Optional concurrency-aware selection compares
+raw active-attempt counts, not utilization normalized by capacity. With unknown
+capacity, weights of 4 and 2 express a 2:1 request ratio before affinity and other
+selection preferences; there is no automatic inference from GPU count. Routing,
+admission scopes, and priority queues are local to one proxy process. Lower
+numeric priorities run first, with FIFO ties; strict priority can starve lower
+priority traffic. Queue timeouts apply per admission attempt, not to the complete
+sequence of replicas and retries.
+
+Current follow-up verification:
+
+- Frontend CI passed four regressions, typecheck, production build, and the check
+  that the committed bundle is unchanged.
+- `task audit:vuln` passed with zero called-code findings; one imported-package
+  finding and two required-module findings remain outside called symbols.
+- `task test`, `task test:race`, `task vet`, `task smoke:fake`, `go mod verify`,
+  and `git diff --check` passed on the follow-up changes. After the final encoding
+  correction, `task test` passed again, along with targeted encoding race tests:
+  `go test -race ./internal/proxy -run 'Test(DecodeResponseBody|ForwardDecodes)' -count=1`.
+  Earlier verification below remains evidence for the prior review.
+
+No remaining merge blocker was identified in the reviewed paths after these
+fixes and checks. This supports promotion to main; production rollout still
+requires the deployment gates below. No persistent test service was left running.
+No live provider, PostgreSQL, or browser E2E checks were run in this follow-up;
+local fake upstreams and unit tests do not establish those integration results.
+
+## Earlier November Review
 
 The review covered the working tree as well as cancellation, admission, multi-node
 routing, stream framing and translation, request logs, quota restoration, and
@@ -55,7 +110,7 @@ packages and two in required modules whose vulnerable symbols are not called.
 The frontend's four high-severity build dependency advisories were resolved with
 compatible upgrades; `npm audit` now reports zero advisories.
 
-Final local verification passed on Go 1.26.10:
+The earlier review's local verification passed on Go 1.26.10:
 
 - `task audit`: locked frontend install, four frontend regressions, typecheck and
   production build, committed-bundle consistency, Go vet, `task test`,
@@ -65,9 +120,11 @@ Final local verification passed on Go 1.26.10:
 - The fetched main commit is an ancestor of the reviewed branch; its merge
   conflicts have been resolved and obsolete Python files were not restored.
 
-No remaining code or merge blocker was identified in the reviewed paths. This
-supports promotion to main; production rollout still requires the deployment
-gates below. No persistent test service was left running.
+The earlier review identified no remaining code or merge blocker in its reviewed
+paths. The follow-up above found additional defects; its own verification and
+assessment supersede that earlier conclusion.
+Production rollout still requires the deployment gates below. No persistent test
+service was left running by the earlier review.
 
 Live provider, PostgreSQL, and browser E2E checks were not run in this review.
 `YALLMP_TEST_ENGINE_URLS` and `YALLMP_TEST_POSTGRES_DSN` were not configured.
