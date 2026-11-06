@@ -253,7 +253,7 @@ func (a *App) handleResponses(w http.ResponseWriter, r *http.Request) {
 			Error:       responseErr,
 		})
 	}()
-	if isStream {
+	if isStream && resp.StatusCode < http.StatusBadRequest {
 		requestStatus = resp.StatusCode
 		requestOutcome = otelOutcomeForStatus(resp.StatusCode)
 		if streamErr := a.handleResponsesStream(w, r, start, body, modelName, responseID, payload, pctx, tokenReservation, slot, resp, nativeResponses, forwardResult); streamErr != nil {
@@ -276,17 +276,18 @@ func (a *App) handleResponses(w http.ResponseWriter, r *http.Request) {
 		writeResponsesError(w, http.StatusBadGateway, responseID, "server_error", "backend_read_error", readErr.Error(), modelName)
 		entry := a.addLog(r, withForwardWarnings(LogEntry{Time: start, Method: r.Method, Path: r.URL.Path, Model: modelName, Status: http.StatusBadGateway, Backend: forwardResult.BackendName, Error: readErr.Error(), DurationMS: time.Since(start).Milliseconds()}, forwardResult))
 		payloadPath := a.storePayload(entry, r, body, resp.Header, nil)
-		a.persistLog(r.Context(), entry, r, false, pctx, payloadPath, nil)
+		a.persistLog(r.Context(), entry, r, isStream, pctx, payloadPath, nil)
 		return
 	}
 	if resp.StatusCode >= 400 {
 		tokenReservation.Release()
 		requestStatus = resp.StatusCode
 		requestOutcome = otelOutcomeForStatus(resp.StatusCode)
+		copyHeaders(w.Header(), resp.Header)
 		writeResponsesUpstreamError(w, responseID, resp.StatusCode, respBody, modelName)
 		entry := a.addLog(r, withForwardWarnings(LogEntry{Time: start, Method: r.Method, Path: r.URL.Path, Model: modelName, Status: resp.StatusCode, Backend: forwardResult.BackendName, Error: "upstream error", DurationMS: time.Since(start).Milliseconds()}, forwardResult))
 		payloadPath := a.storePayload(entry, r, body, resp.Header, respBody)
-		a.persistLog(r.Context(), entry, r, false, pctx, payloadPath, respBody)
+		a.persistLog(r.Context(), entry, r, isStream, pctx, payloadPath, respBody)
 		return
 	}
 	if translatedCacheHit {
