@@ -3,6 +3,7 @@ package messages
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"slices"
 
@@ -67,6 +68,9 @@ func (a *StreamAdapter) Feed(chunk []byte) []byte {
 	for _, payload := range a.decoder.Feed(chunk) {
 		out.Write(a.processPayload(payload))
 	}
+	if a.decoder.SawDone() && !a.terminated {
+		out.Write(a.terminalEvents())
+	}
 	return out.Bytes()
 }
 
@@ -88,6 +92,19 @@ func (a *StreamAdapter) Flush() []byte {
 		return out.Bytes()
 	}
 	out.Write(a.terminalEvents())
+	return out.Bytes()
+}
+
+// fail drains the final received payload before reporting a transport failure.
+// A read error must never turn a partial answer into a successful message_stop.
+func (a *StreamAdapter) fail(err error) []byte {
+	var out bytes.Buffer
+	for _, payload := range a.decoder.Flush() {
+		out.Write(a.processPayload(payload))
+	}
+	if !a.terminated {
+		out.Write(a.errorEvent("api_error", "Upstream stream failed: "+err.Error()))
+	}
 	return out.Bytes()
 }
 
@@ -621,10 +638,18 @@ func (r *StreamReadCloser) Read(p []byte) (int, error) {
 		if err != nil {
 			if err == io.EOF {
 				r.buffer = append(r.buffer, r.Adapter.Flush()...)
-				r.eof = true
-				break
+			} else {
+				r.buffer = append(r.buffer, r.Adapter.fail(err)...)
+				r.pending = err
 			}
-			r.pending = err
+			r.eof = true
+		}
+		if message := r.Adapter.StreamError(); message != "" {
+			if r.pending == nil {
+				r.pending = errors.New(message)
+			}
+		}
+		if r.Adapter.terminated {
 			r.eof = true
 		}
 		if n == 0 && err == nil {
@@ -642,4 +667,14 @@ func (r *StreamReadCloser) Read(p []byte) (int, error) {
 		return 0, err
 	}
 	return 0, io.EOF
+}
+
+func (r *StreamReadCloser) Close() error {
+	if !r.eof {
+		r.Adapter.fail(io.ErrClosedPipe)
+		r.eof = true
+		r.pending = io.ErrClosedPipe
+		r.buffer = nil
+	}
+	return r.ReadCloser.Close()
 }

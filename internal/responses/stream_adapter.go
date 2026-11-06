@@ -3,6 +3,7 @@ package responses
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"slices"
 	"time"
@@ -94,6 +95,9 @@ func (a *StreamAdapter) Feed(chunk []byte) []byte {
 	for _, payload := range a.decoder.Feed(chunk) {
 		out.Write(a.processPayload(payload))
 	}
+	if a.decoder.SawDone() && !a.terminated {
+		out.Write(a.terminalEvents())
+	}
 	return out.Bytes()
 }
 
@@ -115,6 +119,21 @@ func (a *StreamAdapter) Flush() []byte {
 		a.upstreamError = responseErrorObject("server_error", "stream_incomplete", "Upstream stream ended before the response completed.", nil)
 	}
 	out.Write(a.terminalEvents())
+	return out.Bytes()
+}
+
+// fail preserves received content while making transport failures visible in
+// both the terminal event and the response saved by the server.
+func (a *StreamAdapter) fail(err error) []byte {
+	var out bytes.Buffer
+	a.emitInitial(&out)
+	for _, payload := range a.decoder.Flush() {
+		out.Write(a.processPayload(payload))
+	}
+	if !a.terminated {
+		a.upstreamError = responseErrorObject("server_error", "stream_error", "Upstream stream failed: "+err.Error(), nil)
+		out.Write(a.terminalEvents())
+	}
 	return out.Bytes()
 }
 
@@ -590,10 +609,18 @@ func (r *StreamReadCloser) Read(p []byte) (int, error) {
 		if err != nil {
 			if err == io.EOF {
 				r.buffer = append(r.buffer, r.Adapter.Flush()...)
-				r.eof = true
-				break
+			} else {
+				r.buffer = append(r.buffer, r.Adapter.fail(err)...)
+				r.pending = err
 			}
-			r.pending = err
+			r.eof = true
+		}
+		if message := r.Adapter.StreamError(); message != "" {
+			if r.pending == nil {
+				r.pending = errors.New(message)
+			}
+		}
+		if r.Adapter.terminated {
 			r.eof = true
 		}
 		if n == 0 && err == nil {
@@ -611,4 +638,14 @@ func (r *StreamReadCloser) Read(p []byte) (int, error) {
 		return 0, err
 	}
 	return 0, io.EOF
+}
+
+func (r *StreamReadCloser) Close() error {
+	if !r.eof {
+		r.Adapter.fail(io.ErrClosedPipe)
+		r.eof = true
+		r.pending = io.ErrClosedPipe
+		r.buffer = nil
+	}
+	return r.ReadCloser.Close()
 }

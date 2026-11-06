@@ -1822,6 +1822,7 @@ type streamRewriteReadCloser struct {
 	buffer   []byte
 	eof      bool
 	flushed  bool
+	readErr  error
 
 	captureRaw         io.Writer
 	captureTransformed io.Writer
@@ -1832,66 +1833,41 @@ type streamRewriteReadCloser struct {
 }
 
 func (s *streamRewriteReadCloser) Read(p []byte) (int, error) {
-	if len(s.buffer) > 0 {
-		n := copy(p, s.buffer)
-		s.buffer = s.buffer[n:]
-		s.writeTransformed(p[:n])
-		if s.eof && len(s.buffer) == 0 {
-			s.endParserSpan(nil)
+	if len(p) == 0 {
+		return 0, nil
+	}
+	for len(s.buffer) == 0 {
+		if s.eof {
+			return 0, s.readErr
 		}
-		return n, nil
-	}
-	if s.eof {
-		return 0, io.EOF
-	}
-	n, err := s.ReadCloser.Read(p)
-	if n <= 0 {
-		if err == io.EOF {
-			if flushed := s.flushPending(); len(flushed) > 0 {
-				copied := copy(p, flushed)
-				if copied < len(flushed) {
-					s.buffer = append(s.buffer, flushed[copied:]...)
-				}
-				s.eof = true
-				s.writeTransformed(p[:copied])
-				if len(s.buffer) == 0 {
-					s.endParserSpan(nil)
-				}
-				return copied, nil
+		n, err := s.ReadCloser.Read(p)
+		if n > 0 {
+			s.writeRaw(p[:n])
+			s.buffer = p[:n]
+			if len(s.pipeline.Modules) > 0 {
+				s.buffer = modules.RewriteSSEChunkWithState(p[:n], s.pipeline, s.ctx, s.state)
 			}
+		}
+		if err != nil {
+			s.buffer = append(s.buffer, s.flushPending()...)
 			s.eof = true
-			s.endParserSpan(nil)
-		} else if err != nil {
-			s.endParserSpan(err)
-		}
-		return n, err
-	}
-	s.writeRaw(p[:n])
-	rewritten := p[:n]
-	if len(s.pipeline.Modules) > 0 {
-		rewritten = modules.RewriteSSEChunkWithState(p[:n], s.pipeline, s.ctx, s.state)
-		if err == io.EOF {
-			if flushed := s.flushPending(); len(flushed) > 0 {
-				rewritten = append(append([]byte(nil), rewritten...), flushed...)
+			s.readErr = err
+			if err == io.EOF {
+				s.endParserSpan(nil)
+			} else {
+				s.endParserSpan(err)
 			}
 		}
-	}
-	copied := copy(p, rewritten)
-	if copied < len(rewritten) {
-		s.buffer = append(s.buffer, rewritten[copied:]...)
-	}
-	s.writeTransformed(p[:copied])
-	if err == io.EOF {
-		s.eof = true
-		if len(s.buffer) == 0 {
-			s.endParserSpan(nil)
+		if n == 0 && err == nil {
+			return 0, nil
 		}
-		return copied, nil
+		// An incomplete event can consume an upstream read without producing
+		// output. Keep reading until an event or terminal error is available.
 	}
-	if err != nil {
-		s.endParserSpan(err)
-	}
-	return copied, err
+	n := copy(p, s.buffer)
+	s.buffer = s.buffer[n:]
+	s.writeTransformed(p[:n])
+	return n, nil
 }
 
 func (s *streamRewriteReadCloser) Close() error {

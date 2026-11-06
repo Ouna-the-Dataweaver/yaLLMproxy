@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/theio/yallmp-proxy/internal/sse"
 )
 
 const StreamErrorCheckBufferSize = 4096
@@ -57,24 +59,16 @@ type SSEEvent struct {
 }
 
 type SSEDecoder struct {
-	buffer []byte
+	framer sse.Framer
 }
 
 func (d *SSEDecoder) Feed(chunk []byte) []SSEEvent {
 	if len(chunk) == 0 {
 		return nil
 	}
-	d.buffer = append(d.buffer, chunk...)
-	d.buffer = bytes.ReplaceAll(d.buffer, []byte("\r\n"), []byte("\n"))
-	d.buffer = bytes.ReplaceAll(d.buffer, []byte("\r"), []byte("\n"))
 	var events []SSEEvent
-	for {
-		idx := bytes.Index(d.buffer, []byte("\n\n"))
-		if idx < 0 {
-			break
-		}
-		raw := string(d.buffer[:idx])
-		d.buffer = d.buffer[idx+2:]
+	for _, frame := range d.framer.Feed(chunk) {
+		raw := string(frame)
 		if strings.TrimSpace(raw) == "" {
 			continue
 		}
@@ -87,12 +81,12 @@ func (d *SSEDecoder) Feed(chunk []byte) []SSEEvent {
 }
 
 func (d *SSEDecoder) Flush() []byte {
-	out := d.buffer
-	d.buffer = nil
-	return out
+	return d.framer.Flush()
 }
 
 func parseSSEEvent(raw string) SSEEvent {
+	raw = strings.ReplaceAll(raw, "\r\n", "\n")
+	raw = strings.ReplaceAll(raw, "\r", "\n")
 	event := SSEEvent{}
 	var data []string
 	for _, line := range strings.Split(raw, "\n") {

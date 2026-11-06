@@ -270,6 +270,90 @@ func TestStreamReadCloserDeliversDataBeforeSourceError(t *testing.T) {
 	}
 }
 
+func TestStreamReadCloserTransportFailureEmitsTerminalError(t *testing.T) {
+	for _, ending := range []string{"", "\n\n"} {
+		t.Run("ending_"+ending, func(t *testing.T) {
+			sentinel := errors.New("connection reset")
+			reader := NewStreamReadCloser(&dataErrorReadCloser{
+				data: []byte(`data: {"choices":[{"delta":{"content":"partial"},"index":0}]}` + ending),
+				err:  sentinel,
+			}, "msg_reset", "alpha")
+			var out strings.Builder
+			buf := make([]byte, 7)
+			for {
+				n, err := reader.Read(buf)
+				out.Write(buf[:n])
+				if err != nil {
+					if !errors.Is(err, sentinel) {
+						t.Fatalf("read error = %v", err)
+					}
+					break
+				}
+			}
+			events := parseMessagesSSEEvents(t, out.String())
+			names := strings.Join(eventNames(events), ",")
+			if !strings.Contains(out.String(), "partial") || strings.Contains(names, "message_stop") || !strings.HasSuffix(names, ",error") {
+				t.Fatalf("partial stream = %s", out.String())
+			}
+			if !strings.Contains(reader.Adapter.StreamError(), sentinel.Error()) {
+				t.Fatalf("adapter error = %q", reader.Adapter.StreamError())
+			}
+		})
+	}
+}
+
+func TestStreamReadCloserProtocolErrorStopsUpstreamReads(t *testing.T) {
+	reader := NewStreamReadCloser(&terminalEventReadCloser{}, "msg_error", "alpha")
+	out, err := io.ReadAll(reader)
+	if err == nil || !strings.Contains(err.Error(), "overloaded") {
+		t.Fatalf("read error = %v", err)
+	}
+	if events := parseMessagesSSEEvents(t, string(out)); len(events) != 1 || eventNames(events)[0] != "error" {
+		t.Fatalf("events = %#v", events)
+	}
+}
+
+// Continuing to read after a terminal event can wait forever on some upstreams.
+type terminalEventReadCloser struct {
+	read bool
+	done bool
+}
+
+func (r *terminalEventReadCloser) Read(p []byte) (int, error) {
+	if r.read {
+		panic("read upstream after terminal event")
+	}
+	r.read = true
+	if r.done {
+		return copy(p, "data: [DONE]\n\n"), nil
+	}
+	return copy(p, "data: {\"error\":{\"message\":\"overloaded\"}}\n\n"), nil
+}
+
+func (*terminalEventReadCloser) Close() error { return nil }
+
+func TestStreamReadCloserDoneStopsUpstreamReads(t *testing.T) {
+	reader := NewStreamReadCloser(&terminalEventReadCloser{done: true}, "msg_done", "alpha")
+	out, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("read error = %v", err)
+	}
+	events := parseMessagesSSEEvents(t, string(out))
+	if names := eventNames(events); names[len(names)-1] != "message_stop" || reader.Adapter.StreamError() != "" {
+		t.Fatalf("events = %v, adapter error = %q", names, reader.Adapter.StreamError())
+	}
+}
+
+func TestStreamReadCloserCloseRecordsFailure(t *testing.T) {
+	reader := NewStreamReadCloser(io.NopCloser(strings.NewReader("")), "msg_closed", "alpha")
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if reader.Adapter.StreamError() == "" {
+		t.Fatal("closed stream reported no error")
+	}
+}
+
 func parseMessagesSSEEvents(t *testing.T, text string) []map[string]any {
 	t.Helper()
 	parts := strings.Split(text, "\n\n")

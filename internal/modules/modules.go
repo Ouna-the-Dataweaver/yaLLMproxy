@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/theio/yallmp-proxy/internal/sse"
 )
 
 type Context struct {
@@ -33,6 +35,7 @@ type Pipeline struct {
 
 type StreamState struct {
 	ModuleStates []any
+	framer       sse.Framer
 }
 
 type ResponseModule interface {
@@ -165,6 +168,7 @@ func (p Pipeline) ResetStreamState(state *StreamState) {
 	if state == nil {
 		return
 	}
+	state.framer = sse.Framer{}
 	for i, module := range p.Modules {
 		resetter, ok := module.(StreamResetResponseModule)
 		if !ok || i >= len(state.ModuleStates) {
@@ -178,6 +182,7 @@ func (p Pipeline) CloseStreamState(state *StreamState) {
 	if state == nil {
 		return
 	}
+	state.framer = sse.Framer{}
 	for i, module := range p.Modules {
 		closer, ok := module.(StreamCloseResponseModule)
 		if !ok || i >= len(state.ModuleStates) {
@@ -1736,49 +1741,84 @@ func FlushSSEChunkWithState(pipeline Pipeline, ctx Context, state *StreamState) 
 	if len(pipeline.Modules) == 0 {
 		return nil
 	}
+	var out []byte
+	if state != nil {
+		if remaining := state.framer.Flush(); len(remaining) > 0 {
+			out = rewriteSSEEvent(remaining, pipeline, ctx, state)
+		}
+	}
 	payloads := pipeline.FlushSSEPayloadsWithState(ctx, state)
 	if len(payloads) == 0 {
-		return nil
+		return out
 	}
 	lines := marshalSSEPayloadLines(payloads)
 	if len(lines) == 0 {
-		return nil
+		return out
 	}
-	return []byte(strings.Join(lines, "\n\n") + "\n\n")
+	if len(out) > 0 {
+		// An unterminated tail must not merge with the synthetic flush events.
+		out = append(out, '\n', '\n')
+	}
+	return append(out, []byte(strings.Join(lines, "\n\n")+"\n\n")...)
 }
 
 func RewriteSSEChunkWithState(chunk []byte, pipeline Pipeline, ctx Context, state *StreamState) []byte {
-	if len(chunk) == 0 || len(pipeline.Modules) == 0 {
+	if len(chunk) == 0 || !pipeline.Applies(ctx) {
 		return chunk
 	}
-	parts := bytes.SplitAfter(chunk, []byte("\n\n"))
-	changed := false
-	for i, part := range parts {
-		text := string(part)
-		lines := strings.Split(text, "\n")
-		for j, line := range lines {
-			if !strings.HasPrefix(line, "data:") {
-				continue
-			}
-			raw := strings.TrimLeft(strings.TrimPrefix(line, "data:"), " ")
-			if strings.TrimSpace(raw) == "[DONE]" {
-				if payloads := pipeline.FlushSSEPayloadsWithState(ctx, state); len(payloads) > 0 {
-					lines[j] = strings.Join(append(marshalSSEPayloadLines(payloads), line), "\n\n")
-					changed = true
-				}
-				continue
-			}
-			if rewritten, ok := pipeline.TransformSSEEventWithState(raw, ctx, state); ok {
-				lines[j] = "data: " + rewritten
-				changed = true
-			}
+	// The stateless convenience API treats its input as the entire stream.
+	var local sse.Framer
+	framer := &local
+	if state != nil {
+		framer = &state.framer
+	}
+	var out []byte
+	for _, event := range framer.Feed(chunk) {
+		out = append(out, rewriteSSEEvent(event, pipeline, ctx, state)...)
+	}
+	if state == nil {
+		out = append(out, rewriteSSEEvent(framer.Flush(), pipeline, ctx, state)...)
+	}
+	return out
+}
+
+func rewriteSSEEvent(event []byte, pipeline Pipeline, ctx Context, state *StreamState) []byte {
+	text := strings.ReplaceAll(string(event), "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	lines := strings.Split(text, "\n")
+	var data []string
+	for _, line := range lines {
+		if strings.HasPrefix(line, "data:") {
+			data = append(data, strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " "))
 		}
-		parts[i] = []byte(strings.Join(lines, "\n"))
 	}
+	raw := strings.Join(data, "\n")
+	if strings.TrimSpace(raw) == "[DONE]" {
+		if lines := marshalSSEPayloadLines(pipeline.FlushSSEPayloadsWithState(ctx, state)); len(lines) > 0 {
+			return append([]byte(strings.Join(lines, "\n\n")+"\n\n"), event...)
+		}
+		return event
+	}
+	rewritten, changed := pipeline.TransformSSEEventWithState(raw, ctx, state)
 	if !changed {
-		return chunk
+		return event
 	}
-	return bytes.Join(parts, nil)
+	var out bytes.Buffer
+	wroteData := false
+	for i, line := range lines {
+		if strings.HasPrefix(line, "data:") {
+			if wroteData {
+				continue
+			}
+			line = "data: " + rewritten
+			wroteData = true
+		}
+		out.WriteString(line)
+		if i < len(lines)-1 {
+			out.WriteByte('\n')
+		}
+	}
+	return out.Bytes()
 }
 
 func marshalSSEPayloadLines(payloads []map[string]any) []string {
