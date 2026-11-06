@@ -3042,7 +3042,7 @@ func defaultRealConfigPath() string {
 	if value := strings.TrimSpace(os.Getenv("YALLMP_REAL_CONFIG")); value != "" {
 		return value
 	}
-	return "/home/theio/repos/nidai_db/infra/yaLLMproxy/configs/config.yaml"
+	return "configs/config.yaml"
 }
 
 func defaultString(value string, fallback string) string {

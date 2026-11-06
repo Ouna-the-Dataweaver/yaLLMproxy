@@ -28,7 +28,7 @@ yaLLMproxy/
 ├── web/admin/                 # React source plus committed/embedded production bundle
 ├── static/                    # Logo and legacy static assets
 ├── configs/                   # Config examples and Jinja templates
-├── docs/                      # Go branch documentation
+├── docs/                      # User/operator documentation
 ├── certs/                     # Generated local certificates
 ├── go.mod
 ├── go.sum

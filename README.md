@@ -24,21 +24,12 @@ yaLLMproxy is a Go LLM proxy for OpenAI-compatible traffic, local model fleets, 
 - Built-in Go TCP forwarder and HTTP reverse forwarder.
 - React admin frontend source under `web/admin`, including Observability, Catalog, Routing, Logs, App Keys, and read-only Traces views.
 
-Known Go-vs-Python gaps are tracked in [docs/go_feature_gaps.md](docs/go_feature_gaps.md).
-
 ## Documentation Map
 
-- [docs/api.md](docs/api.md), [docs/configuration.md](docs/configuration.md), [docs/database.md](docs/database.md), [docs/testing.md](docs/testing.md), and [docs/project-structure.md](docs/project-structure.md) are the maintained user/operator docs.
-- [docs/release-readiness.md](docs/release-readiness.md) records the 2026-07-10 audit, required deployment gates, and remaining risks for the Go rollout.
-- [state.md](state.md) is the current Go refactor status snapshot, including post-pass branch notes.
-- [feature_list_go.md](feature_list_go.md) is the feature backlog and batch status tracker; as of 2026-07-09 the last completed feature pass is Batch 28.
-- [journal.md](journal.md) is the chronological work log. It is useful for resuming context but is not a concise product doc.
-- [go_refactor.md](go_refactor.md) and [shared_core.md](shared_core.md) are historical/planning notes. Treat maintained docs and code as authoritative before following those plans.
-- `.codex-upgrade/` is an ignored local archive of feature-batch planning and review artifacts; it is intentionally not tracked.
-
-## Development Status
-
-The Go-only `codex/go_refactor` line contains the completed Batch 28 feature pass and the later admin-password/UI follow-up. The newer `codex/gigachat-ca-cert-followup` branch is based on the old Python line, not the Go refactor; its custom GigaChat CA-bundle change has not been ported to Go. See [state.md](state.md) for the concise done/remaining snapshot and [journal.md](journal.md) for the chronological integration record.
+- [API](docs/api.md) and [configuration](docs/configuration.md) describe supported endpoints and settings.
+- [Simple routing](docs/simple-routing.md) covers provider discovery and model pools.
+- [Database](docs/database.md), [testing](docs/testing.md), and [project structure](docs/project-structure.md) cover operation and development.
+- [Release readiness](docs/release-readiness.md) covers rollout checks and known limitations.
 
 ## Prerequisites
 
@@ -86,7 +77,7 @@ curl http://localhost:7979/v1/chat/completions \
 | `task test` | Run all Go tests |
 | `task test:race` | Run all Go tests with the race detector |
 | `task smoke:fake` | Run fake client/upstream smoke tests and verify logging |
-| `task smoke:real` | Run real local-model smoke test; defaults to `glm_local` and external config path |
+| `task smoke:real` | Run real local-model smoke test; defaults to `glm_local` and `configs/config.yaml` |
 | `task audit` | Run vet, normal/race tests, fake smoke, and a locked frontend build |
 | `task audit:vuln` | Scan called Go code against the Go vulnerability database |
 | `task forwarder` | Run the Go TCP forwarder |
@@ -97,10 +88,10 @@ curl http://localhost:7979/v1/chat/completions \
 | `task db-clean-dry-run` | Preview request/error log cleanup |
 | `task db-clean` | Clean request/error logs |
 
-Real smoke defaults:
+Real smoke with an explicit config and model:
 
 ```bash
-task smoke:real -- --config /home/theio/repos/nidai_db/infra/yaLLMproxy/configs/config.yaml --model glm_local
+task smoke:real -- --config /path/to/config.yaml --model glm_local
 ```
 
 The smoke command runs the Go app in-process through HTTP and uses a temporary SQLite DB/request directory, so it does not leave a persistent server running.
@@ -219,7 +210,7 @@ task smoke:real
 
 `task smoke:fake` verifies request forwarding, model rewrite for chat/embeddings/rerank, stream usage propagation, passthrough fidelity, daily quota reset visibility from `/v1/usage`, in-memory OTel span/metric emission including parser/logging phases and stream TTFT/TPOT, opt-in streamed tool-argument JSON repair, translated Responses usage/reasoning/tool/terminal stream behavior, translated Messages thinking/tool stream behavior, Qwen template parser inspection, token logging, backend-name logging, exact-cache bypass behavior, and full request sidecars including parsed response/stream artifacts against an emulated upstream.
 
-`task smoke:real` loads the external config path, defaults to `glm_local`, sends non-stream and stream requests through the Go proxy, and verifies logs using a temporary smoke database.
+`task smoke:real` loads `configs/config.yaml` by default (override with `--config` or `YALLMP_REAL_CONFIG`), defaults to `glm_local` (override with `--model` or `YALLMP_SMOKE_MODEL`), sends non-stream and stream requests through the Go proxy, and verifies logs using a temporary smoke database.
 
 ## License
 

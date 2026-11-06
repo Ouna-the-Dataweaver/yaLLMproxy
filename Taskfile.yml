@@ -88,7 +88,7 @@ tasks:
       - bash -c 'GO_BIN="${GO:-$(command -v go || printf .tools/go/bin/go)}"; "$GO_BIN" run ./cmd/yallmp-smoke --mode=fake {{.CLI_ARGS}}'
 
   smoke:real:
-    desc: Run real local-model smoke test with external config (defaults to glm_local)
+    desc: Run real local-model smoke test (defaults to configs/config.yaml and glm_local)
     cmds:
       - bash -c 'GO_BIN="${GO:-$(command -v go || printf .tools/go/bin/go)}"; "$GO_BIN" run ./cmd/yallmp-smoke --mode=real {{.CLI_ARGS}}'
 

@@ -25,6 +25,9 @@ coverage.out
 !web/admin/dist/
 !web/admin/dist/**
 
+# Local assistant settings
+.claude/settings.local.json
+
 # Local toolchains and caches
 .tools/
 .cache/

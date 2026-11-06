@@ -1,6 +1,6 @@
 # Database Support
 
-The Go branch supports SQLite and PostgreSQL for persistent request metadata, error logs, response state, token usage, and admin log browsing.
+yaLLMproxy supports SQLite and PostgreSQL for persistent request metadata, error logs, response state, token usage, and admin log browsing.
 
 ## Configuration
 

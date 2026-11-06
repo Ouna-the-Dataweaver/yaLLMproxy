@@ -1,6 +1,6 @@
 # Testing Guide
 
-This branch uses Go tests and Go smoke harnesses.
+The repository uses Go tests and Go smoke harnesses.
 
 ## Unit And Integration Tests
 
@@ -94,8 +94,8 @@ task smoke:real
 
 Defaults:
 
-- config: `/home/theio/repos/nidai_db/infra/yaLLMproxy/configs/config.yaml`
-- model: `glm_local`
+- config: `configs/config.yaml` (or `YALLMP_REAL_CONFIG` when set)
+- model: `glm_local` (or `YALLMP_SMOKE_MODEL` when set)
 
 Override them with:
 
@@ -103,7 +103,7 @@ Override them with:
 task smoke:real -- --config /path/to/config.yaml --model glm_local
 ```
 
-The real smoke loads the external config and its adjacent `.env`, then overrides only the logging database and full-request directory to temporary paths. It sends non-stream and stream chat requests through the Go proxy to the selected real upstream model, then checks admin logs and full request detail.
+The real smoke loads the selected config and its adjacent `.env`, then overrides only the logging database and full-request directory to temporary paths. It sends non-stream and stream chat requests through the Go proxy to the selected real upstream model, then checks admin logs and full request detail.
 
 No persistent server is left running.
 
