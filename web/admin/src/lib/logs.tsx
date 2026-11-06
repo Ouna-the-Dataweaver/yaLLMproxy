@@ -1,3 +1,4 @@
+import { logTokenUsage } from "../logUsage";
 import { Badge } from "../components/ui/badge";
 import type { BadgeTone, JsonRecord, LogDetailSection, LogMeta, LogRecord } from "../types";
 import { firstPresent, formatValue, hasDetailValue, isJsonRecord, parseJSONText, percentValue } from "./format";
@@ -46,13 +47,13 @@ export function stopReasonTone(reason?: string): BadgeTone {
 }
 
 export function tokenDetailTitle(row: LogRecord) {
-  const usage = row.usage_stats || {};
+  const usage = logTokenUsage(row);
   const parts = [
-    ["Input", row.prompt_tokens ?? usage.prompt_tokens],
-    ["Output", row.completion_tokens ?? usage.completion_tokens],
-    ["Cached", row.cached_tokens ?? usage.cached_tokens],
-    ["Reasoning", row.reasoning_tokens ?? usage.reasoning_tokens]
-  ].filter(([, value]) => typeof value === "number");
+    ["Input", usage.input ?? "Not reported"],
+    ["Output", usage.output ?? "Not reported"],
+    ["Cached input", usage.cached ?? "Not reported"],
+    ["Reasoning", usage.reasoning ?? "Not reported"]
+  ];
   return parts.map(([label, value]) => `${label}: ${value}`).join(" | ");
 }
 

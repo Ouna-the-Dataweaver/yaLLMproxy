@@ -1,7 +1,8 @@
+import { logTokenUsage } from "../logUsage";
 import { Activity, ChevronLeft, ChevronRight, Copy, Download, Eye, FileJson, Search } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import { copyText, detailValueLabel, downloadJSON, firstPresent, formatDuration, formatTime, formatValue, hasDetailValue, isJsonRecord, nestedNumber, numberField, parseJSONText, prettyJSON, safeClassName, stringField } from "../lib/format";
-import { conversationMessages, logDetailSections, outcomeTone } from "../lib/logs";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { copyText, detailValueLabel, downloadJSON, firstPresent, formatDuration, formatTime, formatValue, hasDetailValue, isJsonRecord, numberField, parseJSONText, prettyJSON, safeClassName, stringField } from "../lib/format";
+import { conversationMessages, logDetailSections, omitFields, outcomeTone } from "../lib/logs";
 import type { JsonRecord, LogDetailSection, LogRecord } from "../types";
 import { PanelTitle } from "./common";
 import { TraceSummaryValue } from "./TraceTimeline";
@@ -25,6 +26,9 @@ export function LogInspector({
 }) {
   const [search, setSearch] = useState("");
   const [raw, setRaw] = useState(false);
+  const [historyCollapsed, setHistoryCollapsed] = useState(false);
+  const [expandedMessages, setExpandedMessages] = useState<Set<number>>(new Set());
+  const inspectorRef = useRef<HTMLDivElement>(null);
   const logID = stringField(log, "id");
   const sections = useMemo(() => logDetailSections(log), [log]);
   const body = firstPresent(log?.request_body, log?.body);
@@ -41,6 +45,9 @@ export function LogInspector({
   useEffect(() => {
     setSearch("");
     setRaw(false);
+    setHistoryCollapsed(false);
+    setExpandedMessages(new Set());
+    if (inspectorRef.current) inspectorRef.current.scrollTop = 0;
   }, [logID]);
 
   if (!log) {
@@ -55,9 +62,15 @@ export function LogInspector({
 
   const responseValue = firstPresent(log.response_body, parseJSONText(log.full_response));
   const filenameID = logID || "request";
+  const historyView = historyCollapsed ? "collapsed" : expandedMessages.size === messages.length ? "expanded" : "headers";
+
+  function changeHistoryView(view: string) {
+    setHistoryCollapsed(view === "collapsed");
+    setExpandedMessages(view === "expanded" ? new Set(messages.map((_, index) => index)) : new Set());
+  }
 
   return (
-    <div className="log-inspector">
+    <div className="log-inspector" ref={inspectorRef}>
       <div className="log-detail-toolbar">
         <label className="detail-search-field">
           <Search size={15} aria-hidden="true" />
@@ -81,6 +94,14 @@ export function LogInspector({
             <ChevronRight size={16} aria-hidden="true" />
           </Button>
         </div>
+        {!raw && messagesMatch && (
+          <div className="history-controls" role="group" aria-label="Conversation view">
+            <span>History</span>
+            {([["collapsed", "Collapsed"], ["headers", "Message headers"], ["expanded", "Expanded"]] as const).map(([view, label]) => (
+              <Button key={view} type="button" variant={historyView === view ? "secondary" : "ghost"} size="sm" aria-pressed={historyView === view} onClick={() => changeHistoryView(view)}>{label}</Button>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="log-overview-grid">
@@ -90,7 +111,7 @@ export function LogInspector({
         <TraceSummaryValue label="Outcome" value={<Badge tone={outcomeTone(log as LogRecord)}>{formatValue(log.outcome || log.backend_status)}</Badge>} />
         <TraceSummaryValue label="Backend" value={formatValue(log.backend_name)} />
         <TraceSummaryValue label="Duration" value={formatDuration(numberField(log, "duration_ms"))} />
-        <TraceSummaryValue label="Tokens" value={formatValue(log.total_tokens || nestedNumber(log, "usage_stats", "total_tokens"))} />
+        <LogTokenSummary key={logID} log={log} />
         <TraceSummaryValue label="Stop reason" value={formatValue(log.stop_reason)} />
       </div>
 
@@ -113,7 +134,11 @@ export function LogInspector({
                   <Download size={16} aria-hidden="true" />
                 </Button>
               </div>
-              <MessageList messages={messages} />
+              {!historyCollapsed && <MessageList messages={messages} expanded={expandedMessages} onToggle={(index) => setExpandedMessages((current) => {
+                const next = new Set(current);
+                if (next.has(index)) next.delete(index); else next.add(index);
+                return next;
+              })} />}
             </section>
           )}
           {filteredSections.map((section) => (
@@ -142,17 +167,49 @@ export function LogInspector({
   );
 }
 
-export function MessageList({ messages }: { messages: unknown[] }) {
+function LogTokenSummary({ log }: { log: JsonRecord }) {
+  const usage = logTokenUsage(log);
+  const display = (value: number | undefined) => value === undefined ? "Not reported" : value.toLocaleString();
+  return (
+    <details className="trace-summary-value token-summary">
+      <summary aria-label="Token breakdown">
+        <span>Tokens <ChevronRight size={15} aria-hidden="true" /></span>
+        <strong>{display(usage.total)}</strong>
+        <small>Cached input: {display(usage.cached)}</small>
+      </summary>
+      <dl className="token-breakdown">
+        <div><dt>Input</dt><dd>{display(usage.input)}</dd></div>
+        <div><dt>Output</dt><dd>{display(usage.output)}</dd></div>
+        <div><dt>Cached input</dt><dd>{display(usage.cached)}</dd></div>
+        <div><dt>Reasoning output</dt><dd>{display(usage.reasoning)}</dd></div>
+      </dl>
+      <p className="token-note">{usage.cached === undefined
+        ? "No cached-input count in stored usage. This does not mean zero cache hits."
+        : "Cached input is part of input tokens; reasoning is part of output. These are upstream token counts, not proxy response-cache hits."}</p>
+    </details>
+  );
+}
+
+export function MessageList({ messages, expanded, onToggle }: { messages: unknown[]; expanded: Set<number>; onToggle: (index: number) => void }) {
   return (
     <div className="message-list">
       {messages.map((message, index) => {
         const record = isJsonRecord(message) ? message : null;
         const role = stringField(record, "role") || stringField(record, "type") || "item";
         const content = record && "content" in record ? record.content : message;
+        const metadata = record ? omitFields(record, ["role", "content"]) : {};
+        const preview = (typeof content === "string" && content ? content : prettyJSON(record?.tool_calls || content)).replace(/\s+/g, " ").slice(0, 160);
+        const open = expanded.has(index);
         return (
           <article className={`message-card message-${safeClassName(role)}`} key={`${role}-${index}`}>
-            <header><Badge>{role}</Badge><span>#{index + 1}</span></header>
-            <MessageContent value={content} />
+            <button type="button" className="message-toggle" aria-expanded={open} aria-label={`Message ${index + 1}: ${role}`} onClick={() => onToggle(index)}>
+              <ChevronRight className={open ? "message-chevron expanded" : "message-chevron"} size={15} aria-hidden="true" />
+              <Badge>{role}</Badge><span className="message-preview">{preview}</span><span>#{index + 1}</span>
+            </button>
+            {open && <div className="message-body">
+              <MessageContent value={content} />
+              {Object.keys(metadata).length > 0 && <JsonBlock value={metadata} />}
+            </div>}
           </article>
         );
       })}

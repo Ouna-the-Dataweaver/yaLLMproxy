@@ -110,11 +110,18 @@ tasks:
     cmds:
       - npm run build
 
+  frontend:test:
+    desc: Run admin frontend regression tests
+    dir: web/admin
+    cmds:
+      - npm test
+
   frontend:ci:
     desc: Install locked frontend dependencies, build, and verify the committed bundle is current
     dir: web/admin
     cmds:
       - npm ci
+      - npm test
       - npm run build
       - git diff --exit-code -- dist
 

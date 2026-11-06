@@ -55,11 +55,11 @@ export function LogsTab() {
               <option value="false">No tool calls</option>
             </select>
           </label>
-          <label className="field">
+          <label className="field log-filter-date">
             <span>From</span>
             <input type="datetime-local" value={filters.startDate} onChange={(event) => setFilters({ ...filters, startDate: event.target.value })} />
           </label>
-          <label className="field">
+          <label className="field log-filter-date">
             <span>To</span>
             <input type="datetime-local" value={filters.endDate} onChange={(event) => setFilters({ ...filters, endDate: event.target.value })} />
           </label>
@@ -93,20 +93,20 @@ export function LogsTab() {
             <tbody>
               {logs.map((row, index) => (
                 <tr key={row.id || index} className={row.id === selectedLogID ? "selected-row" : undefined}>
-                  <td>
+                  <td data-label="Time">
                     <button type="button" className="log-open-button" onClick={() => void selectLog(row.id)} aria-label={`Inspect request from ${formatTime(row.request_time || row.created_at)}`}>
                       {formatTime(row.request_time || row.created_at)}
                     </button>
                   </td>
-                  <td><span className="resource-name">{row.model_name || "-"}</span>{row.is_tool_call && <Badge>tool</Badge>}</td>
-                  <td>
+                  <td data-label="Model"><span className="resource-name">{row.model_name || "-"}</span>{row.is_tool_call && <Badge>tool</Badge>}</td>
+                  <td data-label="Status">
                     <Badge tone={outcomeTone(row)}>{row.outcome || row.backend_status || "-"}</Badge>
                     {Number(row.warning_count || 0) > 0 && <Badge tone="warn">{row.warning_count} warn</Badge>}
                   </td>
-                  <td>{row.stop_reason ? <Badge tone={stopReasonTone(row.stop_reason)}>{row.stop_reason}</Badge> : "-"}</td>
-                  <td className="num" title={tokenDetailTitle(row)}>{formatValue(row.total_tokens ?? row.usage_stats?.total_tokens)}</td>
-                  <td className="num">{formatDuration(row.duration_ms)}</td>
-                  {logsHaveTraceIDs && <td>{renderTraceID(traceIDFromRecord(row), openTraceDashboard)}</td>}
+                  <td data-label="Stop">{row.stop_reason ? <Badge tone={stopReasonTone(row.stop_reason)}>{row.stop_reason}</Badge> : "-"}</td>
+                  <td data-label="Tokens" className="num" title={tokenDetailTitle(row)}>{formatValue(row.total_tokens ?? row.usage_stats?.total_tokens)}</td>
+                  <td data-label="Duration" className="num">{formatDuration(row.duration_ms)}</td>
+                  {logsHaveTraceIDs && <td data-label="Trace">{renderTraceID(traceIDFromRecord(row), openTraceDashboard)}</td>}
                 </tr>
               ))}
               {logs.length === 0 && (
