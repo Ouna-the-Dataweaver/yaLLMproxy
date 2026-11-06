@@ -42,7 +42,7 @@ The Go-only `codex/go_refactor` line contains the completed Batch 28 feature pas
 
 ## Prerequisites
 
-- Go 1.26.5 or newer in the 1.26 line, as required by `go.mod`. The repo also supports the bundled `.tools/go/bin/go` fallback and Go's automatic patch-toolchain selection used by `Taskfile.yml`.
+- Go 1.26.10 or newer in the 1.26 line, as required by `go.mod`. The repo also supports the bundled `.tools/go/bin/go` fallback and Go's automatic patch-toolchain selection used by `Taskfile.yml`.
 - [go-task](https://taskfile.dev/) for common commands.
 - Optional: Node.js/npm for building the React admin frontend.
 - Optional: mkcert for local forwarder certificates.
