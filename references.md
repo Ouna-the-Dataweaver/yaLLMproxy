@@ -1,6 +1,6 @@
 # Local References
 
-Cloned under `/home/theio/repos/references`.
+Cloned under `/home/theio/repos/references` as shallow, single-branch checkouts of each remote's default branch. Revisions below were verified against remote HEAD on 2026-10-19.
 
 ## OpenAI API Docs
 
@@ -14,7 +14,7 @@ OpenAI's Chat Completions API creates model responses from conversation-style me
 
 - Path: `/home/theio/repos/references/bifrost`
 - Source: `https://github.com/maximhq/bifrost.git`
-- Checkout: `b1e203b4b`
+- Checkout: `1813de5330714eacd3034d95fbdef93b365005bc` (`dev`; committed 2026-10-19)
 
 Bifrost is a high-performance AI gateway that exposes one OpenAI-compatible API for many LLM providers, with failover, load balancing, caching, monitoring, and governance features. The core is Go (`go.mod` modules under `core`, `transports`, `framework`, and `cli`), with a React 19 + TypeScript + Vite web UI under `ui`.
 
@@ -22,7 +22,7 @@ Bifrost is a high-performance AI gateway that exposes one OpenAI-compatible API 
 
 - Path: `/home/theio/repos/references/tensorzero`
 - Source: `https://github.com/tensorzero/tensorzero.git`
-- Checkout: `62eb8f63e`
+- Checkout: `62eb8f63e8ec62018d70420dbf1a8c5d1c026315` (`main`; committed 2026-06-04)
 
 TensorZero is an LLMOps platform combining an LLM gateway, observability, evaluation, optimization, and experimentation. The gateway and main workspace are Rust (`crates/Cargo.toml`, edition 2024, Axum/Tokio/Reqwest), with TypeScript/Node tooling, Python bindings/scripts, and a web UI/docs toolchain managed with pnpm.
 
@@ -30,7 +30,7 @@ TensorZero is an LLMOps platform combining an LLM gateway, observability, evalua
 
 - Path: `/home/theio/repos/references/ai-gateway`
 - Source: `https://github.com/envoyproxy/ai-gateway.git`
-- Checkout: `f2d59a6a`
+- Checkout: `12fef6422579f544e84be8167d0979527d3576d4` (`main`; committed 2026-10-16)
 
 Envoy AI Gateway uses Envoy Gateway to route application traffic to generative AI providers and self-hosted model serving clusters, including auth, routing, rate limiting, and provider integrations. It is primarily Go (`go.mod`) on Kubernetes/Envoy Gateway APIs, with dependencies on Envoy control-plane, OpenTelemetry, provider SDKs, controller-runtime, and a Docusaurus/React documentation site under `site`.
 
@@ -38,6 +38,6 @@ Envoy AI Gateway uses Envoy Gateway to route application traffic to generative A
 
 - Path: `/home/theio/repos/references/gateway-api-inference-extension`
 - Source: `https://github.com/kubernetes-sigs/gateway-api-inference-extension.git`
-- Checkout: `0bd1effa`
+- Checkout: `db75ec81b80f8728835b56cdb445e8ff1fbfd430` (`main`; committed 2026-10-15)
 
 Gateway API Inference Extension turns an ext-proc capable Gateway API implementation into an inference gateway for self-hosted generative models on Kubernetes, with routing/scheduling APIs such as InferencePool and lightweight endpoint picking. It is primarily Go (`go.mod`) using Kubernetes APIs, controller-runtime, Envoy external processing/control-plane libraries, OpenTelemetry, Prometheus, gRPC, CRDs, and conformance-test tooling.

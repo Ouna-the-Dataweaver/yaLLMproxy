@@ -23,7 +23,7 @@ task audit
 task audit:vuln
 ```
 
-`task audit` performs a clean locked frontend build first, verifies the committed bundle is current, then runs Go vet, the normal and race-enabled Go suites, and deterministic fake smoke. `task audit:vuln` is separate because it requires network access to query the Go vulnerability database.
+`task audit` installs locked frontend dependencies, runs frontend regression tests and the production build, verifies the committed bundle is current, then runs Go vet, the normal and race-enabled Go suites, and deterministic fake smoke. `task audit:vuln` is separate because it requires network access to query the Go vulnerability database.
 
 The Go tests cover:
 
@@ -113,6 +113,7 @@ Frontend source typechecking and bundling are separate from `task test`; `task a
 
 ```bash
 task frontend:install
+task frontend:test
 task frontend:build
 ```
 
