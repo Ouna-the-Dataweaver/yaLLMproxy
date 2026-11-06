@@ -209,7 +209,7 @@ func (s *state) hasAvailableSlot() bool {
 
 func (s *state) allowRate(now time.Time, limits RateLimits) bool {
 	if limits.RPS > 0 {
-		s.rpsBucket.configure(limits.RPS, limits.RPS)
+		s.rpsBucket.configure(max(1, limits.RPS), limits.RPS)
 		s.rpsBucket.refill(now)
 	}
 	if limits.RPM > 0 {
@@ -236,7 +236,7 @@ func (s *state) rateAvailable(now time.Time, limits RateLimits) bool {
 	rpsBucket := s.rpsBucket
 	rpmBucket := s.rpmBucket
 	if limits.RPS > 0 {
-		rpsBucket.configure(limits.RPS, limits.RPS)
+		rpsBucket.configure(max(1, limits.RPS), limits.RPS)
 		rpsBucket.refill(now)
 	}
 	if limits.RPM > 0 {

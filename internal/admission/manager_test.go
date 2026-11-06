@@ -117,6 +117,36 @@ func TestRateLimitRPSRefillsBySecond(t *testing.T) {
 	}
 }
 
+func TestFractionalRPSAllowsOneRequestPerRefillInterval(t *testing.T) {
+	m := NewManager()
+	now := time.Unix(1000, 0)
+	m.now = func() time.Time { return now }
+	limits := RateLimits{RPS: 0.5}
+	if !m.RateLimitAvailable("key", "model", limits) {
+		t.Fatal("fractional RPS must allow an initial request")
+	}
+	if err := m.CheckRateLimit("key", "model", limits); err != nil {
+		t.Fatalf("initial request: %v", err)
+	}
+	now = now.Add(time.Second)
+	if m.RateLimitAvailable("key", "model", limits) {
+		t.Fatal("half-refilled bucket allowed another request")
+	}
+	if err := m.CheckRateLimit("key", "model", limits); !errors.Is(err, ErrRateLimitExceeded) {
+		t.Fatalf("before refill: %v", err)
+	}
+	now = now.Add(time.Second)
+	if !m.RateLimitAvailable("key", "model", limits) {
+		t.Fatal("fractional RPS did not refill after two seconds")
+	}
+	if err := m.CheckRateLimit("key", "model", limits); err != nil {
+		t.Fatalf("after refill: %v", err)
+	}
+	if m.RateLimitAvailable("key", "model", limits) {
+		t.Fatal("consumed refill still available")
+	}
+}
+
 func TestRateLimitRPMRefillsOverMinute(t *testing.T) {
 	m := NewManager()
 	now := time.Unix(1000, 0)
