@@ -148,6 +148,9 @@ func (a *App) handleMessages(w http.ResponseWriter, r *http.Request) {
 			requestStatus = 499
 			w.WriteHeader(499)
 		}
+		entry := a.addLog(r, LogEntry{Time: start, Method: r.Method, Path: r.URL.Path, Model: modelName, Status: requestStatus, Error: err.Error(), DurationMS: time.Since(start).Milliseconds()})
+		payloadPath := a.storePayload(entry, r, body, nil, nil)
+		a.persistLog(r.Context(), entry, r, isStream, pctx, payloadPath, nil)
 		return
 	}
 	admissionSpan.End(observability.SpanResult{Outcome: observability.OutcomeSuccess})
@@ -366,13 +369,16 @@ func (a *App) handleMessagesStream(w http.ResponseWriter, r *http.Request, start
 			}
 		}}
 		_, streamErr := copyStreaming(w, streamReader, a.newStreamTimingObserver(r.Context(), observability.EndpointKind(r.URL.Path), modelName, start, resp.StatusCode))
+		if streamErr == nil {
+			streamErr = usageReader.streamErr
+		}
 		if streamErr != nil {
 			_ = streamReader.Close()
 		}
 		if resp.StatusCode < 400 && streamErr == nil {
 			a.recordTokenUsageMetric(r.Context(), observability.EndpointKind(r.URL.Path), modelName, true, usageReader.UsageStats())
 		}
-		entry := a.addLog(r, withForwardWarnings(LogEntry{Time: start, Method: r.Method, Path: r.URL.Path, Model: modelName, Status: resp.StatusCode, Backend: backendName, DurationMS: time.Since(start).Milliseconds()}, forwardResult))
+		entry := a.addLog(r, withForwardWarnings(LogEntry{Time: start, Method: r.Method, Path: r.URL.Path, Model: modelName, Status: resp.StatusCode, Backend: backendName, Error: streamErrorMessage(streamErr), DurationMS: time.Since(start).Milliseconds()}, forwardResult))
 		payloadPath := a.storePayload(entry, r, requestBody, resp.Header, nil)
 		a.persistLogWithUsage(r.Context(), entry, r, true, pctx, payloadPath, nil, usageReader.UsageStats())
 		return streamErr
@@ -387,13 +393,16 @@ func (a *App) handleMessagesStream(w http.ResponseWriter, r *http.Request, start
 		}
 	}}
 	_, streamErr := copyStreaming(w, streamReader, a.newStreamTimingObserver(r.Context(), observability.EndpointKind(r.URL.Path), modelName, start, resp.StatusCode))
+	if streamErr == nil && stream.Adapter.StreamError() != "" {
+		streamErr = errors.New(stream.Adapter.StreamError())
+	}
 	if streamErr != nil {
 		_ = streamReader.Close()
 	}
 	if resp.StatusCode < 400 && streamErr == nil {
 		a.recordTokenUsageMetric(r.Context(), observability.EndpointKind(r.URL.Path), modelName, true, stream.Adapter.UsageStats())
 	}
-	entry := a.addLog(r, withForwardWarnings(LogEntry{Time: start, Method: r.Method, Path: r.URL.Path, Model: modelName, Status: resp.StatusCode, Backend: backendName, Error: stream.Adapter.StreamError(), DurationMS: time.Since(start).Milliseconds()}, forwardResult))
+	entry := a.addLog(r, withForwardWarnings(LogEntry{Time: start, Method: r.Method, Path: r.URL.Path, Model: modelName, Status: resp.StatusCode, Backend: backendName, Error: streamErrorMessage(streamErr), DurationMS: time.Since(start).Milliseconds()}, forwardResult))
 	payloadPath := a.storePayload(entry, r, requestBody, resp.Header, nil)
 	a.persistLogWithUsage(r.Context(), entry, r, true, pctx, payloadPath, nil, stream.Adapter.UsageStats())
 	return streamErr
@@ -465,10 +474,12 @@ func (a *App) directMessagesBackendIsAnthropic(modelName string) bool {
 
 type anthropicStreamUsageReadCloser struct {
 	io.ReadCloser
-	decoder      proxy.SSEJSONDecoder
-	inputTokens  int
-	outputTokens int
-	totalTokens  int
+	streamErr       error
+	decoder         proxy.SSEJSONDecoder
+	inputTokens     int
+	cacheReadTokens *int
+	outputTokens    int
+	totalTokens     int
 }
 
 func (r *anthropicStreamUsageReadCloser) Read(p []byte) (int, error) {
@@ -495,7 +506,7 @@ func (r *anthropicStreamUsageReadCloser) TotalTokens() int {
 }
 
 func (r *anthropicStreamUsageReadCloser) UsageStats() map[string]any {
-	if r == nil || r.inputTokens+r.outputTokens+r.totalTokens == 0 {
+	if r == nil || (r.inputTokens+r.outputTokens+r.totalTokens == 0 && r.cacheReadTokens == nil) {
 		return nil
 	}
 	usage := map[string]any{
@@ -503,6 +514,9 @@ func (r *anthropicStreamUsageReadCloser) UsageStats() map[string]any {
 		"output_tokens":     r.outputTokens,
 		"prompt_tokens":     r.inputTokens,
 		"completion_tokens": r.outputTokens,
+	}
+	if r.cacheReadTokens != nil {
+		usage["cache_read_input_tokens"] = *r.cacheReadTokens
 	}
 	if total := r.TotalTokens(); total > 0 {
 		usage["total_tokens"] = total
@@ -517,6 +531,9 @@ func (r *anthropicStreamUsageReadCloser) observe(chunk []byte) {
 }
 
 func (r *anthropicStreamUsageReadCloser) observePayload(payload map[string]any) {
+	if err := streamPayloadError(payload); err != nil {
+		r.streamErr = err
+	}
 	if message, _ := payload["message"].(map[string]any); len(message) > 0 {
 		if usage, _ := message["usage"].(map[string]any); len(usage) > 0 {
 			r.observeUsage(usage)
@@ -528,6 +545,9 @@ func (r *anthropicStreamUsageReadCloser) observePayload(payload map[string]any) 
 }
 
 func (r *anthropicStreamUsageReadCloser) observeUsage(usage map[string]any) {
+	if count, reported := logdb.ReportedTokenCount(usage["cache_read_input_tokens"]); reported {
+		r.cacheReadTokens = &count
+	}
 	if tokens := intFromAny(usage["input_tokens"]); tokens > 0 {
 		r.inputTokens = tokens
 	}

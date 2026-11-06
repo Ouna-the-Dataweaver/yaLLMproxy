@@ -360,6 +360,10 @@ func (s *Store) Insert(ctx context.Context, record Record) (string, error) {
 	record.ReasoningTokens = usage.reasoningTokens
 	record.TokensPerSecond = usage.tokensPerSecond
 	record.WeightedTokens = usage.weightedTokens
+	var cachedTokensValue any
+	if usage.cachedTokensReported {
+		cachedTokensValue = record.CachedTokens
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return "", err
@@ -392,7 +396,7 @@ func (s *Store) Insert(ctx context.Context, record Record) (string, error) {
 		nullableInt(record.PromptTokens),
 		nullableInt(record.CompletionTokens),
 		nullableInt(record.TotalTokens),
-		nullableInt(record.CachedTokens),
+		cachedTokensValue,
 		nullableInt(record.ReasoningTokens),
 		nullableFloat(record.TokensPerSecond),
 		nullableFloat(record.WeightedTokens),
@@ -891,7 +895,8 @@ func (s *Store) tokenUsageByQuotaScope(ctx context.Context, since *time.Time) ([
 		COALESCE(SUM(total_tokens), 0)
 		FROM request_metadata
 		WHERE total_tokens IS NOT NULL AND total_tokens > 0
-			AND (outcome IS NULL OR outcome != 'error')`
+			AND (outcome IS NULL OR outcome != 'error'
+				OR (is_stream = 1 AND backend_status >= 200 AND backend_status < 400))`
 	args := []any(nil)
 	if since != nil {
 		query += ` AND request_time >= ?`
@@ -935,7 +940,8 @@ func (s *Store) tokenUsageByBackend(ctx context.Context, since *time.Time) ([]To
 		COALESCE(SUM(total_tokens), 0)
 		FROM request_metadata
 		WHERE total_tokens IS NOT NULL AND total_tokens > 0
-			AND (outcome IS NULL OR outcome != 'error')
+			AND (outcome IS NULL OR outcome != 'error'
+				OR (is_stream = 1 AND backend_status >= 200 AND backend_status < 400))
 			AND backend_name IS NOT NULL AND backend_name != ''`
 	args := []any(nil)
 	if since != nil {
@@ -1324,6 +1330,14 @@ func scanRecord(rows scanner) (Record, error) {
 	}
 	record.DurationSeconds = float64(record.DurationMS) / 1000
 	record.UsageStats = buildUsage(record)
+	// SQL NULL means the upstream did not report cache usage. Preserve an
+	// explicitly reported zero so the inspector can distinguish the two.
+	if cachedTokens.Valid {
+		if record.UsageStats == nil {
+			record.UsageStats = map[string]any{}
+		}
+		record.UsageStats["prompt_tokens_details"] = map[string]any{"cached_tokens": record.CachedTokens}
+	}
 	return record, nil
 }
 
@@ -1349,13 +1363,14 @@ func scanAttempt(rows scanner) (Attempt, error) {
 }
 
 type usageValues struct {
-	promptTokens     int
-	completionTokens int
-	totalTokens      int
-	cachedTokens     int
-	reasoningTokens  int
-	tokensPerSecond  float64
-	weightedTokens   float64
+	promptTokens         int
+	completionTokens     int
+	totalTokens          int
+	cachedTokens         int
+	cachedTokensReported bool
+	reasoningTokens      int
+	tokensPerSecond      float64
+	weightedTokens       float64
 }
 
 func usageColumns(usage map[string]any) usageValues {
@@ -1370,15 +1385,43 @@ func usageColumns(usage map[string]any) usageValues {
 	if len(completionDetails) == 0 {
 		completionDetails, _ = toMap(usage["output_tokens_details"])
 	}
+	cachedTokens, cachedTokensReported := ReportedTokenCount(promptDetails["cached_tokens"], usage["cached_tokens"], usage["cache_read_input_tokens"])
 	return usageValues{
-		promptTokens:     firstIntValue(usage["prompt_tokens"], usage["input_tokens"]),
-		completionTokens: firstIntValue(usage["completion_tokens"], usage["output_tokens"]),
-		totalTokens:      intValue(usage["total_tokens"]),
-		cachedTokens:     intValue(promptDetails["cached_tokens"]),
-		reasoningTokens:  intValue(completionDetails["reasoning_tokens"]),
-		tokensPerSecond:  floatValue(usage["tokens_per_second"]),
-		weightedTokens:   floatValue(usage["weighted_tokens"]),
+		promptTokens:         firstIntValue(usage["prompt_tokens"], usage["input_tokens"]),
+		completionTokens:     firstIntValue(usage["completion_tokens"], usage["output_tokens"]),
+		totalTokens:          intValue(usage["total_tokens"]),
+		cachedTokens:         cachedTokens,
+		cachedTokensReported: cachedTokensReported,
+		reasoningTokens:      intValue(completionDetails["reasoning_tokens"]),
+		tokensPerSecond:      floatValue(usage["tokens_per_second"]),
+		weightedTokens:       floatValue(usage["weighted_tokens"]),
 	}
+}
+
+// ReportedTokenCount returns the first nonnegative integer count, preserving
+// explicitly reported zero while rejecting malformed and out-of-range values.
+func ReportedTokenCount(values ...any) (int, bool) {
+	for _, value := range values {
+		switch typed := value.(type) {
+		case int:
+			if typed >= 0 {
+				return typed, true
+			}
+		case int64:
+			if typed >= 0 && typed <= int64(math.MaxInt) {
+				return int(typed), true
+			}
+		case float64:
+			if typed >= 0 && typed < float64(math.MaxInt) && math.Trunc(typed) == typed {
+				return int(typed), true
+			}
+		case json.Number:
+			if count, err := typed.Int64(); err == nil && count >= 0 && count <= int64(math.MaxInt) {
+				return int(count), true
+			}
+		}
+	}
+	return 0, false
 }
 
 func buildUsage(record Record) map[string]any {

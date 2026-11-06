@@ -65,6 +65,8 @@ var parsedStreamSidecarMaxBytes int64 = 4 << 20
 
 const observabilityShutdownTimeout = 5 * time.Second
 
+const logPersistenceTimeout = 5 * time.Second
+
 type MemoryLogs struct {
 	mu      sync.Mutex
 	entries []LogEntry
@@ -1443,6 +1445,9 @@ func (a *App) handleJSONProxy(w http.ResponseWriter, r *http.Request, validate v
 			w.WriteHeader(499)
 		}
 		requestErr = err
+		entry := a.addLog(r, LogEntry{Time: start, Method: r.Method, Path: r.URL.Path, Model: modelName, Status: requestStatus, Error: err.Error(), DurationMS: time.Since(start).Milliseconds()})
+		payloadPath := a.storePayload(entry, r, body, nil, nil)
+		a.persistLog(r.Context(), entry, r, isStream, pctx, payloadPath, nil)
 		return
 	}
 	admissionSpan.End(observability.SpanResult{Outcome: observability.OutcomeSuccess})
@@ -1518,6 +1523,9 @@ func (a *App) handleJSONProxy(w http.ResponseWriter, r *http.Request, validate v
 			}
 		}}
 		_, streamErr := copyStreaming(w, streamReader, a.newStreamTimingObserver(r.Context(), endpointKind, modelName, start, resp.StatusCode))
+		if streamErr == nil {
+			streamErr = streamUsage.streamErr
+		}
 		if streamErr != nil {
 			_ = streamReader.Close()
 		}
@@ -1535,7 +1543,7 @@ func (a *App) handleJSONProxy(w http.ResponseWriter, r *http.Request, validate v
 		if resp.StatusCode < 400 && streamErr == nil {
 			a.recordTokenUsageMetric(r.Context(), endpointKind, modelName, true, streamUsage.UsageStats())
 		}
-		entry := a.addLog(r, withForwardWarnings(LogEntry{Time: start, Method: r.Method, Path: r.URL.Path, Model: modelName, Status: resp.StatusCode, Backend: forwardResult.BackendName, DurationMS: time.Since(start).Milliseconds()}, forwardResult))
+		entry := a.addLog(r, withForwardWarnings(LogEntry{Time: start, Method: r.Method, Path: r.URL.Path, Model: modelName, Status: resp.StatusCode, Backend: forwardResult.BackendName, Error: streamErrorMessage(streamErr), DurationMS: time.Since(start).Milliseconds()}, forwardResult))
 		payloadPath := a.storePayloadWithParsedArtifacts(entry, r, body, resp.Header, nil, nil, parsedStreamSidecars)
 		a.persistLogWithUsage(r.Context(), entry, r, true, pctx, payloadPath, nil, streamUsage.UsageStats())
 	} else {
@@ -2041,6 +2049,10 @@ func (a *App) persistLogWithUsage(ctx context.Context, entry LogEntry, r *http.R
 	if a == nil || a.LogDB == nil || !a.LogDB.Enabled() || strings.TrimSpace(entry.Model) == "" {
 		return
 	}
+	// A disconnected client must not cancel the audit record. Keep trace values
+	// while bounding the database work independently of the request deadline.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), logPersistenceTimeout)
+	defer cancel()
 	_, loggingSpan := a.startProxyPhase(ctx, observability.PhaseLogging, observability.EndpointKind(entry.Path), entry.Model, isStream)
 	outcome := "success"
 	if entry.Status >= 400 || entry.Error != "" {
@@ -3148,6 +3160,31 @@ func copyHeaders(dst, src http.Header) {
 	}
 }
 
+func streamPayloadError(payload map[string]any) error {
+	if upstreamError, ok := proxy.SSEPayloadError(payload); ok {
+		if message, ok := upstreamError["message"].(string); ok && message != "" {
+			return errors.New(message)
+		}
+		return errors.New("upstream stream error")
+	}
+	if payload["type"] == "response.failed" {
+		if response, ok := payload["response"].(map[string]any); ok {
+			if err := streamPayloadError(response); err != nil {
+				return err
+			}
+		}
+		return errors.New("upstream response failed")
+	}
+	return nil
+}
+
+func streamErrorMessage(err error) string {
+	if err != nil {
+		return err.Error()
+	}
+	return ""
+}
+
 func copyStreaming(w http.ResponseWriter, r io.Reader, observer *streamTimingObserver) (int64, error) {
 	buf := make([]byte, 32*1024)
 	var written int64
@@ -3248,6 +3285,7 @@ func (s *streamTimingObserver) ObserveEOF() {
 
 type streamUsageReadCloser struct {
 	io.ReadCloser
+	streamErr   error
 	decoder     proxy.SSEJSONDecoder
 	totalTokens int
 	usage       map[string]any
@@ -3291,6 +3329,9 @@ func (s *streamUsageReadCloser) observe(chunk []byte) {
 }
 
 func (s *streamUsageReadCloser) observePayload(payload map[string]any) {
+	if err := streamPayloadError(payload); err != nil {
+		s.streamErr = err
+	}
 	usage, _ := payload["usage"].(map[string]any)
 	if tokens := totalTokensFromUsage(usage); tokens > 0 {
 		s.totalTokens = tokens
@@ -3313,8 +3354,10 @@ func (r *releaseOnEOF) Read(p []byte) (int, error) {
 }
 
 func (r *releaseOnEOF) Close() error {
+	// Finalize adapter state before callbacks snapshot and persist it.
+	err := r.ReadCloser.Close()
 	r.once.Do(r.release)
-	return r.ReadCloser.Close()
+	return err
 }
 
 func (a *App) addLog(r *http.Request, entry LogEntry) LogEntry {

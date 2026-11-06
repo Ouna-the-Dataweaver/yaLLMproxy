@@ -151,6 +151,9 @@ func (a *App) handleResponses(w http.ResponseWriter, r *http.Request) {
 			requestStatus = 499
 			w.WriteHeader(499)
 		}
+		entry := a.addLog(r, LogEntry{Time: start, Method: r.Method, Path: r.URL.Path, Model: modelName, Status: requestStatus, Error: err.Error(), DurationMS: time.Since(start).Milliseconds()})
+		payloadPath := a.storePayload(entry, r, body, nil, nil)
+		a.persistLog(r.Context(), entry, r, isStream, pctx, payloadPath, nil)
 		return
 	}
 	admissionSpan.End(observability.SpanResult{Outcome: observability.OutcomeSuccess})
@@ -377,13 +380,16 @@ func (a *App) handleResponsesStream(w http.ResponseWriter, r *http.Request, star
 			}
 		}}
 		_, streamErr := copyStreaming(w, streamReader, a.newStreamTimingObserver(r.Context(), observability.EndpointKind(r.URL.Path), modelName, start, resp.StatusCode))
+		if streamErr == nil {
+			streamErr = usageReader.streamErr
+		}
 		if streamErr != nil {
 			_ = streamReader.Close()
 		}
 		if resp.StatusCode < 400 && streamErr == nil {
 			a.recordTokenUsageMetric(r.Context(), observability.EndpointKind(r.URL.Path), modelName, true, usageReader.UsageStats())
 		}
-		entry := a.addLog(r, withForwardWarnings(LogEntry{Time: start, Method: r.Method, Path: r.URL.Path, Model: modelName, Status: resp.StatusCode, Backend: backendName, DurationMS: time.Since(start).Milliseconds()}, forwardResult))
+		entry := a.addLog(r, withForwardWarnings(LogEntry{Time: start, Method: r.Method, Path: r.URL.Path, Model: modelName, Status: resp.StatusCode, Backend: backendName, Error: streamErrorMessage(streamErr), DurationMS: time.Since(start).Milliseconds()}, forwardResult))
 		payloadPath := a.storePayload(entry, r, requestBody, resp.Header, nil)
 		a.persistLogWithUsage(r.Context(), entry, r, true, pctx, payloadPath, nil, usageReader.UsageStats())
 		return streamErr
@@ -402,13 +408,16 @@ func (a *App) handleResponsesStream(w http.ResponseWriter, r *http.Request, star
 		a.bindResponseSticky(responseID, backendName)
 	}}
 	_, streamErr := copyStreaming(w, streamReader, a.newStreamTimingObserver(r.Context(), observability.EndpointKind(r.URL.Path), modelName, start, resp.StatusCode))
+	if streamErr == nil && stream.Adapter.StreamError() != "" {
+		streamErr = errors.New(stream.Adapter.StreamError())
+	}
 	if streamErr != nil {
 		_ = streamReader.Close()
 	}
 	if resp.StatusCode < 400 && streamErr == nil {
 		a.recordTokenUsageMetric(r.Context(), observability.EndpointKind(r.URL.Path), modelName, true, stream.Adapter.UsageStats())
 	}
-	entry := a.addLog(r, withForwardWarnings(LogEntry{Time: start, Method: r.Method, Path: r.URL.Path, Model: modelName, Status: resp.StatusCode, Backend: backendName, Error: stream.Adapter.StreamError(), DurationMS: time.Since(start).Milliseconds()}, forwardResult))
+	entry := a.addLog(r, withForwardWarnings(LogEntry{Time: start, Method: r.Method, Path: r.URL.Path, Model: modelName, Status: resp.StatusCode, Backend: backendName, Error: streamErrorMessage(streamErr), DurationMS: time.Since(start).Milliseconds()}, forwardResult))
 	payloadPath := a.storePayload(entry, r, requestBody, resp.Header, nil)
 	a.persistLogWithUsage(r.Context(), entry, r, true, pctx, payloadPath, nil, stream.Adapter.UsageStats())
 	return streamErr
@@ -472,8 +481,9 @@ func writeResponsesUpstreamError(w http.ResponseWriter, responseID string, statu
 
 type responsesStreamUsageReadCloser struct {
 	io.ReadCloser
-	decoder proxy.SSEJSONDecoder
-	usage   map[string]any
+	streamErr error
+	decoder   proxy.SSEJSONDecoder
+	usage     map[string]any
 }
 
 func (r *responsesStreamUsageReadCloser) Read(p []byte) (int, error) {
@@ -514,6 +524,9 @@ func (r *responsesStreamUsageReadCloser) observe(chunk []byte) {
 }
 
 func (r *responsesStreamUsageReadCloser) observePayload(payload map[string]any) {
+	if err := streamPayloadError(payload); err != nil {
+		r.streamErr = err
+	}
 	if usage, ok := payload["usage"].(map[string]any); ok && totalTokensFromUsage(usage) > 0 {
 		r.usage = usage
 		return

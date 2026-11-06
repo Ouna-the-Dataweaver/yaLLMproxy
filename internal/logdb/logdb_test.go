@@ -3,6 +3,7 @@ package logdb
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -90,6 +91,57 @@ func TestStoreInsertAndListRequestMetadata(t *testing.T) {
 	}
 	if got.FullRequestPath != "/tmp/request.json" || got.FullRequestExpiresAt == nil {
 		t.Fatalf("payload link = %#v expires=%v", got.FullRequestPath, got.FullRequestExpiresAt)
+	}
+}
+
+func TestStorePreservesReportedCacheUsage(t *testing.T) {
+	store, err := NewStore(&config.Config{Database: map[string]any{
+		"backend":    "sqlite",
+		"connection": map[string]any{"sqlite": map[string]any{"path": filepath.Join(t.TempDir(), "logs.db")}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	for _, tc := range []struct {
+		name     string
+		usage    map[string]any
+		want     int
+		reported bool
+	}{
+		{name: "absent"},
+		{name: "null details", usage: map[string]any{"prompt_tokens_details": nil}},
+		{name: "null count", usage: map[string]any{"prompt_tokens_details": map[string]any{"cached_tokens": nil}}},
+		{name: "zero", usage: map[string]any{"prompt_tokens_details": map[string]any{"cached_tokens": float64(0)}}, reported: true},
+		{name: "positive", usage: map[string]any{"prompt_tokens_details": map[string]any{"cached_tokens": float64(128)}}, want: 128, reported: true},
+		{name: "native cache zero", usage: map[string]any{"cache_read_input_tokens": float64(0)}, reported: true},
+		{name: "native cache positive", usage: map[string]any{"cache_read_input_tokens": float64(256)}, want: 256, reported: true},
+		{name: "invalid negative", usage: map[string]any{"prompt_tokens_details": map[string]any{"cached_tokens": -1}}},
+		{name: "invalid number", usage: map[string]any{"prompt_tokens_details": map[string]any{"cached_tokens": json.Number("invalid")}}},
+		{name: "responses zero", usage: map[string]any{"input_tokens_details": map[string]any{"cached_tokens": 0}}, reported: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			id, err := store.Insert(context.Background(), Record{ModelName: "cache-test", UsageStats: tc.usage})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, ok, err := store.Get(context.Background(), id)
+			if err != nil || !ok {
+				t.Fatalf("Get: found=%v, err=%v", ok, err)
+			}
+			details, _ := got.UsageStats["prompt_tokens_details"].(map[string]any)
+			value, reported := details["cached_tokens"]
+			if reported != tc.reported || (reported && value != tc.want) {
+				t.Fatalf("cached_tokens = %v, reported = %v; want %d, %v", value, reported, tc.want, tc.reported)
+			}
+			var stored sql.NullInt64
+			if err := store.db.QueryRow("SELECT cached_tokens FROM request_metadata WHERE id = ?", id).Scan(&stored); err != nil {
+				t.Fatal(err)
+			}
+			if stored.Valid != tc.reported || (stored.Valid && stored.Int64 != int64(tc.want)) {
+				t.Fatalf("stored cache count = %+v; want %d, reported=%v", stored, tc.want, tc.reported)
+			}
+		})
 	}
 }
 
@@ -1171,5 +1223,55 @@ func cleanupPostgresIntegration(t *testing.T, store *Store, id string) {
 		if _, err := store.execContext(ctx, statement, args...); err != nil {
 			t.Logf("postgres integration cleanup failed for %q: %v", statement, err)
 		}
+	}
+}
+
+func TestTokenUsageIncludesInterruptedSuccessfulStreams(t *testing.T) {
+	store, err := NewStore(&config.Config{Database: map[string]any{"backend": "sqlite", "connection": map[string]any{"sqlite": map[string]any{"path": filepath.Join(t.TempDir(), "logs.db")}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	boundary := time.Date(2026, 6, 27, 0, 0, 0, 0, time.UTC)
+	for _, row := range []struct {
+		status  int
+		stream  bool
+		outcome string
+		tokens  int
+		before  bool
+	}{
+		{200, true, "error", 11, true},
+		{200, true, "error", 7, false},
+		{302, true, "error", 3, false},
+		{200, false, "success", 5, false},
+		{200, false, "error", 100, false},
+		{400, true, "error", 100, false},
+		{500, true, "error", 100, false},
+		{0, true, "error", 100, false},
+	} {
+		requestTime := boundary
+		if row.before {
+			requestTime = boundary.Add(-time.Hour)
+		}
+		_, err := store.Insert(t.Context(), Record{RequestTime: requestTime, ModelName: "alpha", AppKeyID: "key", BackendName: "node", BackendStatus: row.status, IsStream: row.stream, Outcome: row.outcome, UsageStats: map[string]any{"total_tokens": row.tokens}})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	scopes, err := store.TokenUsageByQuotaScope(t.Context())
+	if err != nil || len(scopes) != 1 || scopes[0].TotalTokens != 26 {
+		t.Fatalf("scopes = %#v, err = %v", scopes, err)
+	}
+	backends, err := store.TokenUsageByBackend(t.Context())
+	if err != nil || len(backends) != 1 || backends[0].TotalTokens != 26 {
+		t.Fatalf("backends = %#v, err = %v", backends, err)
+	}
+	scopes, err = store.TokenUsageByQuotaScopeSince(t.Context(), boundary)
+	if err != nil || len(scopes) != 1 || scopes[0].TotalTokens != 15 {
+		t.Fatalf("scopes since boundary = %#v, err = %v", scopes, err)
+	}
+	backends, err = store.TokenUsageByBackendSince(t.Context(), boundary)
+	if err != nil || len(backends) != 1 || backends[0].TotalTokens != 15 {
+		t.Fatalf("backends since boundary = %#v, err = %v", backends, err)
 	}
 }
