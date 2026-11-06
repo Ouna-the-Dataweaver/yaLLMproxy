@@ -98,3 +98,33 @@ func TestSSEDecoderDispatchesCREventWithoutWaitingForNextChunk(t *testing.T) {
 		t.Fatalf("optional LF produced an extra event: %#v", got)
 	}
 }
+
+func TestSSEJSONDecoderStopsAtDone(t *testing.T) {
+	var decoder SSEJSONDecoder
+	got := decoder.Feed([]byte("data: {\"id\":1}\n\ndata: [DONE]\n\ndata: {\"id\":2}\n\n"))
+	got = append(got, decoder.Feed([]byte("data: {\"id\":3}\n\n"))...)
+	got = append(got, decoder.Flush()...)
+	if !reflect.DeepEqual(got, []map[string]any{{"id": float64(1)}}) || !decoder.SawDone() || decoder.Err() != nil {
+		t.Fatalf("payloads=%#v done=%v err=%v", got, decoder.SawDone(), decoder.Err())
+	}
+}
+
+func TestSSEJSONDecoderRejectsMalformedDataBeforeDone(t *testing.T) {
+	var decoder SSEJSONDecoder
+	got := decoder.Feed([]byte("event: ping\ndata: keepalive\n\ndata: {\"choices\":\n\ndata: [DONE]\n\n"))
+	if len(got) != 0 || decoder.Err() == nil || decoder.SawDone() {
+		t.Fatalf("payloads=%#v done=%v err=%v", got, decoder.SawDone(), decoder.Err())
+	}
+}
+
+func TestDetectSSEStreamErrorFraming(t *testing.T) {
+	for _, newline := range []string{"\n", "\r\n", "\r"} {
+		body := strings.Join([]string{"event: error", "data: {", `data: "error":{"message":"failed"}}`, "", ""}, newline)
+		if got := DetectSSEStreamError([]byte(body)); !strings.Contains(got, "failed") {
+			t.Fatalf("newline=%q error=%q", newline, got)
+		}
+	}
+	if got := DetectSSEStreamError([]byte("data: [DONE]\n\ndata: {\"error\":{\"message\":\"too late\"}}\n\n")); got != "" {
+		t.Fatalf("error after DONE = %q", got)
+	}
+}

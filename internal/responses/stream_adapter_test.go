@@ -512,3 +512,24 @@ func TestStreamAdapterDoneWithoutFinishReasonCompletes(t *testing.T) {
 		t.Fatalf("stream error = %q", adapter.StreamError())
 	}
 }
+
+func TestStreamReadCloserRejectsMalformedContentBeforeDone(t *testing.T) {
+	for _, ending := range []string{"\n\ndata: [DONE]\n\n", ""} {
+		r := NewStreamReadCloser(io.NopCloser(strings.NewReader("data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\ndata: {\"choices\":"+ending)), "resp_invalid", "alpha", nil)
+		out, err := io.ReadAll(r)
+		if err == nil || !strings.Contains(string(out), "event: response.failed\n") || strings.Contains(string(out), "event: response.completed\n") || !strings.Contains(string(out), "partial") {
+			t.Fatalf("out=%s err=%v", out, err)
+		}
+		if err := r.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestStreamAdapterIgnoresErrorAfterDone(t *testing.T) {
+	a := NewStreamAdapter("resp_done", "alpha", nil)
+	out := a.Feed([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\ndata: [DONE]\n\ndata: {\"error\":{\"message\":\"late\"}}\n\n"))
+	if a.StreamError() != "" || !strings.Contains(string(out), "event: response.completed\n") {
+		t.Fatalf("out=%s err=%s", out, a.StreamError())
+	}
+}

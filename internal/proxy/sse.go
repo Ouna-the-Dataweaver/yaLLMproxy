@@ -12,14 +12,17 @@ import (
 const StreamErrorCheckBufferSize = 4096
 
 func DetectSSEStreamError(data []byte) string {
-	text := string(data)
-	for _, line := range strings.Split(text, "\n") {
-		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "data:") {
-			continue
+	var decoder SSEDecoder
+	events := decoder.Feed(data)
+	if remaining := decoder.Flush(); len(remaining) > 0 {
+		events = append(events, parseSSEEvent(string(remaining)))
+	}
+	for _, event := range events {
+		raw := strings.TrimSpace(event.Data)
+		if raw == "[DONE]" {
+			break
 		}
-		raw := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if raw == "" || raw == "[DONE]" {
+		if raw == "" {
 			continue
 		}
 		var payload map[string]any
@@ -103,9 +106,13 @@ func parseSSEEvent(raw string) SSEEvent {
 type SSEJSONDecoder struct {
 	decoder SSEDecoder
 	sawDone bool
+	err     error
 }
 
 func (d *SSEJSONDecoder) Feed(chunk []byte) []map[string]any {
+	if d.sawDone || d.err != nil {
+		return nil
+	}
 	events := d.decoder.Feed(chunk)
 	return d.decodeJSONEvents(events)
 }
@@ -119,6 +126,12 @@ func (d *SSEJSONDecoder) Flush() []map[string]any {
 	return d.decodeJSONEvents([]SSEEvent{event})
 }
 
+// Err reports malformed JSON in an upstream data event. Named ping events may
+// carry non-JSON keepalive text and are ignored.
+func (d *SSEJSONDecoder) Err() error {
+	return d.err
+}
+
 // SawDone reports whether the stream carried the OpenAI "[DONE]" sentinel.
 func (d *SSEJSONDecoder) SawDone() bool {
 	return d.sawDone
@@ -127,6 +140,9 @@ func (d *SSEJSONDecoder) SawDone() bool {
 func (d *SSEJSONDecoder) decodeJSONEvents(events []SSEEvent) []map[string]any {
 	var out []map[string]any
 	for _, event := range events {
+		if d.sawDone || d.err != nil {
+			break
+		}
 		data := strings.TrimSpace(event.Data)
 		if data == "[DONE]" {
 			d.sawDone = true
@@ -136,9 +152,19 @@ func (d *SSEJSONDecoder) decodeJSONEvents(events []SSEEvent) []map[string]any {
 			continue
 		}
 		var payload map[string]any
-		if err := json.Unmarshal([]byte(data), &payload); err == nil {
-			out = append(out, payload)
+		if err := json.Unmarshal([]byte(data), &payload); err != nil {
+			ping := false
+			for _, line := range event.OtherLines {
+				if name, ok := strings.CutPrefix(line, "event:"); ok {
+					ping = strings.TrimSpace(name) == "ping"
+				}
+			}
+			if !ping {
+				d.err = fmt.Errorf("invalid upstream SSE JSON: %w", err)
+			}
+			continue
 		}
+		out = append(out, payload)
 	}
 	return out
 }

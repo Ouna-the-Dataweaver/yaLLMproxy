@@ -68,6 +68,9 @@ func (a *StreamAdapter) Feed(chunk []byte) []byte {
 	for _, payload := range a.decoder.Feed(chunk) {
 		out.Write(a.processPayload(payload))
 	}
+	if err := a.decoder.Err(); err != nil && !a.terminated {
+		out.Write(a.fail(err))
+	}
 	if a.decoder.SawDone() && !a.terminated {
 		out.Write(a.terminalEvents())
 	}
@@ -81,6 +84,9 @@ func (a *StreamAdapter) Flush() []byte {
 	out := bytes.Buffer{}
 	for _, payload := range a.decoder.Flush() {
 		out.Write(a.processPayload(payload))
+	}
+	if err := a.decoder.Err(); err != nil && !a.terminated {
+		out.Write(a.fail(err))
 	}
 	if a.terminated {
 		return out.Bytes()
