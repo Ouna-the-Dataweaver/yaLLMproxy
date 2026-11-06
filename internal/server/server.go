@@ -857,13 +857,21 @@ func (a *App) applyConfigLocked(newCfg *config.Config, persist bool) error {
 	a.LogDB = newLogDB
 	a.Observability = newObservability
 	a.Payloads = logstore.NewFullRequestStore(newCfg)
-	a.Quota = quota.NewManager()
+	if a.Quota == nil {
+		a.Quota = quota.NewManager()
+	}
 	if a.Responses == nil {
 		a.Responses = responsesapi.NewStore(1000)
 	}
 	a.Responses.SetPersistent(newLogDB)
-	seedQuotaFromLogDB(context.Background(), a.Quota, newLogDB, newCfg)
-	seedBackendQuotaFromLogDB(context.Background(), a.Quota, newLogDB, newCfg)
+	// Generations share live quota accounting so active reservations and usage
+	// survive reloads, including when request logging is disabled. Restore only
+	// new scopes; persisted logs may lag in-flight requests or include usage
+	// already held by the live manager.
+	restoredQuota := quota.NewManager()
+	seedQuotaFromLogDB(context.Background(), restoredQuota, newLogDB, newCfg)
+	seedBackendQuotaFromLogDB(context.Background(), restoredQuota, newLogDB, newCfg)
+	a.Quota.ImportMissingUsage(restoredQuota)
 	a.PrometheusTimings = newAppPrometheusTimingRecorder(newCfg.ProxySettings.Metrics)
 	retired := a.currentGeneration()
 	a.generation.Store(&runtimeGeneration{})

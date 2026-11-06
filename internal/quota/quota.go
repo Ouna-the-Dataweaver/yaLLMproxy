@@ -35,15 +35,16 @@ type Manager struct {
 }
 
 type windowState struct {
-	Spec    WindowSpec
-	ResetAt time.Time
+	Spec       WindowSpec
+	ResetAt    time.Time
+	Generation uint64
 }
 
 type Reservation struct {
-	manager *Manager
-	scope   string
-	tokens  int
-	window  windowState
+	manager    *Manager
+	scope      string
+	tokens     int
+	generation uint64
 
 	mu     sync.Mutex
 	closed bool
@@ -74,6 +75,40 @@ func NewManagerWithUsage(usage map[string]int) *Manager {
 		}
 	}
 	return m
+}
+
+// ImportMissingUsage restores persisted scopes without replacing live usage or
+// reservations. In particular, a known scope with zero usage must remain zero.
+func (m *Manager) ImportMissingUsage(source *Manager) {
+	if m == nil || source == nil || m == source {
+		return
+	}
+	source.mu.Lock()
+	used := make(map[string]int, len(source.used))
+	windows := make(map[string]windowState, len(source.window))
+	for scope, tokens := range source.used {
+		used[scope] = tokens
+		windows[scope] = source.window[scope]
+	}
+	source.mu.Unlock()
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.used == nil {
+		m.used = map[string]int{}
+	}
+	if m.window == nil {
+		m.window = map[string]windowState{}
+	}
+	for scope, tokens := range used {
+		if _, known := m.used[scope]; known {
+			continue
+		}
+		m.used[scope] = tokens
+		if state := windows[scope]; !state.ResetAt.IsZero() {
+			m.window[scope] = state
+		}
+	}
 }
 
 func BuildScope(keyID string, modelName string) string {
@@ -156,7 +191,7 @@ func (m *Manager) ReserveWithWindowSpec(keyID string, modelName string, limit in
 		return nil, ErrTokenQuotaExceeded
 	}
 	m.used[scope] += tokens
-	return &Reservation{manager: m, scope: scope, tokens: tokens, window: m.window[scope]}, nil
+	return &Reservation{manager: m, scope: scope, tokens: tokens, generation: m.window[scope].Generation}, nil
 }
 
 func (m *Manager) Remaining(keyID string, modelName string, limit int, spec WindowSpec) int {
@@ -226,11 +261,13 @@ func (m *Manager) effectiveUsedLocked(scope string, spec WindowSpec, now time.Ti
 
 func (m *Manager) applyWindowLockedAt(scope string, spec WindowSpec, now time.Time) {
 	spec = normalizeWindowSpec(spec)
+	state := m.window[scope]
 	if spec.Window <= 0 && spec.ResetMode == ResetModeRolling {
-		delete(m.window, scope)
+		state.Spec = spec
+		state.ResetAt = time.Time{}
+		m.window[scope] = state
 		return
 	}
-	state := m.window[scope]
 	if state.Spec != spec || state.ResetAt.IsZero() {
 		state.Spec = spec
 		state.ResetAt = nextResetAt(spec, now)
@@ -239,10 +276,10 @@ func (m *Manager) applyWindowLockedAt(scope string, spec WindowSpec, now time.Ti
 	}
 	if !now.Before(state.ResetAt) {
 		m.used[scope] = 0
+		state.Generation++
 		if spec.ResetMode == ResetModeRolling {
-			for !now.Before(state.ResetAt) {
-				state.ResetAt = state.ResetAt.Add(spec.Window)
-			}
+			// Advance directly even when many short windows elapsed while idle.
+			state.ResetAt = now.Add(spec.Window - now.Sub(state.ResetAt)%spec.Window)
 		} else {
 			state.ResetAt = nextResetAt(spec, now)
 		}
@@ -271,7 +308,7 @@ func (r *Reservation) Commit(actualTokens int) {
 	r.manager.applyWindowLocked(r.scope, r.manager.window[r.scope].Spec)
 	// A reset already removed the estimate. Charge completion usage in the
 	// current window without subtracting another request's reservation.
-	if r.manager.window[r.scope] != r.window {
+	if r.manager.window[r.scope].Generation != r.generation {
 		reserved = 0
 	}
 	next := r.manager.used[r.scope] + actualTokens - reserved
@@ -297,7 +334,7 @@ func (r *Reservation) Release() {
 	r.manager.mu.Lock()
 	defer r.manager.mu.Unlock()
 	r.manager.applyWindowLocked(r.scope, r.manager.window[r.scope].Spec)
-	if r.manager.window[r.scope] != r.window {
+	if r.manager.window[r.scope].Generation != r.generation {
 		return
 	}
 	next := r.manager.used[r.scope] - tokens

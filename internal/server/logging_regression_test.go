@@ -12,10 +12,12 @@ import (
 	"time"
 
 	"github.com/theio/yallmp-proxy/internal/config"
+	"github.com/theio/yallmp-proxy/internal/logdb"
 	"github.com/theio/yallmp-proxy/internal/logstore"
 	"github.com/theio/yallmp-proxy/internal/observability"
 	"github.com/theio/yallmp-proxy/internal/policy"
 	"github.com/theio/yallmp-proxy/internal/proxy"
+	"github.com/theio/yallmp-proxy/internal/quota"
 )
 
 func TestPersistentLogSurvivesCanceledRequest(t *testing.T) {
@@ -229,5 +231,69 @@ func TestPayloadRedactsConfiguredClientCredential(t *testing.T) {
 	}
 	if req.Header.Get("X-Client-Key") != "private-client-credential" || requiredHeaderAttribution(req)["x-client-key"] != "private-client-credential" {
 		t.Fatal("payload redaction mutated request")
+	}
+}
+
+func TestQuotaAccountingSurvivesReloadWithoutLogging(t *testing.T) {
+	app := newLoggingRegressionApp(t, nil)
+	cfg := *app.Config
+	cfg.ProxySettings.Logging.Enabled = false
+	if err := app.applyConfig(&cfg, false); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = app.LogDB.Close() }()
+	old, release := app.acquireRuntime()
+	defer release()
+	reservation, err := old.Quota.Reserve("key", "alpha", 10, 6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := app.applyConfig(&cfg, false); err != nil {
+		t.Fatal(err)
+	}
+	if app.Quota != old.Quota {
+		t.Fatal("reload replaced live quota manager")
+	}
+	if _, err := app.Quota.Reserve("key", "alpha", 10, 5); !errors.Is(err, quota.ErrTokenQuotaExceeded) {
+		t.Fatalf("new runtime ignored active reservation: %v", err)
+	}
+	reservation.Commit(8)
+	if err := app.applyConfig(&cfg, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := app.Quota.Metrics().UsedByScope[quota.BuildScope("key", "alpha")]; got != 8 {
+		t.Fatalf("reload lost completed usage: %d", got)
+	}
+	pending, err := old.Quota.Reserve("key", "alpha", 10, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := app.applyConfig(&cfg, false); err != nil {
+		t.Fatal(err)
+	}
+	pending.Release()
+	if got := app.Quota.Remaining("key", "alpha", 10, quota.WindowSpec{}); got != 2 {
+		t.Fatalf("old runtime release did not reconcile current usage: remaining=%d", got)
+	}
+}
+
+func TestQuotaReloadImportsNewPersistedScopesOnly(t *testing.T) {
+	app := newLoggingRegressionApp(t, nil)
+	defer func() { _ = app.LogDB.Close() }()
+	app.Quota.RecordUsage("key", "alpha", 100, 4)
+	for model, tokens := range map[string]int{"alpha": 4, "beta": 7} {
+		if _, err := app.LogDB.Insert(t.Context(), logdb.Record{AppKeyID: "key", ModelName: model, Outcome: "success", UsageStats: map[string]any{"total_tokens": tokens}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for range 2 {
+		if err := app.applyConfig(app.Config, false); err != nil {
+			t.Fatal(err)
+		}
+		for model, want := range map[string]int{"alpha": 4, "beta": 7} {
+			if got := app.Quota.Metrics().UsedByScope[quota.BuildScope("key", model)]; got != want {
+				t.Fatalf("%s usage=%d, want %d", model, got, want)
+			}
+		}
 	}
 }

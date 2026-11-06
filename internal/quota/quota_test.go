@@ -2,6 +2,7 @@ package quota
 
 import (
 	"errors"
+	"sync"
 	"testing"
 	"time"
 )
@@ -502,5 +503,113 @@ func TestReservationRejectsIntegerOverflow(t *testing.T) {
 	m.Seed("key", "model", maxInt()-1)
 	if _, err := m.Reserve("key", "model", maxInt(), 2); !errors.Is(err, ErrTokenQuotaExceeded) {
 		t.Fatalf("overflowing reservation accepted: %v", err)
+	}
+}
+
+func TestImportMissingUsagePreservesLiveScopesAndWindows(t *testing.T) {
+	now := time.Unix(1000, 0)
+	m := NewManagerWithClock(func() time.Time { return now })
+	reservation, err := m.Reserve("key", "active", 100, 6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	released, err := m.Reserve("key", "empty", 100, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	released.Release()
+	restored := NewManagerWithClock(func() time.Time { return now })
+	restored.Seed("key", "active", 50)
+	restored.Seed("key", "empty", 50)
+	restored.SeedWithWindowSpec("key", "new", 8, WindowSpec{Window: time.Minute})
+	m.ImportMissingUsage(restored)
+	m.ImportMissingUsage(restored)
+	reservation.Commit(7)
+	metrics := m.Metrics()
+	for model, want := range map[string]int{"active": 7, "empty": 0, "new": 8} {
+		if got := metrics.UsedByScope[BuildScope("key", model)]; got != want {
+			t.Fatalf("%s usage=%d, want %d", model, got, want)
+		}
+	}
+	now = now.Add(time.Minute)
+	if got := m.Metrics().UsedByScope[BuildScope("key", "new")]; got != 0 {
+		t.Fatalf("imported window did not reset: %d", got)
+	}
+}
+
+func TestReservationPolicyChangesDoNotDiscardEstimate(t *testing.T) {
+	for _, release := range []bool{false, true} {
+		for _, specs := range [][2]WindowSpec{
+			{{}, {Window: time.Minute}},
+			{{Window: time.Minute}, {}},
+			{{Window: time.Minute}, {ResetMode: ResetModeDaily}},
+		} {
+			now := time.Unix(1000, 0)
+			m := NewManagerWithClock(func() time.Time { return now })
+			reservation, err := m.ReserveWithWindowSpec("key", "model", 100, specs[0], 6)
+			if err != nil {
+				t.Fatal(err)
+			}
+			m.RecordUsageWithWindowSpec("key", "model", 100, specs[1], 10)
+			want := 10
+			if release {
+				reservation.Release()
+			} else {
+				reservation.Commit(8)
+				want += 8
+			}
+			if got := m.Metrics().UsedByScope["key::model"]; got != want {
+				t.Fatalf("specs=%+v release=%t: used=%d, want %d", specs, release, got, want)
+			}
+		}
+	}
+}
+
+func TestConcurrentReservationsEnforceQuota(t *testing.T) {
+	m := NewManager()
+	var workers sync.WaitGroup
+	accepted := make(chan *Reservation, 50)
+	unexpected := make(chan error, 50)
+	for range 50 {
+		workers.Go(func() {
+			reservation, err := m.Reserve("key", "model", 10, 1)
+			if err == nil {
+				accepted <- reservation
+			} else if !errors.Is(err, ErrTokenQuotaExceeded) {
+				unexpected <- err
+			}
+		})
+	}
+	workers.Wait()
+	close(accepted)
+	close(unexpected)
+	for err := range unexpected {
+		t.Fatal(err)
+	}
+	if got := len(accepted); got != 10 {
+		t.Fatalf("accepted %d reservations, want 10", got)
+	}
+	for reservation := range accepted {
+		workers.Go(func() { reservation.Commit(1) })
+		workers.Go(func() { reservation.Commit(1) })
+	}
+	workers.Wait()
+	if got := m.Metrics().UsedByScope["key::model"]; got != 10 {
+		t.Fatalf("concurrent finalized usage = %d, want 10", got)
+	}
+}
+
+func TestRollingResetSkipsManyElapsedWindows(t *testing.T) {
+	now := time.Unix(1000, 0)
+	m := NewManagerWithClock(func() time.Time { return now })
+	spec := WindowSpec{Window: time.Nanosecond}
+	m.RecordUsageWithWindowSpec("key", "model", 100, spec, 6)
+	now = now.Add(time.Hour)
+	metrics := m.Metrics()
+	if got := metrics.UsedByScope["key::model"]; got != 0 {
+		t.Fatalf("usage after reset=%d", got)
+	}
+	if got := metrics.ResetAtByScope["key::model"]; !got.Equal(now.Add(time.Nanosecond)) {
+		t.Fatalf("reset=%s", got)
 	}
 }
