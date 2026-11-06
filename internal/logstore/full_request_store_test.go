@@ -33,7 +33,7 @@ func TestFullRequestStoreWritesBase64Payload(t *testing.T) {
 		},
 		[]byte(`{"choices":[]}`),
 		"",
-		map[string]string{"tenant": "acme"},
+		map[string]string{"tenant": "acme", "Authorization": "Bearer required-secret", "X-Api-Key": "required-key"},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -66,6 +66,11 @@ func TestFullRequestStoreWritesBase64Payload(t *testing.T) {
 	}
 	if record.RequiredHeaders["tenant"] != "acme" {
 		t.Fatalf("required header attribution = %#v", record.RequiredHeaders)
+	}
+	for _, name := range []string{"Authorization", "X-Api-Key"} {
+		if record.RequiredHeaders[name] != "[REDACTED]" {
+			t.Fatalf("sensitive required header %s was not redacted", name)
+		}
 	}
 	requestBody, err := base64.StdEncoding.DecodeString(record.RequestBodyBase64)
 	if err != nil {

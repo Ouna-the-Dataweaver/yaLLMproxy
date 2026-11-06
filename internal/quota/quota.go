@@ -43,6 +43,7 @@ type Reservation struct {
 	manager *Manager
 	scope   string
 	tokens  int
+	window  windowState
 
 	mu     sync.Mutex
 	closed bool
@@ -151,11 +152,11 @@ func (m *Manager) ReserveWithWindowSpec(keyID string, modelName string, limit in
 		m.window = map[string]windowState{}
 	}
 	m.applyWindowLocked(scope, spec)
-	if m.used[scope]+tokens > limit {
+	if tokens > limit-m.used[scope] {
 		return nil, ErrTokenQuotaExceeded
 	}
 	m.used[scope] += tokens
-	return &Reservation{manager: m, scope: scope, tokens: tokens}, nil
+	return &Reservation{manager: m, scope: scope, tokens: tokens, window: m.window[scope]}, nil
 }
 
 func (m *Manager) Remaining(keyID string, modelName string, limit int, spec WindowSpec) int {
@@ -262,12 +263,17 @@ func (r *Reservation) Commit(actualTokens int) {
 	reserved := r.tokens
 	r.mu.Unlock()
 
-	if actualTokens <= 0 || actualTokens == reserved {
-		return
+	if actualTokens <= 0 {
+		actualTokens = reserved
 	}
 	r.manager.mu.Lock()
 	defer r.manager.mu.Unlock()
 	r.manager.applyWindowLocked(r.scope, r.manager.window[r.scope].Spec)
+	// A reset already removed the estimate. Charge completion usage in the
+	// current window without subtracting another request's reservation.
+	if r.manager.window[r.scope] != r.window {
+		reserved = 0
+	}
 	next := r.manager.used[r.scope] + actualTokens - reserved
 	if next < 0 {
 		next = 0
@@ -291,6 +297,9 @@ func (r *Reservation) Release() {
 	r.manager.mu.Lock()
 	defer r.manager.mu.Unlock()
 	r.manager.applyWindowLocked(r.scope, r.manager.window[r.scope].Spec)
+	if r.manager.window[r.scope] != r.window {
+		return
+	}
 	next := r.manager.used[r.scope] - tokens
 	if next < 0 {
 		next = 0

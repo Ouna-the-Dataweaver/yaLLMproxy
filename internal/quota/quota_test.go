@@ -462,3 +462,45 @@ func TestSeedWithCalendarWindowSpecAtResetsWhenClockPassedBoundary(t *testing.T)
 		t.Fatalf("reset_at = %s, want %s", got, wantReset)
 	}
 }
+
+func TestReservationFinalizationAcrossWindowReset(t *testing.T) {
+	for _, spec := range []WindowSpec{{Window: time.Minute}, {ResetMode: ResetModeDaily}} {
+		for _, actual := range []int{-1, 0, 3, 6, 9} {
+			now := time.Date(2026, time.June, 27, 23, 59, 0, 0, time.UTC)
+			m := NewManagerWithClock(func() time.Time { return now })
+			old, err := m.ReserveWithWindowSpec("key", "model", 100, spec, 6)
+			if err != nil {
+				t.Fatal(err)
+			}
+			now = now.Add(time.Minute)
+			if _, err := m.ReserveWithWindowSpec("key", "model", 100, spec, 10); err != nil {
+				t.Fatal(err)
+			}
+			want := 10
+			if actual == -1 {
+				old.Release()
+			} else {
+				old.Commit(actual)
+				if actual == 0 {
+					want += 6
+				} else {
+					want += actual
+				}
+			}
+			// Finalization remains idempotent even after the reset.
+			old.Release()
+			old.Commit(100)
+			if got := m.Metrics().UsedByScope["key::model"]; got != want {
+				t.Fatalf("spec=%+v actual=%d: used=%d, want %d", spec, actual, got, want)
+			}
+		}
+	}
+}
+
+func TestReservationRejectsIntegerOverflow(t *testing.T) {
+	m := NewManager()
+	m.Seed("key", "model", maxInt()-1)
+	if _, err := m.Reserve("key", "model", maxInt(), 2); !errors.Is(err, ErrTokenQuotaExceeded) {
+		t.Fatalf("overflowing reservation accepted: %v", err)
+	}
+}

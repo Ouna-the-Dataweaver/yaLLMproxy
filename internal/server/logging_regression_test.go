@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/theio/yallmp-proxy/internal/config"
+	"github.com/theio/yallmp-proxy/internal/logstore"
 	"github.com/theio/yallmp-proxy/internal/observability"
 	"github.com/theio/yallmp-proxy/internal/policy"
 	"github.com/theio/yallmp-proxy/internal/proxy"
@@ -201,5 +202,32 @@ func TestNativeMessagesCacheUsageSurvivesLogging(t *testing.T) {
 				t.Fatalf("cached tokens = %v, reported = %v", value, reported)
 			}
 		})
+	}
+}
+
+func TestPayloadRedactsConfiguredClientCredential(t *testing.T) {
+	app := newLoggingRegressionApp(t, nil)
+	app.Config.AppKeys.HeaderName = "X-Client-Key"
+	app.Payloads = &logstore.FullRequestStore{Enabled: true, Dir: t.TempDir()}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	req.Header.Set("X-Client-Key", "private-client-credential")
+	req.Header.Set("X-Tenant", "team")
+	req = requestWithRequiredHeaderAttribution(req, map[string]string{"x-client-key": "private-client-credential", "X-Tenant": "team"})
+	path := app.storePayload(LogEntry{ID: 1, Method: req.Method, Path: req.URL.Path, Status: 200}, req, nil, nil, nil)
+	payload, err := logstore.ReadPayload(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := payload.RequestHeaders["X-Client-Key"]; len(got) != 1 || got[0] != "[REDACTED]" {
+		t.Fatalf("custom credential header was not redacted: %#v", got)
+	}
+	if payload.RequiredHeaders["x-client-key"] != "[REDACTED]" {
+		t.Fatal("custom credential attribution was not redacted")
+	}
+	if payload.RequestHeaders["X-Tenant"][0] != "team" || payload.RequiredHeaders["X-Tenant"] != "team" {
+		t.Fatal("non-sensitive attribution changed")
+	}
+	if req.Header.Get("X-Client-Key") != "private-client-credential" || requiredHeaderAttribution(req)["x-client-key"] != "private-client-credential" {
+		t.Fatal("payload redaction mutated request")
 	}
 }

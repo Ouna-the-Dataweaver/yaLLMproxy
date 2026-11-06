@@ -1997,18 +1997,19 @@ func (a *App) storePayloadWithParsedArtifacts(entry LogEntry, r *http.Request, r
 	if parsedStreamSidecars != nil {
 		parsedStream = parsedStreamSidecars.Metadata()
 	}
+	requestHeaders, requiredHeaders := a.payloadHeaders(r)
 	path, err := a.Payloads.StorePayloadWithParsedAndStream(
 		entry.ID,
 		entry.Method,
 		entry.Path,
 		entry.Model,
 		entry.Status,
-		r.Header,
+		requestHeaders,
 		requestBody,
 		responseHeaders,
 		responseBody,
 		entry.Error,
-		requiredHeaderAttribution(r),
+		requiredHeaders,
 		parsedBodies,
 		parsedStream,
 	)
