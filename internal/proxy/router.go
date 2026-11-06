@@ -103,6 +103,7 @@ type BackendHealth struct {
 }
 
 type ForwardResult struct {
+	EngineProfile    *EngineProfile
 	Response         *http.Response
 	BackendName      string
 	SemanticCacheHit bool
@@ -463,6 +464,9 @@ func (r *Router) addNodeModels(cfg *config.Config) error {
 			Parameters:           parseParameterConfigs(mergeMaps(provider.Parameters, node.Parameters)),
 			Modules:              node.Modules,
 		}
+		if err := configureBackendEngine(&backend, firstString(node.Engine, provider.Engine), config.MergeEngineCompatibility(provider.Compatibility, node.Compatibility)); err != nil {
+			return fmt.Errorf("node %q: %w", name, err)
+		}
 		if len(provider.Models) > 0 {
 			backend.RateLimitScope = fmt.Sprintf("provider:%d:%s:model:%s", len(provider.Name), provider.Name, backend.TargetModel)
 		}
@@ -567,21 +571,21 @@ func (r *Router) GetBackend(name string) (Backend, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	backend, ok := r.Backends[name]
-	return backend, ok
+	return backend.engineSnapshot(), ok
 }
 
 func (r *Router) GetSingleModelBackend(modelName string) (Backend, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if backend, ok := r.Backends[modelName]; ok {
-		return backend, true
+		return backend.engineSnapshot(), true
 	}
 	model, ok := r.Models[modelName]
 	if !ok || len(model.Nodes) != 1 {
 		return Backend{}, false
 	}
 	backend, ok := r.Backends[model.Nodes[0]]
-	return backend, ok
+	return backend.engineSnapshot(), ok
 }
 
 // ModelBackendsMatch checks the entire possible route without selecting nodes.
@@ -611,6 +615,9 @@ func (r *Router) ModelBackendsMatch(modelName string, matches func(Backend) bool
 }
 
 func (r *Router) RegisterBackend(backend Backend, fallbacks []string) bool {
+	if backend.engineState == nil {
+		_ = configureBackendEngine(&backend, backend.Engine, backend.Compatibility)
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if backend.APIType == "" {
@@ -734,6 +741,9 @@ func (r *Router) BuildRouteForKeyWithOptions(modelName string, path string, payl
 		if existing := r.sticky[hint]; existing == "" || existing == route[0].Name || (opts.BackendAvailable == nil && opts.QuotaAvailability == nil) {
 			r.sticky[hint] = route[0].Name
 		}
+	}
+	for i := range route {
+		route[i] = route[i].engineSnapshot()
 	}
 	return route, nil
 }
@@ -1339,7 +1349,7 @@ func (r *Router) ForwardWithOptions(ctx context.Context, modelName string, path 
 			status = resp.StatusCode
 		}
 		routingSpan.End(observability.SpanResult{Outcome: observability.OutcomeCacheHit, BackendName: backendName, StatusCode: status})
-		return ForwardResult{Response: resp, BackendName: backendName, Warnings: warnings}, nil
+		return ForwardResult{Response: resp, BackendName: backendName, EngineProfile: route[0].EngineProfile, Warnings: warnings}, nil
 	}
 	if resp, backendName, warnings, ok := r.lookupSemanticInferenceCache(ctx, route, modelName, path, rawQuery, body, payload, isStream, opts); ok {
 		status := 0
@@ -1347,7 +1357,7 @@ func (r *Router) ForwardWithOptions(ctx context.Context, modelName string, path 
 			status = resp.StatusCode
 		}
 		routingSpan.End(observability.SpanResult{Outcome: observability.OutcomeCacheHit, BackendName: backendName, StatusCode: status})
-		return ForwardResult{Response: resp, BackendName: backendName, SemanticCacheHit: true, Warnings: warnings}, nil
+		return ForwardResult{Response: resp, BackendName: backendName, EngineProfile: route[0].EngineProfile, SemanticCacheHit: true, Warnings: warnings}, nil
 	}
 	routingSpan.End(observability.SpanResult{Outcome: observability.OutcomeRouted})
 	var lastErr error
@@ -1405,6 +1415,16 @@ func (r *Router) ForwardWithOptions(ctx context.Context, modelName string, path 
 				attemptTrail = append(attemptTrail, buildUpstreamAttempt(attemptIndex, backend, attempt, 0, false, "error", attemptDuration, ctx.Err()))
 				return ForwardResult{BackendName: backend.Name, Warnings: warnings, AttemptTrail: attemptTrail}, ctx.Err()
 			}
+			var compatibilityErr *CompatibilityError
+			if errors.As(err, &compatibilityErr) {
+				lastErr, lastBackend = err, backend.Name
+				attemptSpan.End(observability.SpanResult{Outcome: observability.OutcomeBlocked, BackendName: backend.Name, Error: err})
+				attemptTrail = append(attemptTrail, buildUpstreamAttempt(attemptIndex, backend, attempt, 0, false, "blocked", attemptDuration, err))
+				if !compatibilityErr.Unsupported {
+					return ForwardResult{BackendName: backend.Name, Warnings: warnings, AttemptTrail: attemptTrail}, err
+				}
+				break
+			}
 			if err == nil && resp != nil && !RetryableStatuses[resp.StatusCode] {
 				attemptSpan.End(observability.SpanResult{Outcome: observability.OutcomeFinal, BackendName: backend.Name, StatusCode: resp.StatusCode})
 				attemptTrail = append(attemptTrail, buildUpstreamAttempt(
@@ -1430,7 +1450,7 @@ func (r *Router) ForwardWithOptions(ctx context.Context, modelName string, path 
 					r.prepareStreamResponse(attemptCtx, resp, backend, endpointKind, modelName, path, payload, opts.ParsedStreamCapture)
 				}
 				r.storeInferenceCache(backend, path, rawQuery, body, payload, isStream, opts, resp)
-				return ForwardResult{Response: resp, BackendName: backend.Name, Warnings: warnings, AttemptTrail: attemptTrail, ParsedResponse: parsedResponse}, nil
+				return ForwardResult{Response: resp, BackendName: backend.Name, EngineProfile: backend.EngineProfile, Warnings: warnings, AttemptTrail: attemptTrail, ParsedResponse: parsedResponse}, nil
 			}
 			if err != nil {
 				lastErr = err
@@ -1474,7 +1494,7 @@ func (r *Router) ForwardWithOptions(ctx context.Context, modelName string, path 
 					if isStream {
 						r.prepareStreamResponse(attemptCtx, resp, backend, endpointKind, modelName, path, payload, opts.ParsedStreamCapture)
 					}
-					return ForwardResult{Response: resp, BackendName: backend.Name, Warnings: warnings, AttemptTrail: attemptTrail, ParsedResponse: parsedResponse}, nil
+					return ForwardResult{Response: resp, BackendName: backend.Name, EngineProfile: backend.EngineProfile, Warnings: warnings, AttemptTrail: attemptTrail, ParsedResponse: parsedResponse}, nil
 				}
 				attemptSpan.End(observability.SpanResult{Outcome: observability.OutcomeRetry, BackendName: backend.Name, StatusCode: resp.StatusCode, Error: lastErr})
 				attemptTrail = append(attemptTrail, buildUpstreamAttempt(
@@ -1515,8 +1535,11 @@ func (r *Router) lookupInferenceCache(route []Backend, path string, rawQuery str
 		return nil, "", nil, false
 	}
 	backend := route[0]
-	bodyResult := BuildBackendBodyWithWarnings(payload, backend, body, false)
-	key, ok := inferenceCacheKey(path, rawQuery, backend.Name, opts.CacheScope, bodyResult.Body)
+	bodyResult := BuildBackendBodyWithWarnings(payload, backend, body, false, path)
+	if bodyResult.Err != nil {
+		return nil, "", nil, false
+	}
+	key, ok := inferenceCacheKey(path, rawQuery, backend.Name, backend.EngineCacheScope(opts.CacheScope), bodyResult.Body)
 	if !ok {
 		return nil, "", nil, false
 	}
@@ -1536,12 +1559,15 @@ func (r *Router) lookupSemanticInferenceCache(ctx context.Context, route []Backe
 		return nil, "", nil, false
 	}
 	backend := route[0]
-	bodyResult := BuildBackendBodyWithWarnings(payload, backend, body, false)
+	bodyResult := BuildBackendBodyWithWarnings(payload, backend, body, false, path)
+	if bodyResult.Err != nil {
+		return nil, "", nil, false
+	}
 	resp, ok := r.InferenceCache.LookupSemantic(ctx, SemanticCacheRequest{
 		Path:        path,
 		RawQuery:    rawQuery,
 		BackendName: backend.Name,
-		Scope:       opts.CacheScope,
+		Scope:       backend.EngineCacheScope(opts.CacheScope),
 		ModelName:   modelName,
 		Body:        bodyResult.Body,
 	})
@@ -1567,15 +1593,18 @@ func (r *Router) LookupTranslatedInferenceCache(modelName string, routePath stri
 	if !ok {
 		return ForwardResult{}, false
 	}
-	return ForwardResult{Response: resp, BackendName: backendName, Warnings: warnings}, true
+	return ForwardResult{Response: resp, BackendName: backendName, EngineProfile: route[0].EngineProfile, Warnings: warnings}, true
 }
 
 func (r *Router) storeInferenceCache(backend Backend, path string, rawQuery string, body []byte, payload map[string]any, isStream bool, opts ForwardOptions, resp *http.Response) {
 	if !opts.Cacheable || opts.CacheBypass || isStream || !inferenceCacheableEndpoint(path) || !r.InferenceCache.CanWrite() || !inferenceCacheableResponse(resp) {
 		return
 	}
-	bodyResult := BuildBackendBodyWithWarnings(payload, backend, body, false)
-	key, ok := inferenceCacheKey(path, rawQuery, backend.Name, opts.CacheScope, bodyResult.Body)
+	bodyResult := BuildBackendBodyWithWarnings(payload, backend, body, false, path)
+	if bodyResult.Err != nil {
+		return
+	}
+	key, ok := inferenceCacheKey(path, rawQuery, backend.Name, backend.EngineCacheScope(opts.CacheScope), bodyResult.Body)
 	if !ok {
 		return
 	}
@@ -1591,7 +1620,7 @@ func (r *Router) storeInferenceCache(backend Backend, path string, rawQuery stri
 	r.InferenceCache.Store(key, resp.StatusCode, FilterResponseHeaders(resp.Header), respBody)
 }
 
-func (r *Router) StoreTranslatedInferenceCache(backendName string, cachePath string, rawQuery string, body []byte, payload map[string]any, isStream bool, opts ForwardOptions, status int, header http.Header, responseBody []byte) bool {
+func (r *Router) StoreTranslatedInferenceCache(backendName string, cachePath string, rawQuery string, body []byte, payload map[string]any, isStream bool, opts ForwardOptions, status int, header http.Header, responseBody []byte, profiles ...*EngineProfile) bool {
 	if r == nil || !opts.Cacheable || opts.CacheBypass || isStream || !inferenceCacheableEndpoint(cachePath) || !r.InferenceCache.CanWrite() || status != http.StatusOK {
 		return false
 	}
@@ -1603,8 +1632,14 @@ func (r *Router) StoreTranslatedInferenceCache(backendName string, cachePath str
 	if !ok {
 		return false
 	}
-	bodyResult := BuildBackendBodyWithWarnings(payload, backend, body, false)
-	key, ok := inferenceCacheKey(cachePath, rawQuery, backend.Name, opts.CacheScope, bodyResult.Body)
+	if len(profiles) > 0 && profiles[0] != nil {
+		backend.EngineProfile = profiles[0]
+	}
+	bodyResult := BuildBackendBodyWithWarnings(payload, backend, body, false, cachePath)
+	if bodyResult.Err != nil {
+		return false
+	}
+	key, ok := inferenceCacheKey(cachePath, rawQuery, backend.Name, backend.EngineCacheScope(opts.CacheScope), bodyResult.Body)
 	if !ok {
 		return false
 	}
@@ -1711,7 +1746,10 @@ func (r *releaseReadCloser) Close() error {
 }
 
 func (r *Router) execute(ctx context.Context, backend Backend, endpointKind string, modelName string, path string, rawQuery string, body []byte, payload map[string]any, isStream bool, headers http.Header, captureParsedResponse bool) (*http.Response, []RequestWarning, *ParsedResponseTrace, error) {
-	bodyResult := BuildBackendBodyWithWarnings(payload, backend, body, isStream)
+	bodyResult := BuildBackendBodyWithWarnings(payload, backend, body, isStream, path)
+	if bodyResult.Err != nil {
+		return nil, bodyResult.Warnings, nil, bodyResult.Err
+	}
 	outboundBody := bodyResult.Body
 	if backend.GigaChat != nil {
 		gigachatPayload := map[string]any{}
@@ -1726,6 +1764,7 @@ func (r *Router) execute(ctx context.Context, backend Backend, endpointKind stri
 		return nil, bodyResult.Warnings, nil, err
 	}
 	req.Header = BuildOutboundHeaders(headers, backend.APIKey, isStream, backend.APIType, backend.AnthropicVersion)
+	applyEngineRoutingHeaders(req.Header, backend, path)
 	client := r.Client
 	if client == nil {
 		client = &http.Client{Timeout: backend.TimeoutOrDefault()}

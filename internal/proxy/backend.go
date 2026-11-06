@@ -46,11 +46,16 @@ type RequestWarning struct {
 }
 
 type BackendBodyResult struct {
+	Err      error
 	Body     []byte
 	Warnings []RequestWarning
 }
 
 type Backend struct {
+	Engine               string
+	Compatibility        config.EngineCompatibility
+	EngineProfile        *EngineProfile
+	engineState          *engineState
 	RateLimitScope       string
 	Name                 string
 	BaseURL              string
@@ -200,6 +205,13 @@ func BackendFromModelEntry(entry config.ModelEntry) (Backend, bool, error) {
 		Parameters:           parseParameterConfigs(firstMap(entry.Parameters, params["parameters"])),
 		Modules:              entry.Modules,
 	}
+	compat, err := config.ParseEngineCompatibility(params["compatibility"])
+	if err != nil {
+		return Backend{}, false, fmt.Errorf("compatibility: %w", err)
+	}
+	if err := configureBackendEngine(&backend, stringValue(params["engine"]), compat); err != nil {
+		return Backend{}, false, err
+	}
 	if apiType == "gigachat" {
 		gigachatConfig, err := gigachat.BuildConfig(params)
 		if err != nil {
@@ -216,7 +228,7 @@ func BuildBackendBody(payload map[string]any, backend Backend, original []byte, 
 	return BuildBackendBodyWithWarnings(payload, backend, original, isStream).Body
 }
 
-func BuildBackendBodyWithWarnings(payload map[string]any, backend Backend, original []byte, isStream bool) BackendBodyResult {
+func BuildBackendBodyWithWarnings(payload map[string]any, backend Backend, original []byte, isStream bool, endpoint ...string) BackendBodyResult {
 	updated := clonePayloadMap(payload)
 	changed := false
 	warnings := make([]RequestWarning, 0)
@@ -246,17 +258,27 @@ func BuildBackendBodyWithWarnings(payload map[string]any, backend Backend, origi
 		}
 		if param.AllowOverride {
 			if _, ok := getPath(updated, name); !ok {
-				setPath(updated, name, param.Default)
+				setPath(updated, name, clonePayloadValue(param.Default))
 				changed = true
 			}
 			continue
 		}
 		current, exists := getPath(updated, name)
-		setPath(updated, name, param.Default)
+		setPath(updated, name, clonePayloadValue(param.Default))
 		if !exists || !valuesEqual(current, param.Default) {
 			changed = true
 		}
 	}
+	path := "/v1/chat/completions"
+	if len(endpoint) > 0 {
+		path = endpoint[0]
+	}
+	adapted, engineWarnings, err := adaptEngineRequest(updated, backend, path)
+	warnings = append(warnings, engineWarnings...)
+	if err != nil {
+		return BackendBodyResult{Warnings: warnings, Err: err}
+	}
+	changed = changed || adapted
 	sanitizedWarnings := sanitizeOutboundRequest(updated)
 	if len(sanitizedWarnings) > 0 {
 		warnings = append(warnings, sanitizedWarnings...)

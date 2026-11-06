@@ -75,56 +75,60 @@ type ModelTreeNode struct {
 }
 
 type ProviderEntry struct {
-	Models               []ProviderModel `yaml:"models,omitempty" json:"models,omitempty"`
-	Name                 string          `yaml:"name" json:"name"`
-	APIBase              string          `yaml:"api_base" json:"api_base"`
-	APIKey               string          `yaml:"api_key" json:"api_key"`
-	APIType              string          `yaml:"api_type" json:"api_type"`
-	AnthropicVersion     string          `yaml:"anthropic_version,omitempty" json:"anthropic_version,omitempty"`
-	Mode                 string          `yaml:"mode,omitempty" json:"mode,omitempty"`
-	Scope                string          `yaml:"scope,omitempty" json:"scope,omitempty"`
-	AuthURL              string          `yaml:"auth_url,omitempty" json:"auth_url,omitempty"`
-	ClientCert           string          `yaml:"client_cert,omitempty" json:"client_cert,omitempty"`
-	ClientKey            string          `yaml:"client_key,omitempty" json:"client_key,omitempty"`
-	RequestTimeout       any             `yaml:"request_timeout,omitempty" json:"request_timeout,omitempty"`
-	VerifySSL            any             `yaml:"verify_ssl,omitempty" json:"verify_ssl,omitempty"`
-	EmulateToolCalls     any             `yaml:"emulate_tool_calls,omitempty" json:"emulate_tool_calls,omitempty"`
-	SupportsResponsesAPI any             `yaml:"supports_responses_api,omitempty" json:"supports_responses_api,omitempty"`
-	Limits               LimitsConfig    `yaml:"limits" json:"limits"`
-	Parameters           map[string]any  `yaml:"parameters" json:"parameters"`
-	Endpoints            []string        `yaml:"endpoints" json:"endpoints"`
-	Raw                  map[string]any  `yaml:",inline" json:"-"`
+	Engine               string              `yaml:"engine,omitempty" json:"engine,omitempty"`
+	Compatibility        EngineCompatibility `yaml:"compatibility,omitempty" json:"compatibility,omitempty"`
+	Models               []ProviderModel     `yaml:"models,omitempty" json:"models,omitempty"`
+	Name                 string              `yaml:"name" json:"name"`
+	APIBase              string              `yaml:"api_base" json:"api_base"`
+	APIKey               string              `yaml:"api_key" json:"api_key"`
+	APIType              string              `yaml:"api_type" json:"api_type"`
+	AnthropicVersion     string              `yaml:"anthropic_version,omitempty" json:"anthropic_version,omitempty"`
+	Mode                 string              `yaml:"mode,omitempty" json:"mode,omitempty"`
+	Scope                string              `yaml:"scope,omitempty" json:"scope,omitempty"`
+	AuthURL              string              `yaml:"auth_url,omitempty" json:"auth_url,omitempty"`
+	ClientCert           string              `yaml:"client_cert,omitempty" json:"client_cert,omitempty"`
+	ClientKey            string              `yaml:"client_key,omitempty" json:"client_key,omitempty"`
+	RequestTimeout       any                 `yaml:"request_timeout,omitempty" json:"request_timeout,omitempty"`
+	VerifySSL            any                 `yaml:"verify_ssl,omitempty" json:"verify_ssl,omitempty"`
+	EmulateToolCalls     any                 `yaml:"emulate_tool_calls,omitempty" json:"emulate_tool_calls,omitempty"`
+	SupportsResponsesAPI any                 `yaml:"supports_responses_api,omitempty" json:"supports_responses_api,omitempty"`
+	Limits               LimitsConfig        `yaml:"limits" json:"limits"`
+	Parameters           map[string]any      `yaml:"parameters" json:"parameters"`
+	Endpoints            []string            `yaml:"endpoints" json:"endpoints"`
+	Raw                  map[string]any      `yaml:",inline" json:"-"`
 }
 
 type NodeEntry struct {
-	UpstreamModel        string         `yaml:"upstream_model,omitempty" json:"upstream_model,omitempty"`
-	Generated            bool           `yaml:"-" json:"generated,omitempty"`
-	Name                 string         `yaml:"name" json:"name"`
-	Provider             string         `yaml:"provider" json:"provider"`
-	APIBase              string         `yaml:"api_base" json:"api_base"`
-	APIKey               string         `yaml:"api_key" json:"api_key"`
-	APIType              string         `yaml:"api_type" json:"api_type"`
-	AnthropicVersion     string         `yaml:"anthropic_version" json:"anthropic_version"`
-	Mode                 string         `yaml:"mode,omitempty" json:"mode,omitempty"`
-	Scope                string         `yaml:"scope,omitempty" json:"scope,omitempty"`
-	AuthURL              string         `yaml:"auth_url,omitempty" json:"auth_url,omitempty"`
-	ClientCert           string         `yaml:"client_cert,omitempty" json:"client_cert,omitempty"`
-	ClientKey            string         `yaml:"client_key,omitempty" json:"client_key,omitempty"`
-	VerifySSL            any            `yaml:"verify_ssl,omitempty" json:"verify_ssl,omitempty"`
-	EmulateToolCalls     any            `yaml:"emulate_tool_calls,omitempty" json:"emulate_tool_calls,omitempty"`
-	Model                string         `yaml:"model" json:"model"`
-	TargetModel          string         `yaml:"target_model" json:"target_model"`
-	RequestTimeout       any            `yaml:"request_timeout" json:"request_timeout"`
-	SupportsReasoning    any            `yaml:"supports_reasoning" json:"supports_reasoning"`
-	SupportsResponsesAPI any            `yaml:"supports_responses_api" json:"supports_responses_api"`
-	HTTP2                any            `yaml:"http2" json:"http2"`
-	Weight               int            `yaml:"weight" json:"weight"`
-	Limits               LimitsConfig   `yaml:"limits" json:"limits"`
-	Parameters           map[string]any `yaml:"parameters" json:"parameters"`
-	Modules              map[string]any `yaml:"modules" json:"modules"`
-	Endpoints            []string       `yaml:"endpoints" json:"endpoints"`
-	AllowedKeys          any            `yaml:"allowed_keys" json:"allowed_keys"`
-	Raw                  map[string]any `yaml:",inline" json:"-"`
+	Engine               string              `yaml:"engine,omitempty" json:"engine,omitempty"`
+	Compatibility        EngineCompatibility `yaml:"compatibility,omitempty" json:"compatibility,omitempty"`
+	UpstreamModel        string              `yaml:"upstream_model,omitempty" json:"upstream_model,omitempty"`
+	Generated            bool                `yaml:"-" json:"generated,omitempty"`
+	Name                 string              `yaml:"name" json:"name"`
+	Provider             string              `yaml:"provider" json:"provider"`
+	APIBase              string              `yaml:"api_base" json:"api_base"`
+	APIKey               string              `yaml:"api_key" json:"api_key"`
+	APIType              string              `yaml:"api_type" json:"api_type"`
+	AnthropicVersion     string              `yaml:"anthropic_version" json:"anthropic_version"`
+	Mode                 string              `yaml:"mode,omitempty" json:"mode,omitempty"`
+	Scope                string              `yaml:"scope,omitempty" json:"scope,omitempty"`
+	AuthURL              string              `yaml:"auth_url,omitempty" json:"auth_url,omitempty"`
+	ClientCert           string              `yaml:"client_cert,omitempty" json:"client_cert,omitempty"`
+	ClientKey            string              `yaml:"client_key,omitempty" json:"client_key,omitempty"`
+	VerifySSL            any                 `yaml:"verify_ssl,omitempty" json:"verify_ssl,omitempty"`
+	EmulateToolCalls     any                 `yaml:"emulate_tool_calls,omitempty" json:"emulate_tool_calls,omitempty"`
+	Model                string              `yaml:"model" json:"model"`
+	TargetModel          string              `yaml:"target_model" json:"target_model"`
+	RequestTimeout       any                 `yaml:"request_timeout" json:"request_timeout"`
+	SupportsReasoning    any                 `yaml:"supports_reasoning" json:"supports_reasoning"`
+	SupportsResponsesAPI any                 `yaml:"supports_responses_api" json:"supports_responses_api"`
+	HTTP2                any                 `yaml:"http2" json:"http2"`
+	Weight               int                 `yaml:"weight" json:"weight"`
+	Limits               LimitsConfig        `yaml:"limits" json:"limits"`
+	Parameters           map[string]any      `yaml:"parameters" json:"parameters"`
+	Modules              map[string]any      `yaml:"modules" json:"modules"`
+	Endpoints            []string            `yaml:"endpoints" json:"endpoints"`
+	AllowedKeys          any                 `yaml:"allowed_keys" json:"allowed_keys"`
+	Raw                  map[string]any      `yaml:",inline" json:"-"`
 }
 
 type ClientModelEntry struct {
@@ -760,6 +764,12 @@ func (cfg *Config) Validate() []ValidationIssue {
 		if apiType == "passthrough" && name != "" {
 			knownTargets[name] = true
 		}
+		compat, compatErr := ParseEngineCompatibility(params["compatibility"])
+		if compatErr != nil {
+			collector.add(path+".model_params.compatibility", "error", "invalid_engine_compatibility", compatErr.Error())
+		}
+		engine, _ := params["engine"].(string)
+		validateEngine(&collector, path+".model_params", engine, compat)
 		validateLimits(&collector, path+".limits", model.Limits)
 	}
 
@@ -779,6 +789,7 @@ func (cfg *Config) Validate() []ValidationIssue {
 		if provider.APIBase != "" && !validHTTPURL(provider.APIBase) {
 			collector.add(path+".api_base", "error", "invalid_url", "Provider API base must be an absolute http or https URL")
 		}
+		validateEngine(&collector, path, provider.Engine, provider.Compatibility)
 		validateEndpoints(&collector, path+".endpoints", provider.Endpoints)
 		validateLimits(&collector, path+".limits", provider.Limits)
 	}
@@ -809,6 +820,7 @@ func (cfg *Config) Validate() []ValidationIssue {
 		if node.Weight < 0 {
 			collector.add(path+".weight", "error", "invalid_limit", "Node weight cannot be negative")
 		}
+		validateEngine(&collector, path, firstString(node.Engine, provider.Engine), MergeEngineCompatibility(provider.Compatibility, node.Compatibility))
 		validateEndpoints(&collector, path+".endpoints", node.Endpoints)
 		validateLimits(&collector, path+".limits", node.Limits)
 		validateAllowedKeys(&collector, path+".allowed_keys", node.AllowedKeys)
@@ -1977,6 +1989,10 @@ func clientModelEntriesAsRaw(entries []ClientModelEntry) []any {
 
 func providerEntryToMap(provider ProviderEntry) map[string]any {
 	raw := cloneMap(provider.Raw)
+	setRawString(raw, "engine", provider.Engine)
+	if provider.Compatibility != (EngineCompatibility{}) {
+		raw["compatibility"] = provider.Compatibility
+	}
 	if provider.Models != nil {
 		raw["models"] = provider.Models
 	}
@@ -2008,6 +2024,10 @@ func providerEntryToMap(provider ProviderEntry) map[string]any {
 
 func nodeEntryToMap(node NodeEntry) map[string]any {
 	raw := cloneMap(node.Raw)
+	setRawString(raw, "engine", node.Engine)
+	if node.Compatibility != (EngineCompatibility{}) {
+		raw["compatibility"] = node.Compatibility
+	}
 	setRawString(raw, "upstream_model", node.UpstreamModel)
 	setRawString(raw, "name", node.Name)
 	setRawString(raw, "provider", node.Provider)

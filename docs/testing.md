@@ -119,3 +119,22 @@ task frontend:build
 Build output in `web/admin/dist` is committed and embedded in the Go binary, so `/admin` is available in a fresh build even when the process is started outside the source tree. Refresh the bundle whenever frontend source changes.
 
 The frontend build typechecks the complete admin console, including the structured log inspector, filters/pagination, Trace-to-Request navigation, routing/key workflows, and observability views.
+
+## Live Engine Compatibility
+
+The engine integration test is skipped by `task test` unless explicitly enabled.
+It discovers the first advertised model at each supplied OpenAI API base and
+sends short inference requests through the new proxy handler, without opening a
+listening proxy or modifying an existing running instance/configuration.
+
+```bash
+YALLMP_TEST_ENGINE_URLS='http://gpu-a:8000/v1,http://gpu-b:8000/v1' task test:engines:live
+```
+
+Set `YALLMP_TEST_ENGINE_API_KEY` if these upstreams require a shared API key.
+The harness verifies engine discovery and bidirectional regex translation in
+both streaming and non-streaming requests. It asks for “no” but constrains output
+to “yes,” checking actual constraint enforcement. This test uses a DeepSeek-style
+`chat_template_kwargs.thinking: false`; adapt that model-specific setting if
+using another model family. Thinking-budget enforcement is not tested live;
+servers can expose a budget field without enabling the necessary runtime flags.

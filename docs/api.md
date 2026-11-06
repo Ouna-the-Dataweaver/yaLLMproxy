@@ -578,3 +578,16 @@ Messages and Responses endpoints return their API-specific error shapes where ap
   automatically form pools.
 
 See [the simple routing guide](simple-routing.md) for examples and migration.
+
+## Upstream Engine Status
+
+```http
+GET /admin/engines
+```
+
+Returns `{"nodes": [...]}` with each node's effective engine/version, discovery
+source/check time, advertised request fields, DP size, and thinking-budget status
+(`true`, `false`, or `null` for unknown). `compatibility_enabled` indicates whether
+request adaptation is enabled. Requires `x-admin-password` when an admin password
+is configured. Upstream credentials and full server configuration are omitted.
+See [engine compatibility configuration](configuration.md#upstream-engine-compatibility).

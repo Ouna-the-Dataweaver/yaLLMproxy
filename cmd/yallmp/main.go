@@ -62,6 +62,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	_ = app.StartHealthChecks(ctx)
+	_ = app.StartEngineDiscovery(ctx)
 	_ = app.StartModelCatalog(ctx)
 
 	errCh := make(chan error, 3)

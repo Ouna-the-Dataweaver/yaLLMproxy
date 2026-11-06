@@ -71,6 +71,12 @@ tasks:
     cmds:
       - bash -c 'GO_BIN="${GO:-$(command -v go || printf .tools/go/bin/go)}"; "$GO_BIN" test -race ./...'
 
+  test:engines:live:
+    desc: Detect live engines and verify regex translation (set YALLMP_TEST_ENGINE_URLS; runs inference)
+    cmds:
+      - |
+        bash -c ': "${YALLMP_TEST_ENGINE_URLS:?Set comma-separated upstream API bases}"; GO_BIN="${GO:-$(command -v go || printf .tools/go/bin/go)}"; "$GO_BIN" test ./internal/server -run "^TestEngineLive$" -count=1 -v'
+
   test:postgres:
     desc: Run gated PostgreSQL logdb integration tests when YALLMP_TEST_POSTGRES_DSN is set
     cmds:

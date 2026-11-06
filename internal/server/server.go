@@ -220,6 +220,8 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 		a.handleModels(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/admin/config":
 		a.handleGetConfig(w, r)
+	case r.Method == http.MethodGet && r.URL.Path == "/admin/engines":
+		writeJSON(w, http.StatusOK, map[string]any{"nodes": a.Router.EngineSnapshot()})
 	case r.Method == http.MethodGet && r.URL.Path == "/admin/catalog":
 		a.handleAdminCatalog(w, r)
 	case r.Method == http.MethodPut && r.URL.Path == "/admin/config":
@@ -1007,7 +1009,7 @@ func sensitiveAdminAPIRequest(r *http.Request) bool {
 		return false
 	}
 	path := r.URL.Path
-	return path == "/admin/config" ||
+	return path == "/admin/engines" || path == "/admin/config" ||
 		path == "/admin/config/validate" ||
 		path == "/admin/config/reload" ||
 		path == "/admin/logs" ||
@@ -1553,7 +1555,7 @@ func (a *App) handleJSONProxy(w http.ResponseWriter, r *http.Request, validate v
 		w.WriteHeader(resp.StatusCode)
 		_, _ = w.Write(respBody)
 		if !forwardResult.SemanticCacheHit {
-			a.storeSemanticInferenceCache(r.Context(), modelName, r.URL.Path, r.URL.RawQuery, body, payload, isStream, forwardOpts, forwardResult.BackendName, resp.StatusCode, resp.Header, respBody)
+			a.storeSemanticInferenceCache(r.Context(), modelName, r.URL.Path, r.URL.RawQuery, body, payload, isStream, forwardOpts, forwardResult.BackendName, resp.StatusCode, resp.Header, respBody, forwardResult.EngineProfile)
 		}
 		if resp.StatusCode >= 400 {
 			tokenReservation.Release()
@@ -1594,7 +1596,7 @@ func semanticInferenceCachePath(path string) bool {
 	return path == "/v1/chat/completions"
 }
 
-func (a *App) storeSemanticInferenceCache(ctx context.Context, modelName string, path string, rawQuery string, body []byte, payload map[string]any, isStream bool, opts proxy.ForwardOptions, backendName string, status int, header http.Header, responseBody []byte) bool {
+func (a *App) storeSemanticInferenceCache(ctx context.Context, modelName string, path string, rawQuery string, body []byte, payload map[string]any, isStream bool, opts proxy.ForwardOptions, backendName string, status int, header http.Header, responseBody []byte, profiles ...*proxy.EngineProfile) bool {
 	if a == nil || a.Router == nil || a.Router.InferenceCache == nil || !opts.Cacheable || opts.CacheBypass || isStream || !semanticInferenceCachePath(path) {
 		return false
 	}
@@ -1606,12 +1608,18 @@ func (a *App) storeSemanticInferenceCache(ctx context.Context, modelName string,
 	if !ok {
 		return false
 	}
-	bodyResult := proxy.BuildBackendBodyWithWarnings(payload, backend, body, false)
+	if len(profiles) > 0 && profiles[0] != nil {
+		backend.EngineProfile = profiles[0]
+	}
+	bodyResult := proxy.BuildBackendBodyWithWarnings(payload, backend, body, false, path)
+	if bodyResult.Err != nil {
+		return false
+	}
 	return a.Router.InferenceCache.StoreSemantic(ctx, proxy.SemanticCacheRequest{
 		Path:        path,
 		RawQuery:    rawQuery,
 		BackendName: backend.Name,
-		Scope:       opts.CacheScope,
+		Scope:       backend.EngineCacheScope(opts.CacheScope),
 		ModelName:   modelName,
 		Body:        bodyResult.Body,
 	}, status, proxy.FilterResponseHeaders(header), responseBody)
@@ -1725,6 +1733,11 @@ func (a *App) recordBackendQuotaUsage(result proxy.ForwardResult, tokens int) {
 }
 
 func (a *App) writeBackendForwardError(w http.ResponseWriter, err error) (int, bool) {
+	var compatibilityErr *proxy.CompatibilityError
+	if errors.As(err, &compatibilityErr) {
+		writeError(w, http.StatusBadRequest, err.Error(), "engine_compatibility_error")
+		return http.StatusBadRequest, true
+	}
 	if errors.Is(err, proxy.ErrEndpointNotSupported) {
 		writeError(w, http.StatusBadRequest, err.Error(), "unsupported_endpoint")
 		return http.StatusBadRequest, true
@@ -2835,7 +2848,11 @@ func withForwardWarnings(entry LogEntry, result proxy.ForwardResult) LogEntry {
 	}
 	entry.Warnings = append(entry.Warnings, result.Warnings...)
 	for _, warning := range result.Warnings {
-		log.Printf("WARNING client request sanitized model=%q backend=%q path=%q status=%d code=%s warning=%q", entry.Model, entry.Backend, entry.Path, entry.Status, warning.Code, warning.Message)
+		level := "WARNING"
+		if warning.Severity == "info" {
+			level = "INFO"
+		}
+		log.Printf("%s request adaptation model=%q backend=%q path=%q status=%d code=%s message=%q", level, entry.Model, entry.Backend, entry.Path, entry.Status, warning.Code, warning.Message)
 	}
 	return entry
 }

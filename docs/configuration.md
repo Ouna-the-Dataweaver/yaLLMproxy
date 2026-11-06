@@ -11,6 +11,7 @@ Complete reference for yaLLMproxy configuration options.
   - [Optional Fields](#optional-fields)
   - [Parameter Overrides](#parameter-overrides)
   - [Model Inheritance](#model-inheritance)
+- [Upstream Engine Compatibility](#upstream-engine-compatibility)
 - [Response Modules](#response-modules)
   - [Available Modules](#available-modules)
   - [Per-Model Module Overrides](#per-model-module-overrides)
@@ -998,3 +999,137 @@ Runtime model additions via `/admin/models` are persisted to `configs/config.yam
 Protected models require `YALLMP_ADMIN_PASSWORD` before replacement through `POST /admin/models`. Legacy model copy/delete and provider/node/client-model backend CRUD workflows are also available through admin APIs and the React Routing UI, then persist to `configs/config.yaml` when the proxy was loaded from disk.
 
 Runtime app-key changes via `/admin/keys*` are also persisted to `configs/config.yaml` and take effect immediately without restarting the proxy.
+
+## Upstream Engine Compatibility
+
+Engine adaptation is opt-in and separate from `api_type: openai`. Configure it
+on a provider or node; node settings inherit individual provider settings and
+can explicitly override booleans with `false`. For legacy `model_list` entries,
+put these keys inside `model_params`.
+
+```yaml
+nodes:
+  - name: gpu-a
+    model: deepseek
+    upstream_model: your-served-model-name
+    api_base: http://gpu-a:8000/v1
+    engine: auto
+    compatibility:
+      enabled: true
+      strict: false
+```
+
+`engine` accepts `auto`, `vllm`, `sglang`, or `generic`. With compatibility enabled,
+an omitted engine defaults to `auto`; otherwise it defaults to `generic` and
+makes no discovery requests. `engine: auto` without `compatibility.enabled`
+enables discovery for observation without changing request fields. `generic`
+disables detection and supplies no engine-specific mappings.
+
+Discovery runs in the background at startup and after runtime changes, refreshing
+nodes every five minutes with at most four concurrent node probes. Requests do
+not wait for discovery. Each probe has a two-second timeout, a four-MiB response
+limit, and refuses redirects; a node's entire discovery pass has an eight-second
+limit. Failed detection replaces the previous profile with unknown information.
+Probes use the configured upstream API key, not incoming client headers.
+
+The proxy checks `/v1/models` metadata and `/openapi.json` field signatures,
+then reads vLLM `/version` or SGLang `/server_info` (falling back to
+`/get_server_info`). A version endpoint alone is not sufficient identification.
+Model names are not engine fingerprints. Detection reflects the HTTP endpoint
+that the proxy can observe; heterogeneous gateways should expose separate nodes
+or use explicit configuration.
+
+The probe base defaults to `api_base` with a trailing `/v1` removed, preserving
+any deployment prefix. Set `compatibility.probe_base` when administrative
+endpoints live at a different base. It receives the upstream API key, so use an
+endpoint belonging to that upstream. An explicit engine takes precedence over
+detection and supplies current-engine field defaults if OpenAPI is unavailable.
+When OpenAPI is available, its advertised fields take precedence over those
+defaults, including older vLLM `guided_regex` and `guided_json` fields.
+
+### Request mappings
+
+Adapters run on chat-completion requests, including the `/chat/completions`
+alias, after configured parameter defaults/overrides and before sending each
+attempt. They also run when Messages/Responses requests are translated into
+chat completions. Native Messages/Responses, embeddings, rerank, and passthrough
+requests are not rewritten by these adapters.
+
+- **Thinking budget:** `thinking_token_budget` and
+  `custom_params.thinking_budget` are aliases. vLLM receives the former;
+  SGLang receives the latter. Other `custom_params` entries are retained.
+- **Regex:** `regex`, `guided_regex`, and `structured_outputs.regex` are aliases.
+  SGLang receives `regex`; current vLLM receives `structured_outputs.regex`.
+  Regex syntax support still depends on the upstream grammar backend.
+- **JSON schema:** `json_schema`, `guided_json`, and `structured_outputs.json`
+  are aliases. SGLang chat receives OpenAI `response_format` with a JSON schema;
+  current vLLM receives `structured_outputs.json`. Schema objects and JSON-encoded
+  schema strings are accepted. An existing equivalent `response_format` keeps
+  its name, strictness, and other metadata.
+
+Common sampling fields such as `temperature`, `top_p`, `top_k`, `min_p`, and
+`repetition_penalty` pass through unchanged. There is no inferred conversion
+between `reasoning_effort`, thinking toggles, and numeric budgets, and no grammar
+dialect conversion or automatic custom-logit-processor injection.
+
+Conflicting aliases return HTTP 400 (`engine_compatibility_error`) without an
+upstream request. Equivalent aliases are consolidated. Regex and JSON constraints
+cannot be combined. Complex `structured_outputs` options are not partially
+converted when the destination has no known equivalent. Negative budget
+sentinels are not translated; native vLLM `thinking_token_budget: -1` is retained.
+Unrelated fields and nested siblings are preserved, and every fallback attempt
+starts from the original payload with the new destination's settings. Cache keys
+include effective engine capabilities, so capability/version changes do not
+reuse answers cached under a previous profile.
+
+### Capability enforcement and diagnostics
+
+In default permissive mode, unsupported mappings are retained unchanged with an
+`engine_capability_unavailable` warning. Unknown engines also pass fields through
+with a warning. `strict: true` skips incompatible nodes and tries the configured
+fallback route; if no suitable node succeeds, the request fails. Local adapter
+errors do not count as upstream health failures or trigger retries on the same
+node. Strict checking applies to the recognized mappings, not every arbitrary
+extension in a request.
+
+Thinking-budget field support does not prove runtime enforcement. Discovery can
+identify SGLang with both strict thinking and custom logit processors disabled.
+Such nodes retain budget fields unchanged with a warning (or are skipped in
+strict mode). If enforcement is unknown, permissive mode can translate a known
+field but emits an explicit warning; strict mode requires confirmed support.
+Set `compatibility.thinking_budget: true` only after verifying the model's parser
+and server configuration; `false` explicitly marks enforcement unavailable.
+Neither a strict-thinking flag nor custom-logit-processor mode alone proves
+per-request enforcement. Discovery conservatively reports `false` or unknown;
+`thinking_budget: true` is an explicit operator assertion after verification.
+
+`GET /admin/engines` reports each node's effective engine, discovery source,
+version, check time, advertised fields, DP size, and thinking-budget status
+(`true`, `false`, or `null` for unknown). It uses the configured admin password,
+as `/admin/config` does. Full server launch arguments and API keys are not
+returned. Successful translations appear as `engine_parameter_translated` info
+entries in request logs; capability limitations appear as warnings.
+
+### Explicit data-parallel rank routing
+
+By default, the upstream owns DP scheduling; detecting DP does not enable rank
+pinning. To represent a particular rank as a node, enable compatibility and set:
+
+```yaml
+engine: vllm
+compatibility:
+  enabled: true
+  dp_size: 4
+  dp_rank: 0
+```
+
+Ranks are zero-based. SGLang can supply `dp_size` through discovery; configure it
+explicitly when it cannot be discovered, including vLLM. A configured rank
+requires a known positive DP size and must be smaller than that size. The
+adapter uses vLLM's `X-data-parallel-rank` header or SGLang's advertised
+`routed_dp_rank` body field. Explicit node rank settings replace incoming rank
+hints, and each fallback uses its own node's rank and size. Without `dp_rank`,
+existing headers and routing fields remain untouched.
+
+This provides explicit rank targeting; it does not automatically discover worker
+URLs, hash conversations to ranks, or manage prefill/decode disaggregation.

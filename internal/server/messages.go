@@ -177,6 +177,16 @@ func (a *App) handleMessages(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		slot.Release()
 		tokenReservation.Release()
+		var compatibilityErr *proxy.CompatibilityError
+		if errors.As(err, &compatibilityErr) {
+			requestStatus = http.StatusBadRequest
+			requestErr = err
+			writeAnthropicError(w, http.StatusBadRequest, err.Error(), "invalid_request_error", "engine_compatibility_error")
+			entry := a.addLog(r, withForwardWarnings(LogEntry{Time: start, Method: r.Method, Path: r.URL.Path, Model: modelName, Status: http.StatusBadRequest, Backend: forwardResult.BackendName, Error: err.Error(), DurationMS: time.Since(start).Milliseconds()}, forwardResult))
+			payloadPath := a.storePayload(entry, r, body, nil, nil)
+			a.persistLog(r.Context(), entry, r, false, pctx, payloadPath, nil)
+			return
+		}
 		if errors.Is(err, proxy.ErrEndpointNotSupported) {
 			requestStatus = http.StatusBadRequest
 			requestErr = err
@@ -327,7 +337,7 @@ func (a *App) handleMessages(w http.ResponseWriter, r *http.Request) {
 	usage, _, _ := logdb.ExtractUsageAndOutcome(anthropicBody)
 	a.commitTokenUsage(tokenReservation, forwardResult, totalTokensFromUsage(usage))
 	a.recordTokenUsageMetric(r.Context(), endpointKind, modelName, false, usage)
-	a.Router.StoreTranslatedInferenceCache(forwardResult.BackendName, r.URL.Path, r.URL.RawQuery, forwardBody, forwardPayload, isStream, translatedCacheOpts, resp.StatusCode, http.Header{"Content-Type": {"application/json"}}, anthropicBody)
+	a.Router.StoreTranslatedInferenceCache(forwardResult.BackendName, r.URL.Path, r.URL.RawQuery, forwardBody, forwardPayload, isStream, translatedCacheOpts, resp.StatusCode, http.Header{"Content-Type": {"application/json"}}, anthropicBody, forwardResult.EngineProfile)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(resp.StatusCode)
 	_, _ = w.Write(anthropicBody)

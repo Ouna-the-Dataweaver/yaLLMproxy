@@ -16,6 +16,11 @@ nodes:
     api_base: http://gpu-a:8000/v1
     model: qwen
     upstream_model: Qwen/Qwen3-32B
+    # Optional vLLM/SGLang detection and common request-field translation:
+    # engine: auto
+    # compatibility:
+    #   enabled: true
+    #   strict: false
   - name: gpu-b
     api_base: http://gpu-b:8000/v1
     model: qwen
