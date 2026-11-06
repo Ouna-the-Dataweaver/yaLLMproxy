@@ -439,14 +439,17 @@ func clonePayloadValue(value any) any {
 // DecodeResponseBody replaces a gzip or deflate encoded upstream body with its
 // decoded stream. The transport already decodes gzip it negotiated itself; this
 // covers upstreams that compress without being asked, so downstream parsing and
-// the Content-Encoding-free response headers always see identity bytes.
+// the Content-Encoding-free response headers always see identity bytes. Other
+// encodings fail explicitly rather than exposing undecoded JSON or SSE bytes.
 func DecodeResponseBody(resp *http.Response) error {
 	if resp == nil || resp.Body == nil {
 		return nil
 	}
-	encoding := strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Encoding")))
+	encoding := strings.ToLower(strings.TrimSpace(strings.Join(resp.Header.Values("Content-Encoding"), ",")))
 	var decoded io.ReadCloser
 	switch encoding {
+	case "", "identity":
+		return nil
 	case "gzip", "x-gzip":
 		reader, err := gzip.NewReader(resp.Body)
 		if err != nil {
@@ -475,7 +478,8 @@ func DecodeResponseBody(resp *http.Response) error {
 			decoded = flate.NewReader(buffered)
 		}
 	default:
-		return nil
+		_ = resp.Body.Close()
+		return fmt.Errorf("unsupported upstream content encoding %q", encoding)
 	}
 	resp.Body = &decodedBody{Reader: decoded, decoder: decoded, raw: resp.Body}
 	resp.Header.Del("Content-Encoding")

@@ -123,3 +123,49 @@ func TestForwardDecodesUnsolicitedCompressedStream(t *testing.T) {
 		})
 	}
 }
+
+type encodingTrackedBody struct {
+	io.Reader
+	closed bool
+}
+
+func (b *encodingTrackedBody) Close() error {
+	b.closed = true
+	return nil
+}
+
+func TestDecodeResponseBodyRejectsUnsupportedEncodings(t *testing.T) {
+	for _, encoding := range []string{"br", "zstd", "gzip, deflate", "gzip, gzip"} {
+		t.Run(encoding, func(t *testing.T) {
+			body := &encodingTrackedBody{Reader: strings.NewReader("encoded bytes")}
+			resp := &http.Response{Header: http.Header{"Content-Encoding": {encoding}}, Body: body}
+			err := DecodeResponseBody(resp)
+			if err == nil || !strings.Contains(err.Error(), "unsupported upstream content encoding") || !body.closed {
+				t.Fatalf("error=%v body closed=%v", err, body.closed)
+			}
+		})
+	}
+}
+
+func TestDecodeResponseBodyAcceptsIdentity(t *testing.T) {
+	for _, encoding := range []string{"", "identity"} {
+		body := &encodingTrackedBody{Reader: strings.NewReader("plain bytes")}
+		resp := &http.Response{Header: http.Header{"Content-Encoding": {encoding}}, Body: body}
+		if err := DecodeResponseBody(resp); err != nil || body.closed {
+			t.Fatalf("encoding=%q error=%v body closed=%v", encoding, err, body.closed)
+		}
+		got, err := io.ReadAll(resp.Body)
+		if err != nil || string(got) != "plain bytes" {
+			t.Fatalf("encoding=%q body=%q error=%v", encoding, got, err)
+		}
+		_ = resp.Body.Close()
+	}
+}
+
+func TestDecodeResponseBodyRejectsMultipleEncodingHeaders(t *testing.T) {
+	body := &encodingTrackedBody{Reader: strings.NewReader("encoded bytes")}
+	resp := &http.Response{Header: http.Header{"Content-Encoding": {"gzip", "deflate"}}, Body: body}
+	if err := DecodeResponseBody(resp); err == nil || !body.closed {
+		t.Fatalf("error=%v body closed=%v", err, body.closed)
+	}
+}
