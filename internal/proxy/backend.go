@@ -1,9 +1,11 @@
 package proxy
 
 import (
+	"bufio"
 	"bytes"
 	"compress/flate"
 	"compress/gzip"
+	"compress/zlib"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -458,7 +460,20 @@ func DecodeResponseBody(resp *http.Response) error {
 		}
 		decoded = reader
 	case "deflate":
-		decoded = flate.NewReader(resp.Body)
+		// HTTP deflate uses a zlib wrapper. Some upstreams send raw DEFLATE;
+		// sniff the wrapper without consuming bytes to support both streams.
+		buffered := bufio.NewReader(resp.Body)
+		header, _ := buffered.Peek(2)
+		if len(header) == 2 && header[0]&0x0f == 8 && header[0]>>4 <= 7 && (uint16(header[0])<<8|uint16(header[1]))%31 == 0 {
+			reader, err := zlib.NewReader(buffered)
+			if err != nil {
+				_ = resp.Body.Close()
+				return fmt.Errorf("decode deflate response: %w", err)
+			}
+			decoded = reader
+		} else {
+			decoded = flate.NewReader(buffered)
+		}
 	default:
 		return nil
 	}

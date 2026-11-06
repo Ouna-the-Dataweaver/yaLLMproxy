@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/flate"
 	"compress/gzip"
+	"compress/zlib"
 	"context"
 	"io"
 	"net/http"
@@ -33,6 +34,8 @@ func compressedUpstream(t *testing.T, encoding string, contentType string, body 
 		case "gzip":
 			writer = gzip.NewWriter(&buf)
 		case "deflate":
+			writer = zlib.NewWriter(&buf)
+		case "deflate-raw":
 			writer, _ = flate.NewWriter(&buf, flate.DefaultCompression)
 		default:
 			t.Fatalf("unsupported test encoding %q", encoding)
@@ -40,7 +43,7 @@ func compressedUpstream(t *testing.T, encoding string, contentType string, body 
 		_, _ = writer.Write([]byte(body))
 		_ = writer.Close()
 		w.Header().Set("Content-Type", contentType)
-		w.Header().Set("Content-Encoding", encoding)
+		w.Header().Set("Content-Encoding", strings.TrimSuffix(encoding, "-raw"))
 		_, _ = w.Write(buf.Bytes())
 	}))
 }
@@ -62,7 +65,7 @@ func encodingTestRouter(t *testing.T, apiBase string) *Router {
 
 func TestForwardDecodesCompressedResponses(t *testing.T) {
 	const want = `{"id":"r1","choices":[{"message":{"content":"hi"}}]}`
-	for _, encoding := range []string{"gzip", "deflate"} {
+	for _, encoding := range []string{"gzip", "deflate", "deflate-raw"} {
 		t.Run(encoding, func(t *testing.T) {
 			var sawAcceptEncoding string
 			upstream := compressedUpstream(t, encoding, "application/json", want, &sawAcceptEncoding)
@@ -96,23 +99,27 @@ func TestForwardDecodesCompressedResponses(t *testing.T) {
 
 func TestForwardDecodesUnsolicitedCompressedStream(t *testing.T) {
 	const want = "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n"
-	upstream := compressedUpstream(t, "gzip", "text/event-stream", want, nil)
-	defer upstream.Close()
-	router := encodingTestRouter(t, upstream.URL+"/v1")
+	for _, encoding := range []string{"gzip", "deflate", "deflate-raw"} {
+		t.Run(encoding, func(t *testing.T) {
+			upstream := compressedUpstream(t, encoding, "text/event-stream", want, nil)
+			defer upstream.Close()
+			router := encodingTestRouter(t, upstream.URL+"/v1")
 
-	resp, err := router.Forward(context.Background(), "m", "/v1/chat/completions", "", []byte(`{"model":"m","stream":true}`), map[string]any{"model": "m", "stream": true}, true, http.Header{"Content-Type": {"application/json"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	got, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != want {
-		t.Fatalf("stream body = %q", got)
-	}
-	if ce := resp.Header.Get("Content-Encoding"); ce != "" {
-		t.Fatalf("content-encoding = %q on decoded stream", ce)
+			resp, err := router.Forward(context.Background(), "m", "/v1/chat/completions", "", []byte(`{"model":"m","stream":true}`), map[string]any{"model": "m", "stream": true}, true, http.Header{"Content-Type": {"application/json"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			got, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != want {
+				t.Fatalf("stream body = %q", got)
+			}
+			if ce := resp.Header.Get("Content-Encoding"); ce != "" {
+				t.Fatalf("content-encoding = %q on decoded stream", ce)
+			}
+		})
 	}
 }
