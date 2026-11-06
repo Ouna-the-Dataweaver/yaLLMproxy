@@ -1,5 +1,7 @@
 """SSE (Server-Sent Events) stream utilities and error detection."""
 
+import codecs
+import io
 import json
 from typing import Any, Optional
 
@@ -59,17 +61,38 @@ def detect_sse_stream_error(data: bytes) -> Optional[str]:
     return None
 
 
+class SSELineDecoder:
+    """Buffer UTF-8 bytes and incomplete lines across network chunks."""
+
+    def __init__(self) -> None:
+        self._buffer = ""
+        self._text_decoder = io.IncrementalNewlineDecoder(
+            codecs.getincrementaldecoder("utf-8")(errors="replace"), translate=True
+        )
+
+    def feed(self, chunk: bytes, *, final: bool = False) -> list[str]:
+        self._buffer += self._text_decoder.decode(chunk, final=final)
+        lines = self._buffer.split("\n")
+        self._buffer = lines.pop()
+        if final and self._buffer:
+            lines.append(self._buffer)
+            self._buffer = ""
+        return lines
+
+
 class SSEJSONDecoder:
     """Incremental SSE decoder that extracts JSON payloads from data events."""
 
     def __init__(self) -> None:
         self._buffer = ""
+        self._text_decoder = io.IncrementalNewlineDecoder(
+            codecs.getincrementaldecoder("utf-8")(errors="replace"), translate=True
+        )
 
     def feed(self, chunk: bytes) -> list[dict[str, Any]]:
         if not chunk:
             return []
-        text = chunk.decode("utf-8", errors="replace")
-        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        text = self._text_decoder.decode(chunk)
         self._buffer += text
 
         payloads: list[dict[str, Any]] = []
@@ -107,6 +130,7 @@ class SSEJSONDecoder:
         Call this at the end of the stream to process any final events
         that may not have been followed by a double newline.
         """
+        self._buffer += self._text_decoder.decode(b"", final=True)
         if not self._buffer.strip():
             return []
 

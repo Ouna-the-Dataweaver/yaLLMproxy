@@ -35,6 +35,7 @@ import logging
 import uuid
 from typing import Any, AsyncIterator, Optional
 
+from ..core.sse import SSELineDecoder
 from .translator import _convert_stop_reason
 
 logger = logging.getLogger("yallmp-proxy")
@@ -63,6 +64,7 @@ class ChatToMessagesStreamAdapter:
         """
         self.message_id = message_id
         self.model = model
+        self._line_decoder = SSELineDecoder()
 
         # Content block tracking
         self.content_blocks: list[dict[str, Any]] = []
@@ -98,11 +100,14 @@ class ChatToMessagesStreamAdapter:
             async for event in self._process_chunk(chunk):
                 yield event
 
+        async for event in self._process_chunk(b"", final=True):
+            yield event
+
         # Emit terminal events
         async for event in self._emit_terminal_events():
             yield event
 
-    async def _process_chunk(self, chunk: bytes) -> AsyncIterator[bytes]:
+    async def _process_chunk(self, chunk: bytes, *, final: bool = False) -> AsyncIterator[bytes]:
         """Process a single chunk from the OpenAI chat completion stream.
 
         Args:
@@ -111,9 +116,7 @@ class ChatToMessagesStreamAdapter:
         Yields:
             Anthropic Messages SSE events
         """
-        text = chunk.decode("utf-8", errors="replace")
-
-        for line in text.split("\n"):
+        for line in self._line_decoder.feed(chunk, final=final):
             line = line.strip()
 
             if not line or not line.startswith("data:"):

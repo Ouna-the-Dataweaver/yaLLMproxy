@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import codecs
+import io
 import json
 import logging
 import re
@@ -1603,12 +1605,14 @@ class SSEEvent:
 class SSEDecoder:
     def __init__(self) -> None:
         self._buffer = ""
+        self._text_decoder = io.IncrementalNewlineDecoder(
+            codecs.getincrementaldecoder("utf-8")(errors="replace"), translate=True
+        )
 
     def feed(self, chunk: bytes) -> list[SSEEvent]:
         if not chunk:
             return []
-        text = chunk.decode("utf-8", errors="replace")
-        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        text = self._text_decoder.decode(chunk)
         self._buffer += text
         events: list[SSEEvent] = []
 
@@ -1625,6 +1629,7 @@ class SSEDecoder:
         return events
 
     def flush(self) -> Optional[bytes]:
+        self._buffer += self._text_decoder.decode(b"", final=True)
         if not self._buffer:
             return None
         leftover = self._buffer
