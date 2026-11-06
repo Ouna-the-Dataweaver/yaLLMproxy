@@ -1316,6 +1316,9 @@ func (r *Router) startAttemptSpan(ctx context.Context, endpointKind string, mode
 }
 
 func (r *Router) ForwardWithOptions(ctx context.Context, modelName string, path string, rawQuery string, body []byte, payload map[string]any, isStream bool, headers http.Header, opts ForwardOptions) (ForwardResult, error) {
+	if err := ctx.Err(); err != nil {
+		return ForwardResult{}, err
+	}
 	routingPayload := payload
 	if opts.RoutePayload != nil {
 		routingPayload = opts.RoutePayload
@@ -1355,6 +1358,9 @@ func (r *Router) ForwardWithOptions(ctx context.Context, modelName string, path 
 		attempts := max(1, r.NumRetries)
 		delay := DefaultRetryDelay
 		for attempt := 0; attempt < attempts; attempt++ {
+			if err := ctx.Err(); err != nil {
+				return ForwardResult{BackendName: lastBackend, Warnings: lastWarnings, AttemptTrail: attemptTrail}, err
+			}
 			attemptStarted := time.Now()
 			attemptIndex := len(attemptTrail) + 1
 			attemptCtx, attemptSpan := r.startAttemptSpan(ctx, endpointKind, modelName, backend, attemptIndex, attempt, isStream)
@@ -1390,6 +1396,14 @@ func (r *Router) ForwardWithOptions(ctx context.Context, modelName string, path 
 				}
 			} else {
 				releaseAttempt()
+			}
+			if err != nil && ctx.Err() != nil {
+				if resp != nil && resp.Body != nil {
+					_ = resp.Body.Close()
+				}
+				attemptSpan.End(observability.SpanResult{Outcome: observability.OutcomeError, BackendName: backend.Name, Error: ctx.Err()})
+				attemptTrail = append(attemptTrail, buildUpstreamAttempt(attemptIndex, backend, attempt, 0, false, "error", attemptDuration, ctx.Err()))
+				return ForwardResult{BackendName: backend.Name, Warnings: warnings, AttemptTrail: attemptTrail}, ctx.Err()
 			}
 			if err == nil && resp != nil && !RetryableStatuses[resp.StatusCode] {
 				attemptSpan.End(observability.SpanResult{Outcome: observability.OutcomeFinal, BackendName: backend.Name, StatusCode: resp.StatusCode})
