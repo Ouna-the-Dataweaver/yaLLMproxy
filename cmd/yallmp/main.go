@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -22,6 +23,9 @@ func main() {
 	cfg, err := config.Load("")
 	if err != nil {
 		log.Fatalf("load config: %v", err)
+	}
+	if !cfg.ProxySettings.Logging.IsEnabled() {
+		log.SetOutput(io.Discard)
 	}
 	app, err := server.New(cfg)
 	if err != nil {

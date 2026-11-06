@@ -1,16 +1,17 @@
 # Go Feature Gaps
 
-Last verified: 2026-07-09.
+Last verified: 2026-11-06 for GigaChat CA support; other sections retain the earlier migration inventory.
 
 This document is the Python-to-Go migration inventory. Many original gaps are now marked implemented; sections with a remaining-gap paragraph are the active publish risks or deliberate follow-up work.
 
 ## GigaChat Custom CA Bundles
 
-The Go GigaChat client supports cloud OAuth, local mTLS client certificates, system trust roots, and the `verify_ssl` switch. It does not accept a separate custom CA bundle path.
-
-The newer `codex/gigachat-ca-cert-followup` branch adds `ca_cert` to the historical Python implementation only; that branch diverges from the Go refactor at the pre-pass baseline and is not evidence that the Go feature is complete.
-
-Remaining gap: add a masked, validated Go `ca_cert` field and load it into `tls.Config.RootCAs`, with focused certificate-pool tests, before operators rely on private GigaChat certificate authorities.
+Implemented: the Go GigaChat client supports cloud OAuth, local mTLS client
+certificates, system trust roots, and an optional `ca_cert` PEM bundle added to
+those roots. Provider/node configuration inherits and masks the CA path. Invalid
+bundles fail client creation when verification is enabled; `verify_ssl: false`
+ignores the bundle and disables verification. Local TLS regressions cover this
+behavior; live GigaChat cloud/mTLS deployment checks remain environment-gated.
 
 ## Admin Model Management APIs
 

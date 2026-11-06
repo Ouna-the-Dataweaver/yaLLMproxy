@@ -20,11 +20,12 @@ import (
 )
 
 type Store struct {
-	db      *sql.DB
-	path    string
-	enabled bool
-	now     func() time.Time
-	dialect databaseDialect
+	db              *sql.DB
+	path            string
+	enabled         bool
+	loggingDisabled bool
+	now             func() time.Time
+	dialect         databaseDialect
 }
 
 type Record struct {
@@ -199,7 +200,7 @@ func NewStore(cfg *config.Config) (*Store, error) {
 		return nil, err
 	}
 	applyDatabasePoolSettings(db, cfg.Database)
-	store := &Store{db: db, path: path, enabled: true, now: time.Now, dialect: dialect}
+	store := &Store{db: db, path: path, enabled: true, now: time.Now, dialect: dialect, loggingDisabled: !cfg.ProxySettings.Logging.IsEnabled()}
 	if err := store.Initialize(context.Background()); err != nil {
 		_ = db.Close()
 		if dialect.name == "postgres" {
@@ -334,7 +335,7 @@ func txQueryRowContext(ctx context.Context, tx *sql.Tx, dialect databaseDialect,
 }
 
 func (s *Store) Insert(ctx context.Context, record Record) (string, error) {
-	if !s.Enabled() {
+	if !s.Enabled() || s.loggingDisabled {
 		return "", nil
 	}
 	if strings.TrimSpace(record.ID) == "" {
@@ -713,7 +714,7 @@ func (s *Store) AttemptsForRequest(ctx context.Context, requestID string) ([]Att
 }
 
 func (s *Store) InsertError(ctx context.Context, record ErrorRecord) (string, error) {
-	if !s.Enabled() {
+	if !s.Enabled() || s.loggingDisabled {
 		return "", nil
 	}
 	if strings.TrimSpace(record.ID) == "" {

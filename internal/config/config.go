@@ -88,6 +88,7 @@ type ProviderEntry struct {
 	AuthURL              string              `yaml:"auth_url,omitempty" json:"auth_url,omitempty"`
 	ClientCert           string              `yaml:"client_cert,omitempty" json:"client_cert,omitempty"`
 	ClientKey            string              `yaml:"client_key,omitempty" json:"client_key,omitempty"`
+	CACert               string              `yaml:"ca_cert,omitempty" json:"ca_cert,omitempty"`
 	RequestTimeout       any                 `yaml:"request_timeout,omitempty" json:"request_timeout,omitempty"`
 	VerifySSL            any                 `yaml:"verify_ssl,omitempty" json:"verify_ssl,omitempty"`
 	EmulateToolCalls     any                 `yaml:"emulate_tool_calls,omitempty" json:"emulate_tool_calls,omitempty"`
@@ -114,6 +115,7 @@ type NodeEntry struct {
 	AuthURL              string              `yaml:"auth_url,omitempty" json:"auth_url,omitempty"`
 	ClientCert           string              `yaml:"client_cert,omitempty" json:"client_cert,omitempty"`
 	ClientKey            string              `yaml:"client_key,omitempty" json:"client_key,omitempty"`
+	CACert               string              `yaml:"ca_cert,omitempty" json:"ca_cert,omitempty"`
 	VerifySSL            any                 `yaml:"verify_ssl,omitempty" json:"verify_ssl,omitempty"`
 	EmulateToolCalls     any                 `yaml:"emulate_tool_calls,omitempty" json:"emulate_tool_calls,omitempty"`
 	Model                string              `yaml:"model" json:"model"`
@@ -272,6 +274,7 @@ type OTelLogsConfig struct {
 }
 
 type LoggingConfig struct {
+	Enabled           any            `yaml:"enabled" json:"enabled"`
 	LogParsedResponse any            `yaml:"log_parsed_response" json:"log_parsed_response"`
 	LogParsedStream   any            `yaml:"log_parsed_stream" json:"log_parsed_stream"`
 	LogToDisk         any            `yaml:"log_to_disk" json:"log_to_disk"`
@@ -706,6 +709,7 @@ func (cfg *Config) Validate() []ValidationIssue {
 	validateStrictBoolLike(&collector, "proxy_settings.metrics.enabled", cfg.ProxySettings.Metrics.Enabled)
 	validateStrictBoolLike(&collector, "proxy_settings.metrics.timings.enabled", cfg.ProxySettings.Metrics.Timings.Enabled)
 	validateOTel(&collector, "proxy_settings.otel", cfg.ProxySettings.OTel)
+	validateStrictBoolLike(&collector, "proxy_settings.logging.enabled", cfg.ProxySettings.Logging.Enabled)
 	validateStrictBoolLike(&collector, "proxy_settings.logging.log_to_disk", cfg.ProxySettings.Logging.LogToDisk)
 	validateStrictBoolLike(&collector, "proxy_settings.logging.log_parsed_response", cfg.ProxySettings.Logging.LogParsedResponse)
 	validateStrictBoolLike(&collector, "proxy_settings.logging.log_parsed_stream", cfg.ProxySettings.Logging.LogParsedStream)
@@ -1512,6 +1516,8 @@ func isSensitiveKey(key string) bool {
 		return true
 	case normalized == "client_cert":
 		return true
+	case normalized == "ca_cert":
+		return true
 	case normalized == "private_key":
 		return true
 	case normalized == "token":
@@ -2006,6 +2012,7 @@ func providerEntryToMap(provider ProviderEntry) map[string]any {
 	setRawString(raw, "auth_url", provider.AuthURL)
 	setRawString(raw, "client_cert", provider.ClientCert)
 	setRawString(raw, "client_key", provider.ClientKey)
+	setRawString(raw, "ca_cert", provider.CACert)
 	setRawValue(raw, "request_timeout", provider.RequestTimeout)
 	setRawValue(raw, "verify_ssl", provider.VerifySSL)
 	setRawValue(raw, "emulate_tool_calls", provider.EmulateToolCalls)
@@ -2040,6 +2047,7 @@ func nodeEntryToMap(node NodeEntry) map[string]any {
 	setRawString(raw, "auth_url", node.AuthURL)
 	setRawString(raw, "client_cert", node.ClientCert)
 	setRawString(raw, "client_key", node.ClientKey)
+	setRawString(raw, "ca_cert", node.CACert)
 	setRawString(raw, "model", node.Model)
 	setRawString(raw, "target_model", node.TargetModel)
 	setRawValue(raw, "verify_ssl", node.VerifySSL)

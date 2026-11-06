@@ -24,6 +24,7 @@ type Config struct {
 	APIKey           string
 	ClientCertFile   string
 	ClientKeyFile    string
+	CACertFile       string
 	VerifySSL        bool
 	Timeout          time.Duration
 	EmulateToolCalls bool
@@ -50,6 +51,7 @@ func BuildConfig(params map[string]any) (Config, error) {
 		APIKey:           apiKey,
 		ClientCertFile:   clientCert,
 		ClientKeyFile:    clientKey,
+		CACertFile:       stringOrEmpty(params["ca_cert"]),
 		VerifySSL:        parseBool(params["verify_ssl"], DefaultVerifySSL),
 		Timeout:          durationOrDefault(params["request_timeout"], DefaultTimeout),
 		EmulateToolCalls: parseBool(params["emulate_tool_calls"], false),

@@ -227,6 +227,7 @@ model_list:
     api_base: http://localhost:8000/v1
     client_cert: ${GIGACHAT_CLIENT_CERT}
     client_key: ${GIGACHAT_CLIENT_KEY}
+    ca_cert: ${GIGACHAT_CA_CERT}
     verify_ssl: true
     request_timeout: 120
 router_settings:
@@ -305,6 +306,7 @@ proxy_settings:
     logs:
       enabled: false
   logging:
+    enabled: true # Master request logging switch; Responses state remains available
     log_parsed_response: true
     log_parsed_stream: false # Store capped raw/transformed SSE sidecars when stream response modules transform output
     log_to_disk: true

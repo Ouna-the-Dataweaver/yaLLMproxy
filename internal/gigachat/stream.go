@@ -2,9 +2,12 @@ package gigachat
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"strings"
+
+	"github.com/theio/yallmp-proxy/internal/sse"
 )
 
 type streamReadCloser struct {
@@ -15,10 +18,43 @@ type streamReadCloser struct {
 	doneSent     bool
 	terminal     bool
 	pending      error
+	tools        *toolCallStream
 }
 
-func newStreamReadCloser(src io.ReadCloser, requestModel string) io.ReadCloser {
-	return &streamReadCloser{src: src, requestModel: requestModel}
+func newStreamReadCloser(src io.ReadCloser, requestModel string, arguments ...*toolArguments) *streamReadCloser {
+	var plan *toolArguments
+	if len(arguments) > 0 {
+		plan = arguments[0]
+	}
+	return &streamReadCloser{src: src, requestModel: requestModel, tools: newToolCallStream(plan, requestModel)}
+}
+
+// Prime the first converted event inside the router's retry boundary. Once any
+// event is available, subsequent read failures must not replay model output.
+func primeStreamReadCloser(ctx context.Context, src io.ReadCloser, requestModel string, arguments ...*toolArguments) (*streamReadCloser, error) {
+	stream := newStreamReadCloser(src, requestModel, arguments...)
+	chunk := make([]byte, 4096)
+	for emptyReads := 0; emptyReads < 100; emptyReads++ {
+		if err := ctx.Err(); err != nil {
+			_ = stream.Close()
+			return nil, err
+		}
+		n, err := stream.Read(chunk)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			_ = stream.Close()
+			return nil, ctxErr
+		}
+		if n > 0 {
+			stream.buffer = append(chunk[:n:n], stream.buffer...)
+			return stream, nil
+		}
+		if err != nil {
+			_ = stream.Close()
+			return nil, err
+		}
+	}
+	_ = stream.Close()
+	return nil, io.ErrNoProgress
 }
 
 func (s *streamReadCloser) Read(p []byte) (int, error) {
@@ -29,14 +65,22 @@ func (s *streamReadCloser) Read(p []byte) (int, error) {
 		chunk := make([]byte, 4096)
 		n, err := s.src.Read(chunk)
 		if n > 0 {
-			s.buffer = append(s.buffer, s.convertEvents(s.decoder.feed(chunk[:n]))...)
+			converted, conversionErr := s.convertEvents(s.decoder.feed(chunk[:n]))
+			s.buffer = append(s.buffer, converted...)
+			if conversionErr != nil {
+				err = conversionErr
+			}
 		}
-		if err != nil {
+		if err != nil && !s.doneSent {
 			if err == io.EOF {
-				s.buffer = append(s.buffer, s.convertEvents(s.decoder.flush())...)
-				if !s.doneSent {
-					s.doneSent = true
-					s.buffer = append(s.buffer, []byte("data: [DONE]\n\n")...)
+				converted, conversionErr := s.convertEvents(s.decoder.flush())
+				s.buffer = append(s.buffer, converted...)
+				if conversionErr == nil && !s.doneSent {
+					converted, conversionErr = s.finish()
+					s.buffer = append(s.buffer, converted...)
+				}
+				if conversionErr != nil {
+					s.pending = conversionErr
 				}
 			} else {
 				s.pending = err
@@ -64,7 +108,7 @@ func (s *streamReadCloser) Close() error {
 	return s.src.Close()
 }
 
-func (s *streamReadCloser) convertEvents(events []sseEvent) []byte {
+func (s *streamReadCloser) convertEvents(events []sseEvent) ([]byte, error) {
 	var out []byte
 	for _, event := range events {
 		data := strings.TrimSpace(event.data)
@@ -72,17 +116,43 @@ func (s *streamReadCloser) convertEvents(events []sseEvent) []byte {
 			continue
 		}
 		if data == "[DONE]" {
-			if !s.doneSent {
-				s.doneSent = true
-				out = append(out, []byte("data: [DONE]\n\n")...)
+			final, err := s.finish()
+			out = append(out, final...)
+			if err != nil {
+				return out, err
 			}
-			continue
+			s.terminal = true
+			break
 		}
 		var payload map[string]any
 		if err := json.Unmarshal([]byte(data), &payload); err != nil {
-			continue
+			return out, err
 		}
-		chunk := GigaChatChunkToOpenAI(payload, s.requestModel)
+		chunks, err := s.tools.feed(payload)
+		out = append(out, marshalStreamChunks(chunks)...)
+		if err != nil {
+			return out, UpstreamError{StatusCode: 502, Body: err.Error()}
+		}
+	}
+	return out, nil
+}
+
+func (s *streamReadCloser) finish() ([]byte, error) {
+	if s.doneSent {
+		return nil, nil
+	}
+	chunks, err := s.tools.finish()
+	out := marshalStreamChunks(chunks)
+	if err != nil {
+		return out, UpstreamError{StatusCode: 502, Body: err.Error()}
+	}
+	s.doneSent = true
+	return append(out, []byte("data: [DONE]\n\n")...), nil
+}
+
+func marshalStreamChunks(chunks []map[string]any) []byte {
+	var out []byte
+	for _, chunk := range chunks {
 		encoded, err := json.Marshal(chunk)
 		if err != nil {
 			continue
@@ -99,24 +169,16 @@ type sseEvent struct {
 }
 
 type sseDecoder struct {
-	buffer []byte
+	framer sse.Framer
 }
 
 func (d *sseDecoder) feed(chunk []byte) []sseEvent {
 	if len(chunk) == 0 {
 		return nil
 	}
-	d.buffer = append(d.buffer, chunk...)
-	d.buffer = bytes.ReplaceAll(d.buffer, []byte("\r\n"), []byte("\n"))
-	d.buffer = bytes.ReplaceAll(d.buffer, []byte("\r"), []byte("\n"))
 	var events []sseEvent
-	for {
-		idx := bytes.Index(d.buffer, []byte("\n\n"))
-		if idx < 0 {
-			break
-		}
-		raw := string(d.buffer[:idx])
-		d.buffer = d.buffer[idx+2:]
+	for _, frame := range d.framer.Feed(chunk) {
+		raw := string(frame)
 		if strings.TrimSpace(raw) == "" {
 			continue
 		}
@@ -129,8 +191,7 @@ func (d *sseDecoder) feed(chunk []byte) []sseEvent {
 }
 
 func (d *sseDecoder) flush() []sseEvent {
-	remaining := d.buffer
-	d.buffer = nil
+	remaining := d.framer.Flush()
 	if len(bytes.TrimSpace(remaining)) == 0 {
 		return nil
 	}
@@ -142,6 +203,8 @@ func (d *sseDecoder) flush() []sseEvent {
 }
 
 func parseSSEEvent(raw string) sseEvent {
+	raw = strings.ReplaceAll(raw, "\r\n", "\n")
+	raw = strings.ReplaceAll(raw, "\r", "\n")
 	var data []string
 	for _, line := range strings.Split(raw, "\n") {
 		if strings.HasPrefix(line, ":") {

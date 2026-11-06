@@ -216,7 +216,7 @@ func (w *cappedSidecarWriter) removeIfEmpty() {
 }
 
 func NewFullRequestStore(cfg *config.Config) *FullRequestStore {
-	if cfg == nil {
+	if cfg == nil || !cfg.ProxySettings.Logging.IsEnabled() {
 		return nil
 	}
 	settings := cfg.ProxySettings.Logging.FullRequestStore

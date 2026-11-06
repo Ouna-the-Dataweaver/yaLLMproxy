@@ -465,7 +465,7 @@ func TestClientNormalizesNonStreamUpstreamErrorAsJSON(t *testing.T) {
 	}
 }
 
-func TestClientNormalizesStreamUpstreamErrorAsSSE(t *testing.T) {
+func TestClientNormalizesStreamStartupErrorAsJSON(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/oauth":
@@ -503,16 +503,12 @@ func TestClientNormalizesStreamUpstreamErrorAsSSE(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusTooManyRequests || !strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") || resp.Header.Get("Cache-Control") != "no-cache" {
+	if resp.StatusCode != http.StatusTooManyRequests || !strings.Contains(resp.Header.Get("Content-Type"), "application/json") {
 		t.Fatalf("response status=%d content-type=%q cache-control=%q", resp.StatusCode, resp.Header.Get("Content-Type"), resp.Header.Get("Cache-Control"))
 	}
 	body, _ := io.ReadAll(resp.Body)
-	parts := strings.SplitN(string(body), "\n\n", 2)
-	if len(parts) != 2 || !strings.HasPrefix(parts[0], "data: ") || !strings.Contains(string(body), "data: [DONE]") {
-		t.Fatalf("stream error body = %s", body)
-	}
 	var data map[string]any
-	if err := json.Unmarshal([]byte(strings.TrimPrefix(parts[0], "data: ")), &data); err != nil {
+	if err := json.Unmarshal(body, &data); err != nil {
 		t.Fatal(err)
 	}
 	errObj := data["error"].(map[string]any)

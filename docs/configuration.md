@@ -283,10 +283,11 @@ model_list:
 | `model_params.auth_url` | string | GigaChat OAuth URL | OAuth endpoint for cloud mode |
 | `model_params.client_cert` | string | - | Client certificate path for local mTLS mode |
 | `model_params.client_key` | string | - | Client private key path for local mTLS mode |
+| `model_params.ca_cert` | string | - | PEM CA bundle added to system roots when TLS verification is enabled; also inherited from providers by nodes |
 | `model_params.verify_ssl` | boolean | true | Verify upstream TLS certificates |
 | `model_params.emulate_tool_calls` | boolean | false | Ask GigaChat to return JSON tool-call decisions instead of using native function calls |
 
-The Go client uses the host system trust store when `verify_ssl` is true. It does not currently load a custom `ca_cert` bundle; that option exists only on the separate Python follow-up branch. Install the CA into the host trust store or port the option before relying on a private CA. Disabling `verify_ssl` is available for controlled development environments but removes server-certificate verification.
+The Go client uses the host system trust store when `verify_ssl` is true and adds certificates from `ca_cert` when configured. The same client verifies OAuth and inference connections. An unreadable or invalid PEM bundle fails initialization of that client rather than disabling verification. When `verify_ssl: false`, the CA bundle is ignored; this development setting removes server-certificate verification.
 
 The admin model form also accepts `client_id` and `client_secret` for GigaChat cloud mode and persists the generated `api_key`.
 
@@ -717,9 +718,9 @@ router_settings:
 
 Quota-aware selection is disabled by default. When enabled, the router peeks at configured provider/node `limits.token_quota` windows before selecting a backend and skips exhausted candidates when another healthy candidate has estimated token capacity. The peek does not reserve or mutate quota state. If every candidate is exhausted, routing falls back to the full candidate route so existing retry and upstream failure behavior remains possible.
 
-Backend quota selection uses the same `limits.token_quota`, `token_quota_window_seconds`, and UTC calendar `token_quota_reset_mode` fields as request quotas, but accounting is per backend under `backend::<node-name>` and is updated from successful upstream usage only. Per-backend quota usage remains in-memory by default and is not restored on restart/reload unless both `enabled: true` and `persist_backend_quota: true` are set.
+Backend quota selection uses the same `limits.token_quota`, `token_quota_window_seconds`, and UTC calendar `token_quota_reset_mode` fields as request quotas, but accounting is per backend under `backend::<node-name>`. Observed usage from interrupted streams with successful upstream HTTP status is charged too. Per-backend quota usage remains in-memory by default and is not restored on restart/reload unless both `enabled: true` and `persist_backend_quota: true` are set.
 
-When quota-aware selection, `persist_backend_quota`, and the metadata log database are enabled, startup and config reload restore configured backend quota scopes from stored successful request metadata. Restore is filtered to the active rolling or UTC calendar window for each backend limit, ignores removed/unconfigured backends, and treats log database query failures as non-fatal. `GET /admin/backend-quotas` provides an admin-password-protected, read-only snapshot with backend name, used tokens, configured limit, remaining tokens, and reset time; it does not expose app-key/group IDs, request bodies, prompts, headers, backend URLs, or secrets.
+When quota-aware selection, `persist_backend_quota`, and request metadata logging are enabled, startup and config reload restore configured backend quota scopes from stored charged usage, including interrupted streams. Restore is filtered to the active rolling or UTC calendar window for each backend limit, ignores removed/unconfigured backends, and treats log database query failures as non-fatal. Disabling request logging prevents new usage from being persisted for restoration. `GET /admin/backend-quotas` provides an admin-password-protected, read-only snapshot with backend name, used tokens, configured limit, remaining tokens, and reset time; it does not expose app-key/group IDs, request bodies, prompts, headers, backend URLs, or secrets.
 
 ### Prefix-Cache-Affinity Node Scheduling
 
@@ -753,6 +754,7 @@ Sticky routing from `conversation_id`, `thread_id`, `previous_response_id`, and 
 ```yaml
 proxy_settings:
   logging:
+    enabled: true             # Master request logging switch (default true)
     log_parsed_response: true  # Store raw/transformed non-stream JSON response fields when a response transform occurs
     log_parsed_stream: false   # Store capped raw/transformed SSE sidecars when a stream transform occurs
     log_to_disk: true          # Enables parsed sidecar fields with full_request_storage
@@ -764,7 +766,14 @@ proxy_settings:
       cleanup_interval_hours: 24
 ```
 
-Parsed response sidecar fields are written only for non-stream JSON responses where a response module changes the upstream body. They require all three gates: `full_request_storage.enabled`, `log_to_disk`, and `log_parsed_response`.
+`enabled: false` suppresses new memory request logs, request/error database rows,
+payload files, parsed sidecars, and request console diagnostics. Existing log
+history remains readable, and the database can still store Responses API state.
+Request logging follows runtime config changes; process console suppression at
+startup takes effect after restart. Disabling logging also prevents new quota
+usage from being persisted for restoration after a restart.
+
+With master logging enabled, parsed response sidecar fields are written only for non-stream JSON responses where a response module changes the upstream body. They require all three gates: `full_request_storage.enabled`, `log_to_disk`, and `log_parsed_response`.
 
 Parsed stream sidecars are written for streaming/SSE responses when stream response modules are active. They require all three gates: `full_request_storage.enabled`, `log_to_disk`, and `log_parsed_stream`. The full-request record stores `parsed_stream` metadata plus capped raw-upstream and transformed-client `.sse` sidecar paths, byte counts, content type, and truncation flags. `/admin/logs/{id}` reads sidecar text with a bounded limit, and retention cleanup removes generated stream sidecar files.
 

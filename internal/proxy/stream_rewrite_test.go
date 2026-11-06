@@ -134,3 +134,45 @@ func TestStreamRewriteReadCloserDrainsBeforeTerminalError(t *testing.T) {
 		}
 	}
 }
+
+func TestParsedStreamPreservesUsageAfterFinishReason(t *testing.T) {
+	for _, reason := range []string{"stop", "length", "tool_calls"} {
+		for _, bufferSize := range []int{1, 4096} {
+			t.Run(fmt.Sprintf("%s_buffer_%d", reason, bufferSize), func(t *testing.T) {
+				body := "data: {\"choices\":[{\"index\":0,\"delta\":{\"reasoning_content\":\"think\",\"content\":\"test\"},\"finish_reason\":null}]}\n\n" +
+					"data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"" + reason + "\"}]}\n\n" +
+					"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":1,\"total_tokens\":13}}\n\n" +
+					"data: [DONE]\n\n"
+				var readers []io.Reader
+				for _, event := range strings.SplitAfter(body, "\n\n") {
+					readers = append(readers, strings.NewReader(event))
+				}
+				var raw, transformed bytes.Buffer
+				pipeline := modules.Pipeline{Modules: []modules.ResponseModule{modules.NewReasoningSwap("reasoning_to_content")}}
+				stream := &streamRewriteReadCloser{
+					ReadCloser: io.NopCloser(io.MultiReader(readers...)), pipeline: pipeline, state: pipeline.NewStreamState(),
+					ctx: modules.Context{Path: "/v1/chat/completions", IsStream: true}, captureRaw: &raw, captureTransformed: &transformed,
+				}
+				defer stream.Close()
+				var out bytes.Buffer
+				if _, err := io.CopyBuffer(struct{ io.Writer }{&out}, stream, make([]byte, bufferSize)); err != nil {
+					t.Fatal(err)
+				}
+				var decoder SSEJSONDecoder
+				payloads := decoder.Feed(out.Bytes())
+				if len(payloads) != 3 || !decoder.SawDone() {
+					t.Fatalf("payloads=%#v done=%v", payloads, decoder.SawDone())
+				}
+				if usage := payloads[2]["usage"].(map[string]any); usage["total_tokens"] != float64(13) {
+					t.Fatalf("usage = %#v", usage)
+				}
+				if finish := payloads[1]["choices"].([]any)[0].(map[string]any)["finish_reason"]; finish != reason {
+					t.Fatalf("finish_reason = %#v", finish)
+				}
+				if raw.String() != body || transformed.String() != out.String() || strings.Count(out.String(), "[DONE]") != 1 {
+					t.Fatalf("capture or terminator changed: %s", out.String())
+				}
+			})
+		}
+	}
+}

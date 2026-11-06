@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -29,7 +31,8 @@ func (e UpstreamError) Error() string {
 }
 
 type Backend struct {
-	Config Config
+	Config          Config
+	LoggingDisabled bool
 
 	mu                   sync.Mutex
 	accessToken          string
@@ -50,9 +53,7 @@ func (b *Backend) Execute(ctx context.Context, payload map[string]any, isStream 
 	}
 	var upstreamErr UpstreamError
 	if errors.As(err, &upstreamErr) {
-		if isStream {
-			return streamErrorResponse(upstreamErr.StatusCode, upstreamErr.Body), nil
-		}
+		b.logUpstreamError(payload, isStream, upstreamErr)
 		return errorResponse(upstreamErr.StatusCode, upstreamErr.Body), nil
 	}
 	return nil, err
@@ -84,14 +85,38 @@ func (b *Backend) Probe(ctx context.Context, path string, overrideClient *http.C
 }
 
 func (b *Backend) execute(ctx context.Context, payload map[string]any, isStream bool, overrideClient *http.Client) (*http.Response, error) {
+	payload, arguments, err := prepareToolArguments(payload)
+	if err != nil {
+		return nil, UpstreamError{StatusCode: http.StatusBadRequest, Body: err.Error()}
+	}
 	requestModel := firstNonEmpty(stringOrEmpty(payload["model"]), b.Config.ModelName)
 	if shouldEmulateTools(b.Config, payload) {
 		response, err := b.chatCompletionsWithToolEmulation(ctx, payload, requestModel, overrideClient)
 		if err != nil {
 			return nil, err
 		}
+		response, err = arguments.restoreResponse(response, !isStream)
+		if err != nil {
+			return nil, UpstreamError{StatusCode: http.StatusBadGateway, Body: err.Error()}
+		}
 		if isStream {
 			chunks := OpenAIResponseToSSE(response)
+			if arguments.legacy {
+				for i, chunk := range chunks {
+					if bytes.Equal(chunk, []byte("data: [DONE]\n\n")) {
+						continue
+					}
+					var event map[string]any
+					if err := json.Unmarshal(bytes.TrimSpace(bytes.TrimPrefix(chunk, []byte("data: "))), &event); err != nil {
+						return nil, err
+					}
+					data, err := json.Marshal(arguments.clientFormat(event, true))
+					if err != nil {
+						return nil, err
+					}
+					chunks[i] = append(append([]byte("data: "), data...), []byte("\n\n")...)
+				}
+			}
 			return responseFromBytes(http.StatusOK, http.Header{
 				"Content-Type":  {"text/event-stream"},
 				"Cache-Control": {"no-cache"},
@@ -110,7 +135,11 @@ func (b *Backend) execute(ctx context.Context, payload map[string]any, isStream 
 		if err != nil {
 			return nil, err
 		}
-		resp.Body = newStreamReadCloser(resp.Body, requestModel)
+		stream, err := primeStreamReadCloser(ctx, resp.Body, requestModel, arguments)
+		if err != nil {
+			return nil, err
+		}
+		resp.Body = stream
 		resp.Header = filterHeaders(resp.Header)
 		resp.Header.Set("Content-Type", "text/event-stream")
 		resp.Header.Set("Cache-Control", "no-cache")
@@ -126,6 +155,10 @@ func (b *Backend) execute(ctx context.Context, payload map[string]any, isStream 
 		return nil, err
 	}
 	openAIResponse := GigaChatResponseToOpenAI(data, requestModel)
+	openAIResponse, err = arguments.restoreResponse(openAIResponse, true)
+	if err != nil {
+		return nil, UpstreamError{StatusCode: http.StatusBadGateway, Body: err.Error()}
+	}
 	body, _ := json.Marshal(openAIResponse)
 	return responseFromBytes(http.StatusOK, http.Header{"Content-Type": {"application/json"}}, body), nil
 }
@@ -310,8 +343,22 @@ func (b *Backend) client(override *http.Client) (*http.Client, error) {
 
 func makeHTTPClient(cfg Config) (*http.Client, error) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	if !cfg.VerifySSL || cfg.ClientCertFile != "" || cfg.ClientKeyFile != "" {
+	if !cfg.VerifySSL || cfg.ClientCertFile != "" || cfg.ClientKeyFile != "" || cfg.CACertFile != "" {
 		tlsConfig := &tls.Config{InsecureSkipVerify: !cfg.VerifySSL} //nolint:gosec
+		if cfg.VerifySSL && cfg.CACertFile != "" {
+			pem, err := os.ReadFile(cfg.CACertFile)
+			if err != nil {
+				return nil, fmt.Errorf("read GigaChat CA certificate: %w", err)
+			}
+			roots, err := x509.SystemCertPool()
+			if err != nil || roots == nil {
+				roots = x509.NewCertPool()
+			}
+			if !roots.AppendCertsFromPEM(pem) {
+				return nil, fmt.Errorf("GigaChat CA certificate contains no valid PEM certificates")
+			}
+			tlsConfig.RootCAs = roots
+		}
 		if cfg.ClientCertFile != "" || cfg.ClientKeyFile != "" {
 			cert, err := tls.LoadX509KeyPair(cfg.ClientCertFile, cfg.ClientKeyFile)
 			if err != nil {
@@ -406,22 +453,6 @@ func errorResponse(status int, body string) *http.Response {
 	}
 	data, _ := json.Marshal(payload)
 	return responseFromBytes(status, http.Header{"Content-Type": {"application/json"}}, data)
-}
-
-func streamErrorResponse(status int, body string) *http.Response {
-	payload := map[string]any{
-		"error": map[string]any{
-			"message": body,
-			"type":    "upstream_error",
-			"code":    status,
-		},
-	}
-	data, _ := json.Marshal(payload)
-	streamBody := append(append([]byte("data: "), data...), []byte("\n\ndata: [DONE]\n\n")...)
-	return responseFromBytes(status, http.Header{
-		"Content-Type":  {"text/event-stream"},
-		"Cache-Control": {"no-cache"},
-	}, streamBody)
 }
 
 func filterHeaders(headers http.Header) http.Header {

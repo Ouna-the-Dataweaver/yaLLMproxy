@@ -489,6 +489,11 @@ func ToolsToGigaChatFunctions(tools any) []map[string]any {
 }
 
 func PrepareGigaChatJSONSchema(schema map[string]any) map[string]any {
+	if plan, err := adaptSchema(schema); err == nil {
+		return plan.schema
+	}
+	// Keep this historical no-error helper bounded for direct callers. Requests
+	// validate with prepareToolArguments before reaching this projection.
 	return normalizeGigaChatJSONSchema(inlineJSONSchemaRefs(schema))
 }
 
@@ -937,6 +942,12 @@ func asSlice(value any) ([]any, bool) {
 			out[i] = item
 		}
 		return out, true
+	case []string:
+		out := make([]any, len(typed))
+		for i, item := range typed {
+			out[i] = item
+		}
+		return out, true
 	default:
 		return nil, false
 	}
@@ -973,6 +984,14 @@ func cloneAny(value any) any {
 			out[i] = cloneAny(item)
 		}
 		return out
+	case []map[string]any:
+		out := make([]map[string]any, len(typed))
+		for i, item := range typed {
+			out[i] = cloneMap(item)
+		}
+		return out
+	case []string:
+		return append([]string(nil), typed...)
 	default:
 		return typed
 	}

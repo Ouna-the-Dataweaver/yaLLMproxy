@@ -77,11 +77,12 @@ type Router struct {
 	PrefixCacheAffinity       bool
 	ConcurrencyAwareSelection bool
 
-	roundRobin         map[string]int
-	weightedRoundRobin map[string]int
-	sticky             map[string]string
-	prefixCache        *prefixCacheAffinityTracker
-	inflight           *inflightTracker
+	roundRobin              map[string]int
+	weightedRoundRobin      map[string]int
+	sticky                  map[string]string
+	prefixCache             *prefixCacheAffinityTracker
+	inflight                *inflightTracker
+	gigachatLoggingDisabled bool
 }
 
 type BackendHealth struct {
@@ -361,6 +362,7 @@ func NewRouter(cfg *config.Config) (*Router, error) {
 		return nil, fmt.Errorf("config is nil")
 	}
 	r.NumRetries = parsePositiveInt(cfg.RouterSettings.NumRetries, 1)
+	r.gigachatLoggingDisabled = !cfg.ProxySettings.Logging.IsEnabled()
 	r.Fallbacks = parseFallbacks(cfg.RouterSettings.Fallbacks)
 	r.applyHealthCheckSettings(cfg.RouterSettings)
 	r.applyPrefixCacheAffinitySettings(cfg.RouterSettings.PrefixCacheAffinity)
@@ -404,6 +406,9 @@ func (r *Router) addLegacyModels(entries []config.ModelEntry) error {
 		}
 		if !ok {
 			continue
+		}
+		if backend.GigaChat != nil {
+			backend.GigaChat.LoggingDisabled = r.gigachatLoggingDisabled
 		}
 		if backend.Passthrough {
 			r.PassthroughBackends[backend.Name] = backend
@@ -476,6 +481,7 @@ func (r *Router) addNodeModels(cfg *config.Config) error {
 				return fmt.Errorf("node %q: %w", name, err)
 			}
 			backend.GigaChat = gigachat.NewBackend(gigachatConfig)
+			backend.GigaChat.LoggingDisabled = r.gigachatLoggingDisabled
 			backend.APIKey = gigachatConfig.APIKey
 			backend.TargetModel = firstString(backend.TargetModel, gigachatConfig.ModelName)
 		}
@@ -615,6 +621,9 @@ func (r *Router) ModelBackendsMatch(modelName string, matches func(Backend) bool
 }
 
 func (r *Router) RegisterBackend(backend Backend, fallbacks []string) bool {
+	if backend.GigaChat != nil {
+		backend.GigaChat.LoggingDisabled = r.gigachatLoggingDisabled
+	}
 	if backend.engineState == nil {
 		_ = configureBackendEngine(&backend, backend.Engine, backend.Compatibility)
 	}
@@ -2148,6 +2157,7 @@ func nodeBackendParams(provider config.ProviderEntry, node config.NodeEntry, api
 	setStringParam(params, "auth_url", node.AuthURL, provider.AuthURL)
 	setStringParam(params, "client_cert", node.ClientCert, provider.ClientCert)
 	setStringParam(params, "client_key", node.ClientKey, provider.ClientKey)
+	setStringParam(params, "ca_cert", node.CACert, provider.CACert)
 	if value := firstConfiguredAny(node.RequestTimeout, provider.RequestTimeout); value != nil {
 		params["request_timeout"] = value
 	}

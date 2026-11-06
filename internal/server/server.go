@@ -94,7 +94,7 @@ func New(cfg *config.Config) (*App, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("config is nil")
 	}
-	otelProvider, err := observability.Configure(context.Background(), cfg.ProxySettings.OTel)
+	otelProvider, err := observability.Configure(context.Background(), proxyOTelConfig(cfg))
 	if err != nil {
 		return nil, err
 	}
@@ -818,7 +818,7 @@ func (a *App) applyConfigLocked(newCfg *config.Config, persist bool) error {
 		}
 		return err
 	}
-	newObservability, err := observability.Configure(context.Background(), newCfg.ProxySettings.OTel)
+	newObservability, err := observability.Configure(context.Background(), proxyOTelConfig(newCfg))
 	if err != nil {
 		if newRouter.InferenceCache != nil {
 			_ = newRouter.InferenceCache.Close()
@@ -950,7 +950,7 @@ func adminModelEntryFromPayload(payload map[string]any) (config.ModelEntry, []st
 			params[key] = value
 		}
 	}
-	for _, key := range []string{"api_base", "api_key", "model", "api_type", "mode", "scope", "auth_url", "client_cert", "client_key", "client_id", "client_secret", "verify_ssl", "emulate_tool_calls"} {
+	for _, key := range []string{"api_base", "api_key", "model", "api_type", "mode", "scope", "auth_url", "client_cert", "client_key", "ca_cert", "client_id", "client_secret", "verify_ssl", "emulate_tool_calls"} {
 		if value, ok := payload[key]; ok {
 			if text, isString := value.(string); isString && strings.TrimSpace(text) == "" {
 				continue
@@ -1980,7 +1980,7 @@ func (a *App) storePayloadWithParsedResponse(entry LogEntry, r *http.Request, re
 }
 
 func (a *App) storePayloadWithParsedArtifacts(entry LogEntry, r *http.Request, requestBody []byte, responseHeaders http.Header, responseBody []byte, parsedResponse *proxy.ParsedResponseTrace, parsedStreamSidecars *logstore.ParsedStreamSidecars) string {
-	if a == nil || a.Payloads == nil {
+	if !a.loggingEnabled() || a.Payloads == nil {
 		return ""
 	}
 	isStream := parsedStreamSidecars != nil
@@ -2022,7 +2022,7 @@ func (a *App) storePayloadWithParsedArtifacts(entry LogEntry, r *http.Request, r
 }
 
 func (a *App) captureParsedResponseSidecars() bool {
-	if a == nil || a.Config == nil || a.Payloads == nil || !a.Payloads.Enabled {
+	if !a.loggingEnabled() || a.Config == nil || a.Payloads == nil || !a.Payloads.Enabled {
 		return false
 	}
 	logging := a.Config.ProxySettings.Logging
@@ -2032,7 +2032,7 @@ func (a *App) captureParsedResponseSidecars() bool {
 }
 
 func (a *App) captureParsedStreamSidecars() bool {
-	if a == nil || a.Config == nil || a.Payloads == nil || !a.Payloads.Enabled {
+	if !a.loggingEnabled() || a.Config == nil || a.Payloads == nil || !a.Payloads.Enabled {
 		return false
 	}
 	logging := a.Config.ProxySettings.Logging
@@ -2046,7 +2046,7 @@ func (a *App) persistLog(ctx context.Context, entry LogEntry, r *http.Request, i
 }
 
 func (a *App) persistLogWithUsage(ctx context.Context, entry LogEntry, r *http.Request, isStream bool, pctx policy.Context, payloadPath string, responseBody []byte, usageOverride map[string]any) {
-	if a == nil || a.LogDB == nil || !a.LogDB.Enabled() || strings.TrimSpace(entry.Model) == "" {
+	if !a.loggingEnabled() || a.LogDB == nil || !a.LogDB.Enabled() || strings.TrimSpace(entry.Model) == "" {
 		return
 	}
 	// A disconnected client must not cancel the audit record. Keep trace values
@@ -2115,7 +2115,7 @@ func (a *App) persistLogWithUsage(ctx context.Context, entry LogEntry, r *http.R
 }
 
 func (a *App) persistWarnings(ctx context.Context, entry LogEntry, r *http.Request, requestID string) {
-	if a == nil || a.LogDB == nil || !a.LogDB.Enabled() || requestID == "" {
+	if !a.loggingEnabled() || a.LogDB == nil || !a.LogDB.Enabled() || requestID == "" {
 		return
 	}
 	for _, warning := range entry.Warnings {
@@ -2859,13 +2859,7 @@ func withForwardWarnings(entry LogEntry, result proxy.ForwardResult) LogEntry {
 		return entry
 	}
 	entry.Warnings = append(entry.Warnings, result.Warnings...)
-	for _, warning := range result.Warnings {
-		level := "WARNING"
-		if warning.Severity == "info" {
-			level = "INFO"
-		}
-		log.Printf("%s request adaptation model=%q backend=%q path=%q status=%d code=%s message=%q", level, entry.Model, entry.Backend, entry.Path, entry.Status, warning.Code, warning.Message)
-	}
+
 	return entry
 }
 
@@ -3361,6 +3355,16 @@ func (r *releaseOnEOF) Close() error {
 }
 
 func (a *App) addLog(r *http.Request, entry LogEntry) LogEntry {
+	if !a.loggingEnabled() {
+		return entry
+	}
+	for _, warning := range entry.Warnings {
+		level := "WARNING"
+		if warning.Severity == "info" {
+			level = "INFO"
+		}
+		log.Printf("%s request adaptation model=%q backend=%q path=%q status=%d code=%s message=%q", level, entry.Model, entry.Backend, entry.Path, entry.Status, warning.Code, warning.Message)
+	}
 	if r != nil {
 		traceID, spanID := proxyRequestTraceFromContext(r.Context())
 		if entry.TraceID == "" {
