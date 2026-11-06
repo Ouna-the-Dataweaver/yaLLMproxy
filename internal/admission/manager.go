@@ -97,6 +97,9 @@ func BuildScope(keyID string, modelName string) string {
 }
 
 func (m *Manager) Acquire(ctx context.Context, keyID string, concurrencyLimit int, priority int, modelName string) (*Slot, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, queueContextError(err)
+	}
 	if m == nil {
 		m = NewManager()
 	}
@@ -130,11 +133,14 @@ func (m *Manager) Acquire(ctx context.Context, keyID string, concurrencyLimit in
 	select {
 	case <-ctx.Done():
 		m.cancel(q)
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return nil, ErrQueueTimeout
-		}
-		return nil, ErrClientDisconnected
+		return nil, queueContextError(ctx.Err())
 	case <-q.ready:
+		// Both channels can be ready together. Cancellation must reclaim the
+		// promoted slot even when select chooses readiness.
+		if err := ctx.Err(); err != nil {
+			m.cancel(q)
+			return nil, queueContextError(err)
+		}
 		wait := time.Since(start)
 		m.mu.Lock()
 		if st := m.states[scope]; st != nil {
@@ -143,6 +149,13 @@ func (m *Manager) Acquire(ctx context.Context, keyID string, concurrencyLimit in
 		m.mu.Unlock()
 		return &Slot{manager: m, scope: scope, id: id, Wait: wait}, nil
 	}
+}
+
+func queueContextError(err error) error {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return ErrQueueTimeout
+	}
+	return ErrClientDisconnected
 }
 
 func (m *Manager) CheckRateLimit(keyID string, modelName string, limits RateLimits) error {
@@ -190,6 +203,17 @@ func (m *Manager) RateLimitAvailable(keyID string, modelName string, limits Rate
 		st = &state{}
 	}
 	return st.rateAvailable(now, limits)
+}
+
+// ConcurrencyAvailable is an advisory snapshot; Acquire enforces the limit.
+func (m *Manager) ConcurrencyAvailable(keyID, modelName string, limit int) bool {
+	if m == nil || limit <= 0 {
+		return true
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	st := m.states[BuildScope(keyID, modelName)]
+	return st == nil || len(st.active) < limit
 }
 
 func (m *Manager) getState(scope string, concurrencyLimit int, priority int) *state {

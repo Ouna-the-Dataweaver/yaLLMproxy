@@ -1692,10 +1692,14 @@ func (a *App) backendAttemptLimiter(ctx context.Context, backend proxy.Backend) 
 
 func (a *App) backendRateLimitAvailable(backend proxy.Backend) bool {
 	limits := backend.Limits
+	scope := backendAdmissionScope(backend)
+	if !a.Admission.ConcurrencyAvailable(scope, "", limits.Concurrency) {
+		return false
+	}
 	if limits.RPS <= 0 && limits.RPM <= 0 {
 		return true
 	}
-	return a.Admission.RateLimitAvailable(backendAdmissionScope(backend), "", admission.RateLimits{RPS: limits.RPS, RPM: limits.RPM})
+	return a.Admission.RateLimitAvailable(scope, "", admission.RateLimits{RPS: limits.RPS, RPM: limits.RPM})
 }
 
 func backendAdmissionScope(backend proxy.Backend) string {

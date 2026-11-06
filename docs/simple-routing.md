@@ -81,6 +81,28 @@ attempt behavior remains. Prefix affinity cannot override hard access restrictio
 Optional health-score ordering and quota-aware scheduling remain available for
 advanced configurations; health-score ordering can also reorder explicit fallbacks.
 
+Configured concurrency limits are also checked before selection. For replicas
+with `limits.concurrency: 4` and `2`, a full two-slot replica is skipped while the
+four-slot replica has space. When both are full, requests retain the normal queue
+and timeout behavior. Availability is a snapshot, so concurrent arrivals may still
+queue between selection and admission. Provider aliases sharing an upstream model
+also share this capacity check. Queues order lower numeric priority first, then
+FIFO within each priority and admission scope; strict priority can starve lower
+priority traffic. Queue timeouts apply per admission attempt, not across all
+replicas and retries.
+
+There is no automatic GPU discovery or GPU-count weighting. For capacity that is
+unknown to the proxy, set node `weight: 4` and `weight: 2` to send four and two
+requests per weighted round-robin cycle. Weights describe request proportions,
+not concurrency caps. Conversation and prefix affinity take precedence, so they
+can change that ratio. The optional
+`router_settings.concurrency_aware_selection.enabled: true` prefers the fewest
+active upstream attempts, with weights breaking ties. It compares raw counts,
+not capacity-normalized load: three active requests on a four-slot node count as
+more loaded than one on a two-slot node. It is off by default; weights alone retain
+their configured proportions for requests without affinity. Routing and admission
+state are local to one proxy process, and reload starts a new runtime generation.
+
 Retryable failures include connection failures and HTTP 408, 409, 429, 500, 502,
 503, and 504. Other statuses are returned directly. Once a successful stream has
 started, the proxy does not replay it to another node. For compatibility,
