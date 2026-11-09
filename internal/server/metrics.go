@@ -728,7 +728,7 @@ func copyLabels(labels map[string]string) map[string]string {
 
 func promEndpointKind(endpointKind string) string {
 	switch observability.EndpointKind(endpointKind) {
-	case "chat", "messages", "responses", "embeddings", "rerank", "passthrough", "other", "unknown":
+	case "chat", "messages", "responses", "embeddings", "rerank", "systemone", "decisions", "transcriptions", "realtime", "voice", "passthrough", "other", "unknown":
 		return observability.EndpointKind(endpointKind)
 	default:
 		return "other"

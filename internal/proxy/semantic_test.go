@@ -6,11 +6,32 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/theio/yallmp-proxy/internal/config"
+	"github.com/theio/yallmp-proxy/internal/gigachat"
 )
+
+func TestSemanticEmbeddingUsesNativeDispatchAndExplicitModel(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		if r.URL.Path != "/v1/embeddings" || payload["model"] != "Embeddings" || payload["temperature"] != nil || payload["encoding_format"] != nil {
+			t.Errorf("native embedding request: %s %#v", r.URL, payload)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":[{"embedding":[0.5,-1],"usage":{"prompt_tokens":2}}]}`)
+	}))
+	defer upstream.Close()
+	b := Backend{Name: "native", APIType: "gigachat", TargetModel: "chat-alias", GigaChat: gigachat.NewBackend(gigachat.Config{Mode: "local", BaseURL: upstream.URL + "/v1"}), Parameters: map[string]ParameterConfig{"temperature": {Default: 0.5}, "model": {Default: "wrong-model"}}}
+	client := NewHTTPSemanticEmbeddingClient(b, "Embeddings", upstream.Client())
+	vector, err := client.Embed(context.Background(), "hello")
+	if err != nil || len(vector) != 2 || vector[0] != 0.5 {
+		t.Fatalf("native semantic embedding: %v %v", vector, err)
+	}
+}
 
 type fakeSemanticEmbedder struct {
 	err error

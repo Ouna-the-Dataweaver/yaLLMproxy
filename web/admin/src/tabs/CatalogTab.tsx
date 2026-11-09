@@ -32,7 +32,7 @@ export function CatalogTab() {
         </div>
         <CatalogWarnings warnings={catalogWarnings} />
         <DataTable
-          columns={["model", "provider", "node", "status", "source", "error_class", "configured_model", "target_model", "last_sync", "next_sync"]}
+          columns={["model", "provider", "node", "status", "source", "error_class", "configured_model", "target_model", "endpoints", "last_sync", "next_sync"]}
           rows={catalogRows}
           empty={catalogTableEmpty(catalog, catalogError, catalogStatus, catalogLoading)}
           renderCell={(row, column) => renderCatalogCell(row as CatalogRow, column)}

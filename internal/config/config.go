@@ -82,6 +82,8 @@ type ProviderEntry struct {
 	APIBase              string              `yaml:"api_base" json:"api_base"`
 	APIKey               string              `yaml:"api_key" json:"api_key"`
 	APIType              string              `yaml:"api_type" json:"api_type"`
+	EmbeddingSpace       string              `yaml:"embedding_space,omitempty" json:"embedding_space,omitempty"`
+	RealtimePath         string              `yaml:"realtime_path,omitempty" json:"realtime_path,omitempty"`
 	AnthropicVersion     string              `yaml:"anthropic_version,omitempty" json:"anthropic_version,omitempty"`
 	Mode                 string              `yaml:"mode,omitempty" json:"mode,omitempty"`
 	Scope                string              `yaml:"scope,omitempty" json:"scope,omitempty"`
@@ -109,6 +111,8 @@ type NodeEntry struct {
 	APIBase              string              `yaml:"api_base" json:"api_base"`
 	APIKey               string              `yaml:"api_key" json:"api_key"`
 	APIType              string              `yaml:"api_type" json:"api_type"`
+	EmbeddingSpace       string              `yaml:"embedding_space,omitempty" json:"embedding_space,omitempty"`
+	RealtimePath         string              `yaml:"realtime_path,omitempty" json:"realtime_path,omitempty"`
 	AnthropicVersion     string              `yaml:"anthropic_version" json:"anthropic_version"`
 	Mode                 string              `yaml:"mode,omitempty" json:"mode,omitempty"`
 	Scope                string              `yaml:"scope,omitempty" json:"scope,omitempty"`
@@ -190,6 +194,7 @@ type ConcurrencyAwareSelectionSettings struct {
 }
 
 type ProxySettings struct {
+	ASR                     ASRSettings          `yaml:"asr,omitempty" json:"asr,omitempty"`
 	Debug                   any                  `yaml:"debug" json:"debug"`
 	Server                  ServerConfig         `yaml:"server" json:"server"`
 	EnableResponsesEndpoint any                  `yaml:"enable_responses_endpoint" json:"enable_responses_endpoint"`
@@ -777,6 +782,9 @@ func (cfg *Config) Validate() []ValidationIssue {
 		validateLimits(&collector, path+".limits", model.Limits)
 	}
 
+	if err := cfg.ProxySettings.ASR.Validate(); err != nil {
+		collector.add("proxy_settings.asr", "error", "invalid_limit", err.Error())
+	}
 	providerNames := map[string]int{}
 	for i, provider := range cfg.Providers {
 		path := fmt.Sprintf("providers[%d]", i)
@@ -794,6 +802,9 @@ func (cfg *Config) Validate() []ValidationIssue {
 			collector.add(path+".api_base", "error", "invalid_url", "Provider API base must be an absolute http or https URL")
 		}
 		validateEngine(&collector, path, provider.Engine, provider.Compatibility)
+		if err := ValidateRealtimePath(provider.RealtimePath); err != nil {
+			collector.add(path+".realtime_path", "error", "invalid_path", err.Error())
+		}
 		validateEndpoints(&collector, path+".endpoints", provider.Endpoints)
 		validateLimits(&collector, path+".limits", provider.Limits)
 	}
@@ -825,6 +836,9 @@ func (cfg *Config) Validate() []ValidationIssue {
 			collector.add(path+".weight", "error", "invalid_limit", "Node weight cannot be negative")
 		}
 		validateEngine(&collector, path, firstString(node.Engine, provider.Engine), MergeEngineCompatibility(provider.Compatibility, node.Compatibility))
+		if err := ValidateRealtimePath(node.RealtimePath); err != nil {
+			collector.add(path+".realtime_path", "error", "invalid_path", err.Error())
+		}
 		validateEndpoints(&collector, path+".endpoints", node.Endpoints)
 		validateLimits(&collector, path+".limits", node.Limits)
 		validateAllowedKeys(&collector, path+".allowed_keys", node.AllowedKeys)
@@ -1262,7 +1276,7 @@ func validHeaderAttributionName(name string) bool {
 func validateEndpoints(collector *validationCollector, path string, endpoints []string) {
 	for i, endpoint := range endpoints {
 		if !validEndpoint(endpoint) {
-			collector.add(fmt.Sprintf("%s[%d]", path, i), "error", "invalid_endpoint", "Endpoint must be one of chat, embeddings, rerank, messages, responses, all, or a matching /v1 path")
+			collector.add(fmt.Sprintf("%s[%d]", path, i), "error", "invalid_endpoint", "Endpoint must be one of chat, embeddings, rerank, messages, responses, systemone, decisions, transcriptions, realtime, voice, all, or a matching API path")
 		}
 	}
 }
@@ -1285,7 +1299,7 @@ func validEndpoint(value string) bool {
 		return true
 	}
 	switch normalized {
-	case "chat", "embeddings", "rerank", "messages", "responses":
+	case "chat", "embeddings", "rerank", "messages", "responses", "systemone", "decisions", "transcriptions", "realtime", "voice":
 		return true
 	default:
 		return false
@@ -1306,6 +1320,16 @@ func normalizeEndpointName(value string) string {
 		return "chat"
 	case "embedding", "embeddings":
 		return "embeddings"
+	case "systemone", "system_one":
+		return "systemone"
+	case "decision", "decisions":
+		return "decisions"
+	case "transcription", "transcriptions", "audio/transcriptions":
+		return "transcriptions"
+	case "realtime":
+		return "realtime"
+	case "ws/voice", "voice":
+		return "voice"
 	case "rerank", "rankings":
 		return "rerank"
 	case "message", "messages", "anthropic", "anthropic_messages":
@@ -2006,6 +2030,8 @@ func providerEntryToMap(provider ProviderEntry) map[string]any {
 	setRawString(raw, "api_base", provider.APIBase)
 	setRawString(raw, "api_key", provider.APIKey)
 	setRawString(raw, "api_type", provider.APIType)
+	setRawString(raw, "embedding_space", provider.EmbeddingSpace)
+	setRawString(raw, "realtime_path", provider.RealtimePath)
 	setRawString(raw, "anthropic_version", provider.AnthropicVersion)
 	setRawString(raw, "mode", provider.Mode)
 	setRawString(raw, "scope", provider.Scope)
@@ -2041,6 +2067,8 @@ func nodeEntryToMap(node NodeEntry) map[string]any {
 	setRawString(raw, "api_base", node.APIBase)
 	setRawString(raw, "api_key", node.APIKey)
 	setRawString(raw, "api_type", node.APIType)
+	setRawString(raw, "embedding_space", node.EmbeddingSpace)
+	setRawString(raw, "realtime_path", node.RealtimePath)
 	setRawString(raw, "anthropic_version", node.AnthropicVersion)
 	setRawString(raw, "mode", node.Mode)
 	setRawString(raw, "scope", node.Scope)

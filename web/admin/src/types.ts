@@ -15,6 +15,7 @@ export type LogRecord = {
   request_path?: string;
   outcome?: string;
   duration_ms?: number;
+  audio_seconds?: number;
   backend_name?: string;
   backend_status?: number;
   total_tokens?: number;
@@ -148,6 +149,8 @@ export type RoutingPayloads = {
 };
 
 export type ProviderForm = {
+  embedding_space: string;
+  realtime_path: string;
   models_text: string;
   name: string;
   api_base: string;
@@ -158,6 +161,8 @@ export type ProviderForm = {
 };
 
 export type NodeForm = {
+  embedding_space: string;
+  realtime_path: string;
   upstream_model: string;
   api_key: string;
   name: string;
@@ -347,6 +352,7 @@ export type SemanticCacheStats = {
 };
 
 export type CatalogNodeEntry = {
+  endpoints?: string[];
   node?: string;
   status?: string;
   source?: string;

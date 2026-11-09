@@ -64,6 +64,8 @@ type Backend struct {
 	APIKey               string
 	Timeout              time.Duration
 	TargetModel          string
+	EmbeddingSpace       string
+	RealtimePath         string
 	APIType              string
 	AnthropicVersion     string
 	SupportsReasoning    bool
@@ -196,6 +198,8 @@ func BackendFromModelEntry(entry config.ModelEntry) (Backend, bool, error) {
 		APIKey:               stringValue(params["api_key"]),
 		Timeout:              ParseTimeout(params["request_timeout"]),
 		TargetModel:          ExtractTargetModel(params, apiType),
+		EmbeddingSpace:       stringValue(params["embedding_space"]),
+		RealtimePath:         stringValue(params["realtime_path"]),
 		APIType:              apiType,
 		AnthropicVersion:     stringValue(params["anthropic_version"]),
 		SupportsReasoning:    config.ParseBool(params["supports_reasoning"]),
@@ -206,6 +210,12 @@ func BackendFromModelEntry(entry config.ModelEntry) (Backend, bool, error) {
 		Endpoints:            endpointsFromValues(entry.Raw["endpoints"], params["endpoints"]),
 		Parameters:           parseParameterConfigs(firstMap(entry.Parameters, params["parameters"])),
 		Modules:              entry.Modules,
+	}
+	if err := config.ValidateRealtimePath(backend.RealtimePath); err != nil {
+		return Backend{}, false, err
+	}
+	if apiType == "systemone" && len(backend.Endpoints) == 0 {
+		backend.Endpoints = []string{"systemone"}
 	}
 	compat, err := config.ParseEngineCompatibility(params["compatibility"])
 	if err != nil {
@@ -245,6 +255,9 @@ func BuildBackendBodyWithWarnings(payload map[string]any, backend Backend, origi
 		}
 	}
 	for name, param := range backend.Parameters {
+		if !parameterAppliesToEndpoint(name, endpoint) {
+			continue
+		}
 		if isStreamOnlyParameter(name) && !isStream {
 			continue
 		}
@@ -281,7 +294,10 @@ func BuildBackendBodyWithWarnings(payload map[string]any, backend Backend, origi
 		return BackendBodyResult{Warnings: warnings, Err: err}
 	}
 	changed = changed || adapted
-	sanitizedWarnings := sanitizeOutboundRequest(updated)
+	var sanitizedWarnings []RequestWarning
+	if normalizeEndpoint(path) == "chat" || normalizeEndpoint(path) == "messages" || normalizeEndpoint(path) == "responses" {
+		sanitizedWarnings = sanitizeOutboundRequest(updated)
+	}
 	if len(sanitizedWarnings) > 0 {
 		warnings = append(warnings, sanitizedWarnings...)
 		changed = true

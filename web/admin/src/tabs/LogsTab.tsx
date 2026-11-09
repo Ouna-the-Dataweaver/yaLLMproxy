@@ -85,7 +85,7 @@ export function LogsTab() {
                 <th>Model</th>
                 <th>Status</th>
                 <th>Stop</th>
-                <th className="num">Tokens</th>
+                <th className="num">Usage</th>
                 <th className="num">Duration</th>
                 {logsHaveTraceIDs && <th>Trace</th>}
               </tr>
@@ -104,7 +104,7 @@ export function LogsTab() {
                     {Number(row.warning_count || 0) > 0 && <Badge tone="warn">{row.warning_count} warn</Badge>}
                   </td>
                   <td data-label="Stop">{row.stop_reason ? <Badge tone={stopReasonTone(row.stop_reason)}>{row.stop_reason}</Badge> : "-"}</td>
-                  <td data-label="Tokens" className="num" title={tokenDetailTitle(row)}>{formatValue(row.total_tokens ?? row.usage_stats?.total_tokens)}</td>
+                  <td data-label="Usage" className="num" title={tokenDetailTitle(row)}>{row.usage_stats?.type === "duration" ? `${formatValue(row.usage_stats.seconds)} s audio` : formatValue(row.total_tokens ?? row.usage_stats?.total_tokens)}</td>
                   <td data-label="Duration" className="num">{formatDuration(row.duration_ms)}</td>
                   {logsHaveTraceIDs && <td data-label="Trace">{renderTraceID(traceIDFromRecord(row), openTraceDashboard)}</td>}
                 </tr>

@@ -3,6 +3,7 @@ package observability
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -69,6 +70,20 @@ func (p *Provider) RecordTokenUsage(ctx context.Context, metricData TokenUsageMe
 		attribute.String("gen_ai.system", genAISystemOpenAI),
 		attribute.String("gen_ai.operation.name", genAIOperationName(metricData.EndpointKind)),
 		attribute.String("gen_ai.request.model", safeModelLabel(metricData.Model)),
+	}
+	if metricData.Usage["type"] == "duration" && p.audioUsage != nil {
+		var seconds float64
+		switch value := metricData.Usage["seconds"].(type) {
+		case float64:
+			seconds = value
+		case int:
+			seconds = float64(value)
+		case json.Number:
+			seconds, _ = value.Float64()
+		}
+		if seconds >= 0 && !math.IsNaN(seconds) && !math.IsInf(seconds, 0) {
+			p.audioUsage.Add(ctx, seconds, metric.WithAttributes(baseAttrs...))
+		}
 	}
 	inputTokens := firstPositiveInt(metricData.Usage, "input_tokens", "prompt_tokens")
 	outputTokens := firstPositiveInt(metricData.Usage, "output_tokens", "completion_tokens")
@@ -154,7 +169,7 @@ func boundedOutcome(outcome string) string {
 
 func boundedEndpointKind(endpointKind string) string {
 	switch boundedValue(endpointKind, "unknown") {
-	case "chat", "messages", "responses", "embeddings", "rerank", "passthrough", "other", "unknown":
+	case "chat", "messages", "responses", "embeddings", "rerank", "systemone", "decisions", "transcriptions", "realtime", "voice", "passthrough", "other", "unknown":
 		return boundedValue(endpointKind, "unknown")
 	default:
 		return "other"

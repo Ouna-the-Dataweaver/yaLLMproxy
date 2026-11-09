@@ -2,6 +2,10 @@
 
 This document covers endpoints exposed by the Go server.
 
+See [inference support](inference.md) for native decisions (`/v1/systemone`,
+`/v1/decisions`), ASR uploads (`/v1/audio/transcriptions`), live transcription
+WebSockets (`/v1/realtime`, `/ws/voice`), and embedding contracts.
+
 ## Model List
 
 ```http
@@ -9,7 +13,8 @@ GET /v1/models
 ```
 
 Returns configured client-facing models. Model entries include display metadata such as
-`supports_reasoning`, `capabilities.reasoning`, and a `reasoning` tag when the
+`endpoints`, endpoint flags in `capabilities`, `supports_reasoning`,
+`capabilities.reasoning`, and a `reasoning` tag when the
 configured backend is marked reasoning-capable. These fields are informational;
 they do not cause the proxy to add reasoning or thinking parameters to requests.
 

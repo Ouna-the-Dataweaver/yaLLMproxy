@@ -501,7 +501,7 @@ func canonicalJSONBody(body []byte) ([]byte, bool) {
 
 func inferenceCacheableEndpoint(path string) bool {
 	switch normalizeEndpoint(path) {
-	case "chat", "embeddings", "messages", "responses":
+	case "chat", "embeddings", "messages", "responses", "systemone", "decisions":
 		return true
 	default:
 		return false

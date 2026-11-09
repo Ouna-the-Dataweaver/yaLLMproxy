@@ -303,6 +303,14 @@ func (a *App) serve(w http.ResponseWriter, r *http.Request) {
 		a.handleJSONProxy(w, r, validateChat)
 	case r.Method == http.MethodPost && (r.URL.Path == "/v1/embeddings" || r.URL.Path == "/embeddings"):
 		a.handleJSONProxy(w, r, validateEmbeddings)
+	case r.Method == http.MethodPost && (r.URL.Path == "/v1/systemone" || r.URL.Path == "/systemone"):
+		a.handleJSONProxy(w, r, validateSystemOne)
+	case r.Method == http.MethodPost && (r.URL.Path == "/v1/decisions" || r.URL.Path == "/decisions"):
+		a.handleJSONProxy(w, r, validateDecisions)
+	case r.Method == http.MethodPost && (r.URL.Path == "/v1/audio/transcriptions" || r.URL.Path == "/audio/transcriptions"):
+		a.handleTranscription(w, r)
+	case r.Method == http.MethodGet && (r.URL.Path == "/v1/realtime" || r.URL.Path == "/ws/voice"):
+		a.handleASRStream(w, r)
 	case r.Method == http.MethodPost && (r.URL.Path == "/v1/rerank" || r.URL.Path == "/rerank"):
 		a.handleJSONProxy(w, r, validateRerank)
 	case r.Method == http.MethodPost && (r.URL.Path == "/v1/messages" || r.URL.Path == "/messages") && a.messagesEndpointEnabled():
@@ -483,7 +491,7 @@ func (a *App) recordBackendAttemptMetrics(endpointKind string, modelName string,
 	}
 }
 
-func (a *App) recordPassthroughBackendAttemptMetric(endpointKind string, modelName string, backendName string, statusCode int, err error, duration time.Duration) {
+func (a *App) recordPassthroughBackendAttemptMetric(endpointKind string, modelName string, backendName string, statusCode int, err error, duration time.Duration, streaming ...bool) {
 	if a == nil || a.PrometheusTimings == nil {
 		return
 	}
@@ -495,7 +503,7 @@ func (a *App) recordPassthroughBackendAttemptMetric(endpointKind string, modelNa
 		EndpointKind: endpointKind,
 		Model:        a.traceModelName(modelName),
 		Backend:      backendName,
-		Stream:       false,
+		Stream:       len(streaming) > 0 && streaming[0],
 		Outcome:      outcome,
 		StatusCode:   statusCode,
 		ErrorType:    observability.ErrorType(err, statusCode),
@@ -632,11 +640,16 @@ func (a *App) handleModels(w http.ResponseWriter, _ *http.Request) {
 		if model.SupportsReasoning {
 			tags = append(tags, "reasoning")
 		}
+		capabilities := map[string]any{"reasoning": model.SupportsReasoning}
+		for _, endpoint := range model.Endpoints {
+			capabilities[endpoint] = true
+		}
 		data = append(data, map[string]any{
 			"id":                 model.Name,
 			"object":             "model",
 			"supports_reasoning": model.SupportsReasoning,
-			"capabilities":       map[string]any{"reasoning": model.SupportsReasoning},
+			"capabilities":       capabilities,
+			"endpoints":          model.Endpoints,
 			"tags":               tags,
 		})
 	}
@@ -1361,6 +1374,11 @@ func (a *App) handleJSONProxy(w http.ResponseWriter, r *http.Request, validate v
 		a.persistLog(r.Context(), entry, r, false, policy.Context{}, payloadPath, nil)
 		return
 	}
+	a.handleParsedProxy(w, r, start, body, payload, validate)
+}
+
+// Shared policy, admission, quotas, routing, and logging for JSON and multipart inference.
+func (a *App) handleParsedProxy(w http.ResponseWriter, r *http.Request, start time.Time, body []byte, payload map[string]any, validate validator) {
 	modelName := proxy.NormalizeRequestModel(payload["model"])
 	if modelName == "" {
 		writeError(w, http.StatusBadRequest, "You must provide a model parameter", "missing_parameter")
@@ -1428,7 +1446,7 @@ func (a *App) handleJSONProxy(w http.ResponseWriter, r *http.Request, validate v
 		a.persistLog(r.Context(), entry, r, false, pctx, payloadPath, nil)
 		return
 	}
-	estimatedTokens := estimateRequestTokens(payload)
+	estimatedTokens := max(1, estimateRequestTokens(payload))
 	tokenReservation, err := a.Quota.ReserveWithWindowSpec(limitKeyID, modelName, limits.TokenQuota, quotaWindowSpec(limits), estimatedTokens)
 	if err != nil {
 		admissionSpan.End(observability.SpanResult{Outcome: observability.OutcomeError, StatusCode: http.StatusTooManyRequests, Error: err})
@@ -1605,7 +1623,8 @@ func (a *App) acquireSlot(ctx context.Context, modelName string, pctx policy.Con
 }
 
 func exactInferenceCachePath(path string) bool {
-	return path == "/v1/chat/completions" || path == "/v1/embeddings" || path == "/v1/messages" || path == "/v1/responses"
+	kind := observability.EndpointKind(path)
+	return kind == "chat" || kind == "embeddings" || kind == "messages" || kind == "responses" || kind == "systemone" || kind == "decisions"
 }
 
 func semanticInferenceCachePath(path string) bool {
@@ -2968,28 +2987,6 @@ func validateChat(payload map[string]any) error {
 	return nil
 }
 
-func validateEmbeddings(payload map[string]any) error {
-	input, ok := payload["input"]
-	if !ok {
-		return fmt.Errorf("You must provide an input parameter")
-	}
-	switch typed := input.(type) {
-	case string:
-		return nil
-	case []any:
-		for _, item := range typed {
-			switch item.(type) {
-			case string, []any:
-			default:
-				return fmt.Errorf("Input array items must be strings or token arrays")
-			}
-		}
-		return nil
-	default:
-		return fmt.Errorf("Input must be a string or array of strings/token arrays")
-	}
-}
-
 func validateRerank(payload map[string]any) error {
 	query, ok := payload["query"].(string)
 	if !ok || strings.TrimSpace(query) == "" {
@@ -3038,6 +3035,9 @@ func estimateInputTokens(payload map[string]any) int {
 		}
 		return total
 	}
+	if questions, ok := payload["questions"]; ok {
+		return estimateDecisionValueTokens(payload["state"]) + estimateDecisionValueTokens(payload["input"]) + estimateDecisionValueTokens(questions)
+	}
 	if input, ok := payload["input"]; ok {
 		return estimateValueTokens(input)
 	}
@@ -3058,7 +3058,7 @@ func estimateValueTokens(value any) int {
 	case []any:
 		total := 0
 		for _, item := range typed {
-			if _, ok := item.(float64); ok {
+			if _, ok := integerValue(item); ok {
 				total++
 				continue
 			}
@@ -3099,7 +3099,15 @@ func totalTokensFromUsage(usage map[string]any) int {
 	if total := intFromAny(usage["total_tokens"]); total > 0 {
 		return total
 	}
-	return intFromAny(usage["prompt_tokens"]) + intFromAny(usage["completion_tokens"]) + intFromAny(usage["input_tokens"]) + intFromAny(usage["output_tokens"])
+	input, ok := usage["prompt_tokens"]
+	if !ok {
+		input = usage["input_tokens"]
+	}
+	output, ok := usage["completion_tokens"]
+	if !ok {
+		output = usage["output_tokens"]
+	}
+	return intFromAny(input) + intFromAny(output)
 }
 
 func quotaWindowSpec(limits config.LimitsConfig) quota.WindowSpec {
@@ -3340,8 +3348,8 @@ func (s *streamUsageReadCloser) observePayload(payload map[string]any) {
 		s.streamErr = err
 	}
 	usage, _ := payload["usage"].(map[string]any)
-	if tokens := totalTokensFromUsage(usage); tokens > 0 {
-		s.totalTokens = tokens
+	if len(usage) > 0 {
+		s.totalTokens = totalTokensFromUsage(usage)
 		s.usage = usage
 	}
 }

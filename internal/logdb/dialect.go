@@ -59,6 +59,7 @@ func (s *Store) migrateRequestMetadataColumns(ctx context.Context) error {
 	}{
 		{name: "trace_id", decl: "TEXT"},
 		{name: "span_id", decl: "TEXT"},
+		{name: "audio_seconds", decl: "DOUBLE PRECISION"},
 	}
 	existing, err := s.requestMetadataColumns(ctx)
 	if err != nil {

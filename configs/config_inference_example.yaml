@@ -1,0 +1,50 @@
+# Example only: use model IDs exposed by your serving runtime.
+# Put referenced credentials in configs/.env. No forwarder is required.
+providers:
+  typesafe:
+    api_type: systemone
+    api_base: https://api.typesafe.ai/v1
+    api_key: ${TYPESAFE_API_KEY}
+    endpoints: [systemone]
+    models:
+      - name: jev
+        upstream_model: jev-latest
+
+  vectors:
+    api_type: openai
+    api_base: http://127.0.0.1:8081/v1
+    endpoints: [embeddings]
+    # Identical values declare identical weights, tokenizer, and preprocessing.
+    embedding_space: my-embedding-checkpoint-v1
+    models:
+      - name: embed
+        upstream_model: my-embedding-model
+
+  speech:
+    api_type: openai
+    api_base: http://127.0.0.1:9000/v1
+    request_timeout: 300
+    endpoints: [transcriptions, realtime]
+    models:
+      - name: parakeet
+        upstream_model: parakeet-unified-en-0.6b
+
+  # Alternative native live transport for a T3-style ASR serving endpoint.
+  speech_voice:
+    api_type: openai
+    api_base: http://127.0.0.1:9001
+    endpoints: [voice]
+    realtime_path: /ws/voice
+    models:
+      - name: parakeet-voice
+        upstream_model: parakeet-unified-en-0.6b
+
+proxy_settings:
+  server:
+    host: 127.0.0.1
+    port: 7979
+  asr:
+    max_upload_bytes: 33554432
+    max_message_bytes: 1048576
+    session_timeout_seconds: 600
+    allowed_origins: [] # Same-origin only; add browser origin hosts if needed.

@@ -22,7 +22,7 @@ export function validateModelForm(form: ModelForm) {
       errors.api_base = "API base must be an absolute URL";
     }
   }
-  if (!["openai", "anthropic", "gigachat", "passthrough"].includes(form.api_type)) {
+  if (!["openai", "anthropic", "gigachat", "systemone", "passthrough"].includes(form.api_type)) {
     errors.api_type = "Choose a supported API type";
   }
   if (form.api_type === "gigachat") {
@@ -158,7 +158,7 @@ export function validateRoutingEndpointsText(value: string) {
   const endpoints = parseStringList(value);
   for (const endpoint of endpoints) {
     if (!validRoutingEndpoint(endpoint)) {
-      return "Use chat, embeddings, rerank, messages, responses, all, or a /v1 path";
+      return "Use chat, embeddings, rerank, messages, responses, systemone, decisions, transcriptions, realtime, voice, or all";
     }
   }
   return "";
@@ -167,7 +167,7 @@ export function validateRoutingEndpointsText(value: string) {
 export function validRoutingEndpoint(value: string) {
   const normalized = normalizeRoutingEndpoint(value);
   if (!normalized) return true;
-  return ["chat", "embeddings", "rerank", "messages", "responses"].includes(normalized);
+  return ["chat", "embeddings", "rerank", "messages", "responses", "systemone", "decisions", "transcriptions", "realtime", "voice"].includes(normalized);
 }
 
 export function normalizeRoutingEndpoint(value: string) {
@@ -186,6 +186,15 @@ export function normalizeRoutingEndpoint(value: string) {
     case "chat/completions":
     case "completions":
       return "chat";
+    case "system_one":
+    case "systemone": return "systemone";
+    case "decision":
+    case "decisions": return "decisions";
+    case "transcription":
+    case "transcriptions":
+    case "audio/transcriptions": return "transcriptions";
+    case "ws/voice":
+    case "voice": return "voice";
     case "embedding":
     case "embeddings":
       return "embeddings";

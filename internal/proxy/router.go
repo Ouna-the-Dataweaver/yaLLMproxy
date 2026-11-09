@@ -50,6 +50,7 @@ type Model struct {
 type ModelMetadata struct {
 	Name              string
 	SupportsReasoning bool
+	Endpoints         []string
 }
 
 type Router struct {
@@ -457,6 +458,8 @@ func (r *Router) addNodeModels(cfg *config.Config) error {
 			APIKey:               firstString(node.APIKey, provider.APIKey),
 			Timeout:              ParseTimeout(firstConfiguredAny(node.RequestTimeout, provider.RequestTimeout)),
 			TargetModel:          ExtractTargetModel(params, apiType),
+			EmbeddingSpace:       firstString(node.EmbeddingSpace, provider.EmbeddingSpace),
+			RealtimePath:         firstString(node.RealtimePath, provider.RealtimePath),
 			APIType:              apiType,
 			AnthropicVersion:     firstString(node.AnthropicVersion, provider.AnthropicVersion),
 			SupportsReasoning:    config.ParseBool(node.SupportsReasoning),
@@ -536,7 +539,20 @@ func (r *Router) ListModelMetadata() []ModelMetadata {
 	slices.Sort(names)
 	out := make([]ModelMetadata, 0, len(names))
 	for _, name := range names {
-		out = append(out, ModelMetadata{Name: name, SupportsReasoning: r.modelSupportsReasoningLocked(name)})
+		metadata := ModelMetadata{Name: name, SupportsReasoning: r.modelSupportsReasoningLocked(name), Endpoints: []string{}}
+		nodes := r.Models[name].Nodes
+		if len(nodes) == 0 {
+			nodes = []string{name}
+		}
+		for _, endpoint := range []string{"chat", "embeddings", "rerank", "messages", "responses", "systemone", "decisions", "transcriptions", "realtime", "voice"} {
+			for _, node := range nodes {
+				if b, ok := r.Backends[node]; ok && backendSupportsEndpoint(b, endpoint) {
+					metadata.Endpoints = append(metadata.Endpoints, endpoint)
+					break
+				}
+			}
+		}
+		out = append(out, metadata)
 	}
 	return out
 }
@@ -671,13 +687,37 @@ func (r *Router) BuildRouteForKeyWithOptions(modelName string, path string, payl
 	hadBackendCandidate := false
 	hadEndpointCandidate := false
 	endpoint := normalizeEndpoint(path)
+	// Anchor the vector space before balancing, health preference, and fallback.
+	// Equal dimensions alone do not make vectors from two models compatible.
+	embeddingSpace := ""
+	if endpoint == "embeddings" {
+		// A chat-only or absent primary can still have embedding fallbacks.
+		// Resolve their first configured space before balancing or health so
+		// fallback availability cannot change the public alias's vector space.
+		for _, candidate := range append([]string{modelName}, r.Fallbacks[modelName]...) {
+			nodes := []string{candidate}
+			if model, ok := r.Models[candidate]; ok && len(model.Nodes) > 0 {
+				nodes = model.Nodes
+			}
+			for _, node := range nodes {
+				if b, ok := r.Backends[node]; ok && backendSupportsEndpoint(b, endpoint) {
+					embeddingSpace = embeddingIdentity(b, payload)
+					break
+				}
+			}
+			if embeddingSpace != "" {
+				break
+			}
+		}
+	}
+	compatible := func(b Backend) bool { return embeddingSpace == "" || embeddingIdentity(b, payload) == embeddingSpace }
 	addNode := func(name string) {
 		if name == "" || seen[name] {
 			return
 		}
 		if backend, ok := r.Backends[name]; ok {
 			hadBackendCandidate = true
-			if !backendSupportsEndpoint(backend, endpoint) {
+			if !backendSupportsEndpoint(backend, endpoint) || !compatible(backend) {
 				return
 			}
 			hadEndpointCandidate = true
@@ -695,7 +735,7 @@ func (r *Router) BuildRouteForKeyWithOptions(modelName string, path string, payl
 			for _, node := range model.Nodes {
 				if b, ok := r.Backends[node]; ok {
 					hadBackendCandidate = true
-					if backendSupportsEndpoint(b, endpoint) {
+					if backendSupportsEndpoint(b, endpoint) && compatible(b) {
 						hadEndpointCandidate = true
 						if backendAllowsKey(b, keyID) {
 							eligible = append(eligible, node)
@@ -1754,10 +1794,21 @@ func (r *releaseReadCloser) Close() error {
 	return err
 }
 
-func (r *Router) execute(ctx context.Context, backend Backend, endpointKind string, modelName string, path string, rawQuery string, body []byte, payload map[string]any, isStream bool, headers http.Header, captureParsedResponse bool) (*http.Response, []RequestWarning, *ParsedResponseTrace, error) {
-	bodyResult := BuildBackendBodyWithWarnings(payload, backend, body, isStream, path)
+func (r *Router) sendRequest(ctx context.Context, backend Backend, endpointKind string, modelName string, path string, rawQuery string, body []byte, payload map[string]any, isStream bool, headers http.Header) (*http.Response, []RequestWarning, error) {
+	if !backendSupportsEndpoint(backend, normalizeEndpoint(path)) {
+		return nil, nil, ErrEndpointNotSupported
+	}
+	var bodyResult BackendBodyResult
+	if normalizeEndpoint(path) == "transcriptions" {
+		var contentType string
+		bodyResult.Body, contentType, bodyResult.Err = transcriptionBody(body, headers.Get("Content-Type"), backend)
+		headers = headers.Clone()
+		headers.Set("Content-Type", contentType)
+	} else {
+		bodyResult = BuildBackendBodyWithWarnings(payload, backend, body, isStream, path)
+	}
 	if bodyResult.Err != nil {
-		return nil, bodyResult.Warnings, nil, bodyResult.Err
+		return nil, bodyResult.Warnings, bodyResult.Err
 	}
 	outboundBody := bodyResult.Body
 	if backend.GigaChat != nil {
@@ -1765,12 +1816,18 @@ func (r *Router) execute(ctx context.Context, backend Backend, endpointKind stri
 		if err := json.Unmarshal(outboundBody, &gigachatPayload); err != nil {
 			gigachatPayload = payload
 		}
-		resp, err := backend.GigaChat.Execute(ctx, gigachatPayload, isStream, r.Client)
-		return resp, bodyResult.Warnings, nil, err
+		var resp *http.Response
+		var err error
+		if normalizeEndpoint(path) == "embeddings" {
+			resp, err = backend.GigaChat.ExecuteEmbeddings(ctx, gigachatPayload, r.Client)
+		} else {
+			resp, err = backend.GigaChat.Execute(ctx, gigachatPayload, isStream, r.Client)
+		}
+		return resp, bodyResult.Warnings, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, backend.BuildURL(path, rawQuery), bytes.NewReader(outboundBody))
 	if err != nil {
-		return nil, bodyResult.Warnings, nil, err
+		return nil, bodyResult.Warnings, err
 	}
 	req.Header = BuildOutboundHeaders(headers, backend.APIKey, isStream, backend.APIType, backend.AnthropicVersion)
 	applyEngineRoutingHeaders(req.Header, backend, path)
@@ -1780,20 +1837,31 @@ func (r *Router) execute(ctx context.Context, backend Backend, endpointKind stri
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, bodyResult.Warnings, nil, err
+		return nil, bodyResult.Warnings, err
 	}
 	if err := DecodeResponseBody(resp); err != nil {
-		return nil, bodyResult.Warnings, nil, err
+		return nil, bodyResult.Warnings, err
 	}
-	if isStream {
-		return resp, bodyResult.Warnings, nil, nil
+	return resp, bodyResult.Warnings, nil
+}
+
+func (r *Router) execute(ctx context.Context, backend Backend, endpointKind string, modelName string, path string, rawQuery string, body []byte, payload map[string]any, isStream bool, headers http.Header, captureParsedResponse bool) (*http.Response, []RequestWarning, *ParsedResponseTrace, error) {
+	resp, warnings, err := r.sendRequest(ctx, backend, endpointKind, modelName, path, rawQuery, body, payload, isStream, headers)
+	if err != nil {
+		return nil, warnings, nil, err
+	}
+	if isStream || backend.GigaChat != nil {
+		return resp, warnings, nil, nil
 	}
 	respBody, err := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
 	if err != nil {
-		return nil, bodyResult.Warnings, nil, err
+		return nil, warnings, nil, err
 	}
 	pipeline := r.pipelineForBackend(backend.Name)
+	if bypassChatParsers(path) {
+		pipeline = modules.Pipeline{}
+	}
 	var parsedResponse *ParsedResponseTrace
 	var parserSpan observability.Span
 	if len(pipeline.Modules) > 0 {
@@ -1813,7 +1881,7 @@ func (r *Router) execute(ctx context.Context, backend Backend, endpointKind stri
 	resp.Body = io.NopCloser(bytes.NewReader(respBody))
 	resp.ContentLength = int64(len(respBody))
 	resp.Header = FilterResponseHeaders(resp.Header)
-	return resp, bodyResult.Warnings, parsedResponse, nil
+	return resp, warnings, parsedResponse, nil
 }
 
 func (r *Router) prepareStreamResponse(ctx context.Context, resp *http.Response, backend Backend, endpointKind string, modelName string, path string, payload map[string]any, capture *ParsedStreamCapture) {
@@ -1821,6 +1889,9 @@ func (r *Router) prepareStreamResponse(ctx context.Context, resp *http.Response,
 		return
 	}
 	pipeline := r.pipelineForBackend(backend.Name)
+	if bypassChatParsers(path) {
+		pipeline = modules.Pipeline{}
+	}
 	hasCapture := capture != nil && (capture.Raw != nil || capture.Transformed != nil)
 	if len(pipeline.Modules) == 0 && !hasCapture {
 		return
@@ -2227,7 +2298,28 @@ func normalizeEndpoints(values []string) []string {
 }
 
 func backendSupportsEndpoint(backend Backend, endpoint string) bool {
+	switch backend.APIType {
+	case "gigachat":
+		if endpoint != "chat" && endpoint != "embeddings" && endpoint != "" {
+			return false
+		}
+	case "anthropic":
+		if endpoint != "messages" && endpoint != "" {
+			return false
+		}
+	case "systemone":
+		if endpoint != "systemone" && endpoint != "" {
+			return false
+		}
+	}
 	if endpoint == "" || len(backend.Endpoints) == 0 {
+		if endpoint == "systemone" {
+			return backend.APIType == "systemone"
+		}
+		switch endpoint {
+		case "decisions", "transcriptions", "realtime", "voice":
+			return false
+		}
 		return true
 	}
 	return slices.Contains(backend.Endpoints, endpoint)
@@ -2284,6 +2376,16 @@ func normalizeEndpoint(value string) string {
 		return "chat"
 	case "embedding", "embeddings":
 		return "embeddings"
+	case "systemone", "system_one":
+		return "systemone"
+	case "decision", "decisions":
+		return "decisions"
+	case "transcription", "transcriptions", "audio/transcriptions":
+		return "transcriptions"
+	case "realtime":
+		return "realtime"
+	case "ws/voice", "voice":
+		return "voice"
 	case "rerank", "rankings":
 		return "rerank"
 	case "message", "messages", "anthropic", "anthropic_messages":

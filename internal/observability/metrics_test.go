@@ -31,6 +31,30 @@ func TestNoopProviderDoesNotRecordMetrics(t *testing.T) {
 	}
 }
 
+func TestAudioDurationIsSeparateFromTokens(t *testing.T) {
+	provider, recorder := NewInMemoryProvider("audio-test")
+	provider.RecordTokenUsage(context.Background(), TokenUsageMetric{EndpointKind: "voice", Model: "parakeet", Stream: true, Usage: map[string]any{"type": "duration", "seconds": 1.25}})
+	metrics := collectMetrics(t, recorder)
+	var seconds float64
+	for _, scope := range metrics.ScopeMetrics {
+		for _, measurement := range scope.Metrics {
+			if measurement.Name == "yallmp.proxy.audio.duration" {
+				if values, ok := measurement.Data.(metricdata.Sum[float64]); ok {
+					for _, point := range values.DataPoints {
+						seconds += point.Value
+					}
+				}
+			}
+		}
+	}
+	if seconds != 1.25 {
+		t.Fatalf("audio duration=%v", seconds)
+	}
+	if tokens := sumValue(metrics, "gen_ai.client.token.usage", map[string]string{"model": "parakeet", "token.type": "total"}); tokens != 0 {
+		t.Fatalf("audio converted to tokens: %d", tokens)
+	}
+}
+
 func TestInMemoryProviderRecordsRequestAndTokenMetrics(t *testing.T) {
 	provider, recorder := NewInMemoryProvider("metrics-test")
 	ctx := context.Background()

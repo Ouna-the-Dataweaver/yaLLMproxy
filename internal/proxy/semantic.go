@@ -38,7 +38,17 @@ type HTTPSemanticEmbeddingClient struct {
 }
 
 func NewHTTPSemanticEmbeddingClient(backend Backend, model string, client *http.Client) *HTTPSemanticEmbeddingClient {
-	if client == nil {
+	// embedding_model is the explicit upstream identity of the semantic index.
+	// Node aliases and chat defaults must not silently replace that identity.
+	backend.TargetModel = strings.TrimSpace(model)
+	parameters := make(map[string]ParameterConfig, len(backend.Parameters))
+	for key, value := range backend.Parameters {
+		if key != "model" && key != "encoding_format" {
+			parameters[key] = value
+		}
+	}
+	backend.Parameters = parameters
+	if client == nil && backend.GigaChat == nil {
 		client = &http.Client{Timeout: backend.TimeoutOrDefault()}
 	}
 	return &HTTPSemanticEmbeddingClient{
@@ -49,33 +59,36 @@ func NewHTTPSemanticEmbeddingClient(backend Backend, model string, client *http.
 }
 
 func (c *HTTPSemanticEmbeddingClient) Embed(ctx context.Context, input string) ([]float64, error) {
-	if c == nil || c.client == nil {
+	if c == nil {
 		return nil, errors.New("semantic embedding client is not configured")
 	}
 	model := strings.TrimSpace(c.model)
 	if model == "" {
 		return nil, errors.New("semantic embedding model is not configured")
 	}
-	payload, err := json.Marshal(map[string]any{
-		"model": model,
-		"input": input,
-	})
+	request := map[string]any{
+		"model":           model,
+		"input":           input,
+		"encoding_format": "float",
+	}
+	payload, err := json.Marshal(request)
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.backend.BuildURL("/v1/embeddings", ""), bytes.NewReader(payload))
-	if err != nil {
-		return nil, err
-	}
-	req.Header = BuildOutboundHeaders(http.Header{}, c.backend.APIKey, false, c.backend.APIType, c.backend.AnthropicVersion)
-	resp, err := c.client.Do(req)
+	// Use the same endpoint-aware defaults, authentication, and native adapter
+	// as public embedding requests, including GigaChat OAuth and mTLS.
+	executor := &Router{Client: c.client}
+	resp, _, err := executor.sendRequest(ctx, c.backend, "embeddings", model, "/v1/embeddings", "", payload, request, false, http.Header{})
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, defaultSemanticCacheMaxEntryBytes))
+	respBody, readErr := io.ReadAll(io.LimitReader(resp.Body, defaultSemanticCacheMaxEntryBytes+1))
 	if readErr != nil {
 		return nil, readErr
+	}
+	if len(respBody) > defaultSemanticCacheMaxEntryBytes {
+		return nil, errors.New("embedding response is too large")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("embedding backend returned status %d", resp.StatusCode)
@@ -90,6 +103,11 @@ func (c *HTTPSemanticEmbeddingClient) Embed(ctx context.Context, input string) (
 	}
 	if len(decoded.Data) == 0 || len(decoded.Data[0].Embedding) == 0 {
 		return nil, errors.New("embedding backend returned no embedding")
+	}
+	for _, value := range decoded.Data[0].Embedding {
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			return nil, errors.New("embedding response contains a non-finite value")
+		}
 	}
 	return append([]float64(nil), decoded.Data[0].Embedding...), nil
 }

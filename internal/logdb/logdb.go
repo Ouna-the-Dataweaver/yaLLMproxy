@@ -54,6 +54,7 @@ type Record struct {
 	CachedTokens         int            `json:"cached_tokens,omitempty"`
 	ReasoningTokens      int            `json:"reasoning_tokens,omitempty"`
 	TokensPerSecond      float64        `json:"tokens_per_second,omitempty"`
+	AudioSeconds         float64        `json:"audio_seconds,omitempty"`
 	WeightedTokens       float64        `json:"weighted_tokens,omitempty"`
 	FullRequestPath      string         `json:"full_request_path,omitempty"`
 	FullRequestExpiresAt *time.Time     `json:"full_request_expires_at,omitempty"`
@@ -361,6 +362,10 @@ func (s *Store) Insert(ctx context.Context, record Record) (string, error) {
 	record.ReasoningTokens = usage.reasoningTokens
 	record.TokensPerSecond = usage.tokensPerSecond
 	record.WeightedTokens = usage.weightedTokens
+	var audioSeconds any
+	if record.UsageStats["type"] == "duration" {
+		audioSeconds = floatValue(record.UsageStats["seconds"])
+	}
 	var cachedTokensValue any
 	if usage.cachedTokensReported {
 		cachedTokensValue = record.CachedTokens
@@ -375,8 +380,8 @@ func (s *Store) Insert(ctx context.Context, record Record) (string, error) {
 		outcome, duration_ms, stop_reason, is_tool_call, app_key_id, backend_name,
 		backend_status, trace_id, span_id, prompt_tokens, completion_tokens, total_tokens, cached_tokens,
 		reasoning_tokens, tokens_per_second, weighted_tokens, full_request_path,
-		full_request_expires_at, created_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		full_request_expires_at, created_at, audio_seconds
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		record.ID,
 		formatTime(record.RequestTime),
 		record.ModelName,
@@ -404,6 +409,7 @@ func (s *Store) Insert(ctx context.Context, record Record) (string, error) {
 		nullableString(record.FullRequestPath),
 		nullableTime(record.FullRequestExpiresAt),
 		formatTime(record.CreatedAt),
+		audioSeconds,
 	)
 	if err != nil {
 		return "", err
@@ -592,7 +598,7 @@ func (s *Store) Query(ctx context.Context, opts QueryOptions) (QueryResult, erro
 		outcome, duration_ms, stop_reason, is_tool_call, app_key_id, backend_name,
 		backend_status, trace_id, span_id, prompt_tokens, completion_tokens, total_tokens, cached_tokens,
 		reasoning_tokens, tokens_per_second, weighted_tokens, full_request_path,
-		full_request_expires_at, created_at
+		full_request_expires_at, created_at, audio_seconds
 		FROM request_metadata` + where + `
 		ORDER BY request_time DESC`
 	if strings.TrimSpace(opts.Search) == "" {
@@ -670,7 +676,7 @@ func (s *Store) Get(ctx context.Context, id string) (Record, bool, error) {
 		outcome, duration_ms, stop_reason, is_tool_call, app_key_id, backend_name,
 		backend_status, trace_id, span_id, prompt_tokens, completion_tokens, total_tokens, cached_tokens,
 		reasoning_tokens, tokens_per_second, weighted_tokens, full_request_path,
-		full_request_expires_at, created_at
+		full_request_expires_at, created_at, audio_seconds
 		FROM request_metadata
 		WHERE id = ?`, id)
 	record, err := scanRecord(row)
@@ -1267,7 +1273,7 @@ func scanRecord(rows scanner) (Record, error) {
 	var path, method, query, requestPath, outcome sql.NullString
 	var stopReason, appKeyID, backendName, traceID, spanID, fullRequestPath sql.NullString
 	var backendStatus, promptTokens, completionTokens, totalTokens, cachedTokens, reasoningTokens sql.NullInt64
-	var tokensPerSecond, weightedTokens sql.NullFloat64
+	var tokensPerSecond, weightedTokens, audioSeconds sql.NullFloat64
 	var isStream, isToolCall int
 	if err := rows.Scan(
 		&record.ID,
@@ -1297,6 +1303,7 @@ func scanRecord(rows scanner) (Record, error) {
 		&fullRequestPath,
 		&expiresAt,
 		&createdAt,
+		&audioSeconds,
 	); err != nil {
 		return Record{}, err
 	}
@@ -1331,6 +1338,14 @@ func scanRecord(rows scanner) (Record, error) {
 	}
 	record.DurationSeconds = float64(record.DurationMS) / 1000
 	record.UsageStats = buildUsage(record)
+	if audioSeconds.Valid {
+		record.AudioSeconds = audioSeconds.Float64
+		if record.UsageStats == nil {
+			record.UsageStats = map[string]any{}
+		}
+		record.UsageStats["type"] = "duration"
+		record.UsageStats["seconds"] = audioSeconds.Float64
+	}
 	// SQL NULL means the upstream did not report cache usage. Preserve an
 	// explicitly reported zero so the inspector can distinguish the two.
 	if cachedTokens.Valid {
@@ -1387,10 +1402,14 @@ func usageColumns(usage map[string]any) usageValues {
 		completionDetails, _ = toMap(usage["output_tokens_details"])
 	}
 	cachedTokens, cachedTokensReported := ReportedTokenCount(promptDetails["cached_tokens"], usage["cached_tokens"], usage["cache_read_input_tokens"])
+	total := intValue(usage["total_tokens"])
+	if _, exists := usage["total_tokens"]; !exists {
+		total = firstIntValue(usage["prompt_tokens"], usage["input_tokens"]) + firstIntValue(usage["completion_tokens"], usage["output_tokens"])
+	}
 	return usageValues{
 		promptTokens:         firstIntValue(usage["prompt_tokens"], usage["input_tokens"]),
 		completionTokens:     firstIntValue(usage["completion_tokens"], usage["output_tokens"]),
-		totalTokens:          intValue(usage["total_tokens"]),
+		totalTokens:          total,
 		cachedTokens:         cachedTokens,
 		cachedTokensReported: cachedTokensReported,
 		reasoningTokens:      intValue(completionDetails["reasoning_tokens"]),
