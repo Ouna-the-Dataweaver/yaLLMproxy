@@ -71,6 +71,11 @@ tasks:
     cmds:
       - bash -c 'GO_BIN="${GO:-$(command -v go || printf .tools/go/bin/go)}"; "$GO_BIN" test -race ./...'
 
+  test:inference:
+    desc: Test embeddings, native decision APIs, and ASR upload/live contracts with fake upstreams
+    cmds:
+      - bash -c 'GO_BIN="${GO:-$(command -v go || printf .tools/go/bin/go)}"; "$GO_BIN" test ./internal/server ./internal/proxy ./internal/gigachat ./internal/config -run "Test(Embedding|NativeDecision|DecisionContract|Transcription|LiveASR|NewEndpoints|NativeInference|InferenceConfig|SemanticEmbedding)" -count=1'
+
   test:engines:live:
     desc: Detect live engines and verify regex translation (set YALLMP_TEST_ENGINE_URLS; runs inference)
     cmds:

@@ -88,6 +88,7 @@ export function useAdminController() {
   const [modelDependents, setModelDependents] = useState<ModelDependentsPayload | null>(null);
   const [dependencyError, setDependencyError] = useState("");
   const [providerForm, setProviderForm] = useState<ProviderForm>({
+    embedding_space: "", realtime_path: "",
     models_text: "",
     name: "",
     api_base: "",
@@ -97,6 +98,7 @@ export function useAdminController() {
     limits_text: "{}"
   });
   const [nodeForm, setNodeForm] = useState<NodeForm>({
+    embedding_space: "", realtime_path: "",
     upstream_model: "",
     api_key: "",
     name: "",
@@ -805,6 +807,8 @@ export function useAdminController() {
       const endpoints = parseStringList(providerForm.endpoints_text);
       const payload: JsonRecord = {
         name: providerForm.name.trim(),
+        embedding_space: providerForm.embedding_space.trim(),
+        realtime_path: providerForm.realtime_path.trim(),
         api_base: providerForm.api_base.trim(),
         api_type: providerForm.api_type.trim(),
         models: parseProviderModels(providerForm.models_text),
@@ -818,7 +822,7 @@ export function useAdminController() {
       }
       await requestJSON<JsonRecord>("/admin/providers", { method: "POST", body: JSON.stringify(payload) }, adminPassword);
       setNotice("Provider created");
-      setProviderForm({ models_text: "", name: "", api_base: "", api_type: "openai", api_key: "", endpoints_text: "", limits_text: "{}" });
+      setProviderForm({ embedding_space: "", realtime_path: "", models_text: "", name: "", api_base: "", api_type: "openai", api_key: "", endpoints_text: "", limits_text: "{}" });
       await refreshRoutingState();
     } catch (err) {
       setError(errorMessage(err));
@@ -842,6 +846,8 @@ export function useAdminController() {
       const endpoints = parseStringList(nodeForm.endpoints_text);
       const payload: JsonRecord = {
         name: nodeForm.name.trim(),
+        embedding_space: nodeForm.embedding_space.trim(),
+        realtime_path: nodeForm.realtime_path.trim(),
         provider: nodeForm.provider.trim(),
         model: nodeForm.model.trim(),
         upstream_model: nodeForm.upstream_model.trim()
@@ -855,7 +861,7 @@ export function useAdminController() {
       }
       await requestJSON<JsonRecord>("/admin/nodes", { method: "POST", body: JSON.stringify(payload) }, adminPassword);
       setNotice("Node created");
-      setNodeForm({ upstream_model: "", api_key: "", name: "", provider: "", model: "", api_base: "", endpoints_text: "", limits_text: "{}", modules_text: "{}", allowed_keys_text: "[]" });
+      setNodeForm({ embedding_space: "", realtime_path: "", upstream_model: "", api_key: "", name: "", provider: "", model: "", api_base: "", endpoints_text: "", limits_text: "{}", modules_text: "{}", allowed_keys_text: "[]" });
       await refreshRoutingState();
     } catch (err) {
       setError(errorMessage(err));
@@ -973,6 +979,8 @@ export function useAdminController() {
       original: provider,
       form: {
         models_text: formatProviderModels(provider.models),
+        embedding_space: typeof provider.embedding_space === "string" ? provider.embedding_space : "",
+        realtime_path: typeof provider.realtime_path === "string" ? provider.realtime_path : "",
         name: provider.name || "",
         api_base: provider.api_base || "",
         api_type: provider.api_type || "openai",
@@ -992,6 +1000,8 @@ export function useAdminController() {
       original: node,
       form: {
         upstream_model: typeof node.upstream_model === "string" ? node.upstream_model : "",
+        embedding_space: typeof node.embedding_space === "string" ? node.embedding_space : "",
+        realtime_path: typeof node.realtime_path === "string" ? node.realtime_path : "",
         api_key: "",
         name: node.name || "",
         provider: node.provider || "",
@@ -1041,7 +1051,7 @@ export function useAdminController() {
       setError("Fix provider form errors");
       return;
     }
-    const payload: JsonRecord = changedStringFields(routingEdit.original, routingEdit.form, ["api_base", "api_type"]);
+    const payload: JsonRecord = changedStringFields(routingEdit.original, routingEdit.form, ["api_base", "api_type", "embedding_space", "realtime_path"]);
     if (routingEdit.form.models_text !== formatProviderModels(routingEdit.original.models)) {
       payload.models = parseProviderModels(routingEdit.form.models_text);
     }
@@ -1079,7 +1089,7 @@ export function useAdminController() {
       setError("Fix node form errors");
       return;
     }
-    const payload: JsonRecord = changedStringFields(routingEdit.original, routingEdit.form, ["provider", "model", "api_base", "upstream_model"]);
+    const payload: JsonRecord = changedStringFields(routingEdit.original, routingEdit.form, ["provider", "model", "api_base", "upstream_model", "embedding_space", "realtime_path"]);
     if (routingEdit.form.api_key.trim()) payload.api_key = routingEdit.form.api_key;
     const endpoints = parseStringList(routingEdit.form.endpoints_text);
     if (!arraysEqual(asArray<string>(routingEdit.original.endpoints), endpoints)) {

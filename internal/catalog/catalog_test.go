@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -466,7 +467,7 @@ func TestCatalogPureHelpersAndSnapshotStrings(t *testing.T) {
 	if merged.Source != SourceProbe || merged.Status != StatusAvailable || merged.ConfiguredModel != "client" || merged.TargetModel != "target" {
 		t.Fatalf("merge config over probe = %#v", merged)
 	}
-	if got := mergeNode(incomingConfig, existingProbe); got != existingProbe {
+	if got := mergeNode(incomingConfig, existingProbe); !reflect.DeepEqual(got, existingProbe) {
 		t.Fatalf("probe over config = %#v, want incoming probe", got)
 	}
 

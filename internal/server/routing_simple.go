@@ -44,7 +44,7 @@ func (a *App) handleDiscoverProvider(w http.ResponseWriter, r *http.Request) {
 	if input.APIType != "" {
 		provider.APIType = input.APIType
 	}
-	if provider.APIType != "" && provider.APIType != "openai" {
+	if provider.APIType != "" && provider.APIType != "openai" && provider.APIType != "systemone" {
 		writeError(w, http.StatusBadRequest, "Discovery supports OpenAI-compatible providers; enter model names manually for this API type", "unsupported_discovery")
 		return
 	}

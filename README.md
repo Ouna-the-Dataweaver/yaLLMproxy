@@ -9,6 +9,8 @@ yaLLMproxy is a Go LLM proxy for OpenAI-compatible traffic, local model fleets, 
 ## Features
 
 - OpenAI-compatible `/v1/chat/completions`, `/v1/embeddings`, `/v1/rerank`, and `/v1/models`.
+- Native TypeSafe System One and OpenAI Decisions APIs, embedding input/encoding support with vector-space-safe routing, and native GigaChat embeddings.
+- Multipart ASR and native Realtime/T3-style live transcription WebSockets, with bounded sessions and audio-duration logging. See [inference support](docs/inference.md).
 - Optional Anthropic Messages API at `/v1/messages`, with OpenAI backend translation, thinking-block mapping, or native Anthropic pass-through.
 - Optional OpenAI Responses API at `/v1/responses`, with Chat Completions translation, reasoning output/stream mapping, `store`, `previous_response_id`, sticky follow-up routing, and selected terminal-status mapping.
 - Native GigaChat backend support with cloud OAuth, local mTLS, streaming conversion, and OpenAI tool-call translation.

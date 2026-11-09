@@ -210,6 +210,16 @@ func EndpointKind(path string) string {
 		return "chat"
 	case "embedding", "embeddings":
 		return "embeddings"
+	case "systemone", "system_one":
+		return "systemone"
+	case "decision", "decisions":
+		return "decisions"
+	case "transcription", "transcriptions", "audio/transcriptions":
+		return "transcriptions"
+	case "realtime":
+		return "realtime"
+	case "ws/voice", "voice":
+		return "voice"
 	case "rerank", "rankings":
 		return "rerank"
 	case "message", "messages", "anthropic", "anthropic_messages":
@@ -264,6 +274,10 @@ func genAIOperationName(endpointKind string) string {
 		return "embeddings"
 	case "rerank":
 		return "rerank"
+	case "systemone", "decisions":
+		return "decision"
+	case "transcriptions", "realtime", "voice":
+		return "transcription"
 	case "passthrough":
 		return "passthrough"
 	default:

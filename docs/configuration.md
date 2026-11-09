@@ -1,5 +1,8 @@
 # Configuration Guide
 
+For embedding-space identity, decision endpoints, and live ASR paths/limits, see
+[inference support](inference.md) and [the inference example](../configs/config_inference_example.yaml).
+
 Complete reference for yaLLMproxy configuration options.
 
 ## Table of Contents
@@ -42,7 +45,7 @@ model_list:
   - model_name: GLM-4.6-nano              # Unique model identifier
     protected: true
     model_params:
-      api_type: openai                     # API type: openai (default), anthropic, gigachat, or passthrough
+      api_type: openai                     # API type: openai (default), anthropic, gigachat, systemone, or passthrough
       model: z-ai/glm-4.6:thinking         # Actual model name
       api_base: https://nano-gpt.com/api/v1thinking  # API base URL
       api_key: ${NANOGPT_API_KEY}          # API key (from .env)
@@ -250,7 +253,7 @@ The model catalog is disabled by default. When `proxy_settings.model_catalog.ena
 |-------|------|---------|-------------|
 | `protected` | boolean | true | Require admin password before replacing this model through `POST /admin/models` |
 | `model_params.model` | string | - | Actual model name to send to backend |
-| `model_params.api_type` | string | "openai" | API type: "openai", "anthropic", "gigachat", or "passthrough" |
+| `model_params.api_type` | string | "openai" | API type: "openai", "anthropic", "gigachat", "systemone", or "passthrough" |
 | `model_params.target_model` | string | - | Override model name sent to backend |
 | `model_params.request_timeout` | number | 60 | Request timeout in seconds |
 | `model_params.supports_reasoning` | boolean | false | Display-only reasoning capability metadata exposed by `/v1/models`; it does not alter upstream requests |

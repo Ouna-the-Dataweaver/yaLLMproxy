@@ -17,7 +17,7 @@ export function LegacyModelsTab() {
           <Badge>{models.length} models</Badge>
         </div>
         <DataTable
-          columns={["id", "supports_reasoning", "tags"]}
+          columns={["id", "endpoints", "supports_reasoning", "tags"]}
           rows={models as JsonRecord[]}
           empty="No configured models"
           renderCell={(row, column) => column === "supports_reasoning" ? renderBooleanBadge(row[column]) : formatValue(row[column])}
@@ -51,6 +51,7 @@ export function LegacyModelsTab() {
               <option value="openai">openai</option>
               <option value="anthropic">anthropic</option>
               <option value="gigachat">gigachat</option>
+              <option value="systemone">systemone</option>
               <option value="passthrough">passthrough</option>
             </select>
             <FieldError message={modelErrors.api_type} />

@@ -47,6 +47,7 @@ export function stopReasonTone(reason?: string): BadgeTone {
 }
 
 export function tokenDetailTitle(row: LogRecord) {
+  if (row.usage_stats?.type === "duration") return `Audio processed: ${row.usage_stats.seconds} s`;
   const usage = logTokenUsage(row);
   const parts = [
     ["Input", usage.input ?? "Not reported"],

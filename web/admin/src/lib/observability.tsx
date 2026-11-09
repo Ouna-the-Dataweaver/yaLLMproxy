@@ -76,6 +76,7 @@ export function catalogSnapshotRows(snapshot: CatalogSnapshot | null): CatalogRo
           error_class: node.error_class || "",
           configured_model: node.configured_model || "",
           target_model: node.target_model || "",
+          endpoints: node.endpoints || [],
           last_sync: node.last_sync,
           next_sync: node.next_sync
         });

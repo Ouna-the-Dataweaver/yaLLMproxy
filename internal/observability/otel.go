@@ -35,6 +35,7 @@ type Provider struct {
 	requests        metric.Int64Counter
 	requestDuration metric.Float64Histogram
 	tokenUsage      metric.Int64Counter
+	audioUsage      metric.Float64Counter
 	streamTTFT      metric.Float64Histogram
 	streamTPOT      metric.Float64Histogram
 	shutdown        func(context.Context) error
@@ -170,6 +171,7 @@ func fromProviders(tracer oteltrace.Tracer, meter metric.Meter, enabled bool, lo
 		metric.WithDescription("Reconciled GenAI token usage"),
 		metric.WithUnit("{token}"),
 	)
+	audioUsage, _ := meter.Float64Counter("yallmp.proxy.audio.duration", metric.WithDescription("Upstream-reported audio processed"), metric.WithUnit("s"))
 	streamTTFT, _ := meter.Float64Histogram(
 		"gen_ai.client.operation.time_to_first_token",
 		metric.WithDescription("Time from proxy request start to first client-visible streamed chunk"),
@@ -188,6 +190,7 @@ func fromProviders(tracer oteltrace.Tracer, meter metric.Meter, enabled bool, lo
 		requests:        requests,
 		requestDuration: requestDuration,
 		tokenUsage:      tokenUsage,
+		audioUsage:      audioUsage,
 		streamTTFT:      streamTTFT,
 		streamTPOT:      streamTPOT,
 		shutdown:        shutdown,

@@ -85,6 +85,7 @@ type ProviderEntry struct {
 
 type NodeEntry struct {
 	Node            string    `json:"node"`
+	Endpoints       []string  `json:"endpoints,omitempty"`
 	Status          string    `json:"status"`
 	Source          string    `json:"source"`
 	LastSync        time.Time `json:"last_sync,omitempty"`
@@ -350,6 +351,7 @@ func (c *Catalog) upsertNodeLocked(model string, source NodeSource, node NodeEnt
 		entry.Providers = append(entry.Providers, ProviderEntry{Provider: providerName})
 		providerIndex = len(entry.Providers) - 1
 	}
+	node.Endpoints = append([]string(nil), source.Backend.Endpoints...)
 	node.Node = sanitizeName(node.Node)
 	node.ConfiguredModel = sanitizeName(node.ConfiguredModel)
 	node.TargetModel = sanitizeName(node.TargetModel)
@@ -370,7 +372,7 @@ func (c *Catalog) upsertNodeLocked(model string, source NodeSource, node NodeEnt
 func probeNode(ctx context.Context, client *http.Client, source NodeSource, timeout time.Duration) probeState {
 	now := time.Now()
 	state := probeState{LastSync: now, Models: map[string]bool{}}
-	if source.Backend.APIType != "" && source.Backend.APIType != "openai" {
+	if source.Backend.APIType != "" && source.Backend.APIType != "openai" && source.Backend.APIType != "systemone" {
 		state.ErrorClass = ErrorUnsupported
 		return state
 	}
@@ -467,8 +469,15 @@ func sourcesFromConfig(cfg *config.Config, settings Settings) map[string]NodeSou
 			Timeout:          proxy.ParseTimeout(node.RequestTimeout),
 			TargetModel:      firstString(node.UpstreamModel, node.TargetModel, node.Model),
 			APIType:          apiType,
+			Endpoints:        node.Endpoints,
 			AnthropicVersion: firstString(node.AnthropicVersion, provider.AnthropicVersion),
 			Passthrough:      apiType == "passthrough",
+		}
+		if len(backend.Endpoints) == 0 {
+			backend.Endpoints = provider.Endpoints
+		}
+		if backend.APIType == "systemone" && len(backend.Endpoints) == 0 {
+			backend.Endpoints = []string{"systemone"}
 		}
 		if backend.Passthrough {
 			continue
@@ -523,6 +532,7 @@ func cloneModelEntry(entry ModelEntry, now time.Time, ttl time.Duration) ModelEn
 		p := ProviderEntry{Provider: provider.Provider, Nodes: make([]NodeEntry, 0, len(provider.Nodes))}
 		for _, node := range provider.Nodes {
 			copied := node
+			copied.Endpoints = append([]string(nil), node.Endpoints...)
 			if copied.Source == SourceProbe && ttl > 0 && !copied.LastSync.IsZero() && copied.LastSync.Add(ttl).Before(now) {
 				copied.Status = StatusStale
 			}
@@ -541,6 +551,7 @@ func mergeNode(existing, incoming NodeEntry) NodeEntry {
 		if incoming.TargetModel != "" {
 			existing.TargetModel = incoming.TargetModel
 		}
+		existing.Endpoints = append([]string(nil), incoming.Endpoints...)
 		return existing
 	}
 	return incoming

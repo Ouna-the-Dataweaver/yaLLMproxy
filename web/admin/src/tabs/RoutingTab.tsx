@@ -86,6 +86,14 @@ export function RoutingTab() {
               <ProviderModelPicker form={routingEdit.form} adminPassword={adminPassword} disabled={loading}
                 onChange={(models_text) => setRoutingEdit({ ...routingEdit, form: { ...routingEdit.form, models_text } })} />
               <FieldError message={routingEdit.errors.models_text} />
+              <label className="field">
+                <span>Embedding space (optional)</span>
+                <input value={routingEdit.form.embedding_space} onChange={(event) => setRoutingEdit({ ...routingEdit, form: { ...routingEdit.form, embedding_space: event.target.value } })} />
+              </label>
+              <label className="field">
+                <span>Live ASR upstream path (optional)</span>
+                <input value={routingEdit.form.realtime_path} onChange={(event) => setRoutingEdit({ ...routingEdit, form: { ...routingEdit.form, realtime_path: event.target.value } })} />
+              </label>
               <label className="field routing-nested-field">
                 <span>Endpoints</span>
                 <textarea
@@ -133,6 +141,7 @@ export function RoutingTab() {
               <input required list="routing-api-types" value={providerForm.api_type} onChange={(event) => setProviderForm({ ...providerForm, api_type: event.target.value })} />
               <datalist id="routing-api-types">
                 <option value="openai" />
+                <option value="systemone" />
                 <option value="anthropic" />
                 <option value="gigachat" />
                 <option value="passthrough" />
@@ -150,6 +159,14 @@ export function RoutingTab() {
               <span>Limits per upstream model (JSON, optional)</span>
               <textarea value={providerForm.limits_text} onChange={(event) => setProviderForm({ ...providerForm, limits_text: event.target.value })} />
               <FieldError message={providerErrors.limits_text} />
+            </label>
+            <label className="field">
+              <span>Embedding space (optional)</span>
+              <input value={providerForm.embedding_space} onChange={(event) => setProviderForm({ ...providerForm, embedding_space: event.target.value })} />
+            </label>
+            <label className="field">
+              <span>Live ASR upstream path (optional)</span>
+              <input value={providerForm.realtime_path} onChange={(event) => setProviderForm({ ...providerForm, realtime_path: event.target.value })} />
             </label>
             <label className="field routing-nested-field">
               <span>Endpoints</span>
@@ -231,6 +248,14 @@ export function RoutingTab() {
               <label className="field">
                 <span>Replace API key (optional)</span>
                 <input type="password" autoComplete="off" value={routingEdit.form.api_key} onChange={(event) => setRoutingEdit({ ...routingEdit, form: { ...routingEdit.form, api_key: event.target.value } })} />
+              </label>
+              <label className="field">
+                <span>Embedding space (optional)</span>
+                <input value={routingEdit.form.embedding_space} onChange={(event) => setRoutingEdit({ ...routingEdit, form: { ...routingEdit.form, embedding_space: event.target.value } })} />
+              </label>
+              <label className="field">
+                <span>Live ASR upstream path (optional)</span>
+                <input value={routingEdit.form.realtime_path} onChange={(event) => setRoutingEdit({ ...routingEdit, form: { ...routingEdit.form, realtime_path: event.target.value } })} />
               </label>
               <label className="field routing-nested-field">
                 <span>Endpoints</span>
@@ -316,6 +341,14 @@ export function RoutingTab() {
               <span>API base</span>
               <input value={nodeForm.api_base} onChange={(event) => setNodeForm({ ...nodeForm, api_base: event.target.value })} />
               <FieldError message={nodeErrors.api_base} />
+            </label>
+            <label className="field">
+              <span>Embedding space (optional)</span>
+              <input value={nodeForm.embedding_space} onChange={(event) => setNodeForm({ ...nodeForm, embedding_space: event.target.value })} />
+            </label>
+            <label className="field">
+              <span>Live ASR upstream path (optional)</span>
+              <input value={nodeForm.realtime_path} onChange={(event) => setNodeForm({ ...nodeForm, realtime_path: event.target.value })} />
             </label>
             <label className="field routing-nested-field">
               <span>Endpoints</span>
